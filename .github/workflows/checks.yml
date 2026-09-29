@@ -13,7 +13,7 @@ jobs:
           sh -n shell/sfduo-shell && sh -n apps/sfduo-one-column
 
       - name: python scripts compile
-        run: python3 -m py_compile shell/sfduo-dock shell/sfduo-system-screen shell/sfduo-pen-screen apps/sfduo-settings
+        run: python3 -m py_compile shell/sfduo-dock shell/sfduo-system-screen shell/sfduo-pen-screen apps/sfduo-settings tools/sfduo-perfcheck
 
       - name: internal markdown links resolve
         run: |

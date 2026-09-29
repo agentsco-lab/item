@@ -1,6 +1,6 @@
 This repository is multi-licensed:
 
-- The shell's programs, scripts and the package build (shell/, apps/, css/,
+- The shell's programs, scripts and the package build (shell/, apps/, css/, tools/,
   dconf/, package/, tests/): MIT (see LICENSES/MIT.txt)
 - The patches in patches/ change phoc, phosh and phosh-osk-stevia, and are
   under the license of the project each one patches (GPL-3.0-or-later)

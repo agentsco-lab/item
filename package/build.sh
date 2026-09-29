@@ -45,6 +45,10 @@ install -m644  "$ROOT/shell/sfduo-pen-screen.desktop"    "$PKG/etc/xdg/autostart
 install -m755  "$ROOT/shell/sfduo-shell"                 "$PKG/usr/local/sbin/"
 install -Dm644 "$ROOT/shell/org.sfduo.shell.policy"      "$PKG/usr/share/polkit-1/actions/org.sfduo.shell.policy"
 
+# The shell's frame times, measured the same way every time: it drives the
+# dock and moves the port's synthetic finger (sfduo-touch); the port's docs/PERF.md.
+install -m755  "$ROOT/tools/sfduo-perfcheck"             "$PKG/usr/local/sbin/"
+
 # ---- Settings -------------------------------------------------------------
 
 # sfduo-settings is the one Settings in the grid: the pages of GNOME Settings

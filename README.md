@@ -69,7 +69,8 @@ sudo systemctl restart phosh
 | `patches/` | phoc, phosh and the on-screen keyboard: the shell's patches, on top of the port's set |
 | `package/` | `build.sh`, which makes `item-shell_<version>_arm64.deb` |
 | `tests/` | the running-apps grouping and the dock's placing, without a phone |
-| `docs/` | [SHELL.md](docs/SHELL.md) |
+| `tools/` | `sfduo-perfcheck`: the shell's frame times against thresholds, on the phone |
+| `docs/` | [SHELL.md](docs/SHELL.md), [SETTINGS.md](docs/SETTINGS.md) |
 
 ## License
 
