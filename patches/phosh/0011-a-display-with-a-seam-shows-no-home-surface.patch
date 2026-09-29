@@ -1,4 +1,4 @@
-From cf074a3ecbeb4bc03f1391c4bef49fc3fbc42c6c Mon Sep 17 00:00:00 2001
+From 697b9fb5139ef88a8337398941b2aac30a9d363a Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 22:27:22 +0300
 Subject: [PATCH 11/17] a display with a seam shows no home surface
@@ -8,10 +8,10 @@ Subject: [PATCH 11/17] a display with a seam shows no home surface
  1 file changed, 11 insertions(+)
 
 diff --git a/src/shell.c b/src/shell.c
-index f007cc4b..56c7acf7 100644
+index 8016934a..3d6e60b6 100644
 --- a/src/shell.c
 +++ b/src/shell.c
-@@ -731,6 +731,17 @@ panels_create (PhoshShell *self)
+@@ -733,6 +733,17 @@ panels_create (PhoshShell *self)
                                                     phosh_wayland_get_zphoc_layer_shell_effects_v1 (wl),
                                                     monitor));
    g_object_bind_property (self, "overview-visible", priv->home, "visible", G_BINDING_SYNC_CREATE);

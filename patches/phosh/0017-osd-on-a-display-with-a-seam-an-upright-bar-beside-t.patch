@@ -1,4 +1,4 @@
-From 79cecc92436b316a3ee211625fc56bb6966aa24a Mon Sep 17 00:00:00 2001
+From 7c9d15a482c77e53e823f1ac17e1ca23499875a2 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Mon, 28 Sep 2026 12:08:13 +0300
 Subject: [PATCH 17/17] osd: on a display with a seam, an upright bar beside
@@ -490,7 +490,7 @@ index 0b91f205..1eba11c5 100644
 +void       phosh_osd_window_fade_out (PhoshOsdWindow *self);
 +void       phosh_osd_window_fade_in (PhoshOsdWindow *self);
 diff --git a/src/shell.c b/src/shell.c
-index cdadce69..673ad939 100644
+index fd13e6a6..2bd144b4 100644
 --- a/src/shell.c
 +++ b/src/shell.c
 @@ -108,7 +108,8 @@
@@ -503,7 +503,7 @@ index cdadce69..673ad939 100644
  
  /**
   * PhoshShell:
-@@ -165,6 +166,7 @@ typedef struct {
+@@ -167,6 +168,7 @@ typedef struct {
    PhoshOsdWindow             *osd;
    gint osd_timeoutid;
    gboolean                    osd_continue;
@@ -511,7 +511,7 @@ index cdadce69..673ad939 100644
  
    GtkWidget                  *notification_banner;
  
-@@ -1205,12 +1207,24 @@ on_osd_timeout (PhoshShell *self)
+@@ -1209,12 +1211,24 @@ on_osd_timeout (PhoshShell *self)
    PhoshShellPrivate *priv = phosh_shell_get_instance_private (self);
    gboolean ret;
  
@@ -537,7 +537,7 @@ index cdadce69..673ad939 100644
    }
    priv->osd_continue = FALSE;
    return ret;
-@@ -3279,6 +3293,7 @@ phosh_shell_show_osd (PhoshShell *self,
+@@ -3305,6 +3319,7 @@ phosh_shell_show_osd (PhoshShell *self,
  
    if (priv->osd) {
      priv->osd_continue = TRUE;
@@ -545,7 +545,7 @@ index cdadce69..673ad939 100644
      g_object_set (priv->osd,
                    "connector", connector,
                    "label", label,
-@@ -3293,7 +3308,7 @@ phosh_shell_show_osd (PhoshShell *self,
+@@ -3319,7 +3334,7 @@ phosh_shell_show_osd (PhoshShell *self,
    }
  
    if (!priv->osd_timeoutid) {

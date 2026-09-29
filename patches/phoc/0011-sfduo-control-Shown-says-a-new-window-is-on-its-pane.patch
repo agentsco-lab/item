@@ -1,4 +1,4 @@
-From e988499ab4aba64c2ce166c3caab16fac11b273b Mon Sep 17 00:00:00 2001
+From ecf45c125db3c57845f63a3374554488034af27f Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 13:48:41 +0300
 Subject: [PATCH 11/16] sfduo-control: Shown says a new window is on its panel,

@@ -1,4 +1,4 @@
-From 38ceca04b21004819849b2d06bac81981d547c31 Mon Sep 17 00:00:00 2001
+From 5dd764bbfc0c427ba7fee1b82f0af414d9b7c4ba Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Mon, 28 Sep 2026 09:49:53 +0300
 Subject: [PATCH 16/16] sfduo-layer-fx: a layer surface's look, drawn by phoc

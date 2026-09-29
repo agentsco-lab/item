@@ -1,4 +1,4 @@
-From f9cd5e728082a58703ccbfb3a656a5946be153c4 Mon Sep 17 00:00:00 2001
+From e354d40c14344dde4c807f09ddd3a6e2446c181b Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 22:27:22 +0300
 Subject: [PATCH 06/17] with one window open the bar moves to the free panel
@@ -10,10 +10,10 @@ Subject: [PATCH 06/17] with one window open the bar moves to the free panel
  3 files changed, 145 insertions(+), 3 deletions(-)
 
 diff --git a/src/shell.c b/src/shell.c
-index 18cc84f6..8d5678ca 100644
+index f5a7b39a..ea213954 100644
 --- a/src/shell.c
 +++ b/src/shell.c
-@@ -154,6 +154,9 @@ typedef struct {
+@@ -156,6 +156,9 @@ typedef struct {
     * anything drawing over the shell can keep out of the way. */
    GDBusConnection            *shade_bus;
    const char                 *shade_open;
@@ -23,7 +23,7 @@ index 18cc84f6..8d5678ca 100644
    PhoshDragSurface           *home;
    gboolean                    overview_visible;
    GPtrArray                  *faders; /* for final fade out */
-@@ -579,6 +582,9 @@ setup_primary_monitor_signal_handlers (PhoshShell *self)
+@@ -581,6 +584,9 @@ setup_primary_monitor_signal_handlers (PhoshShell *self)
  }
  
  
@@ -33,7 +33,7 @@ index 18cc84f6..8d5678ca 100644
  static void
  panels_create (PhoshShell *self)
  {
-@@ -641,6 +647,7 @@ panels_create (PhoshShell *self)
+@@ -643,6 +649,7 @@ panels_create (PhoshShell *self)
       * hides this one's contents and keeps it as a handle for its own shade. */
      gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (priv->top_panel_right)),
                                   "phosh-far-half");
@@ -41,7 +41,7 @@ index 18cc84f6..8d5678ca 100644
      phosh_top_panel_set_half (PHOSH_TOP_PANEL (priv->top_panel), PHOSH_SETTINGS_HALF_NEAR);
      phosh_top_panel_set_half (PHOSH_TOP_PANEL (priv->top_panel_right), PHOSH_SETTINGS_HALF_FAR);
      gtk_widget_set_visible (GTK_WIDGET (priv->top_panel_right), TRUE);
-@@ -656,6 +663,8 @@ panels_create (PhoshShell *self)
+@@ -658,6 +665,8 @@ panels_create (PhoshShell *self)
    }
    gtk_widget_set_visible (GTK_WIDGET (priv->top_panel), TRUE);
    shade_service_start (self);
@@ -50,7 +50,7 @@ index 18cc84f6..8d5678ca 100644
  
    /* Home is created after the top-panel so it honors its exclusive zone */
    priv->home = PHOSH_DRAG_SURFACE (phosh_home_new (phosh_wayland_get_zwlr_layer_shell_v1 (wl),
-@@ -709,6 +718,83 @@ panels_dispose (PhoshShell *self)
+@@ -711,6 +720,83 @@ panels_dispose (PhoshShell *self)
  }
  
  
@@ -134,7 +134,7 @@ index 18cc84f6..8d5678ca 100644
  static void
  set_locked (PhoshShell *self, gboolean locked)
  {
-@@ -730,6 +816,7 @@ set_locked (PhoshShell *self, gboolean locked)
+@@ -732,6 +818,7 @@ set_locked (PhoshShell *self, gboolean locked)
  
    update_top_level_layer (self);
    update_top_bar_transparency (self);

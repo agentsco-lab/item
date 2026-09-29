@@ -1,4 +1,4 @@
-From dacfa31cd29b7ab91ab52c9f5baf140b3125580f Mon Sep 17 00:00:00 2001
+From ada66ff0d9dd3199e65a6e6ab5802fe3cdfc672a Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 01:49:33 +0300
 Subject: [PATCH 15/17] background: on a display with a seam the picture fills

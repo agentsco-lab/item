@@ -1,4 +1,4 @@
-From 43639db7eb69e0752fbefd7820c85c7696178757 Mon Sep 17 00:00:00 2001
+From d943f4992a7ad56f3adde5636e50da9dc2627548 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Sat, 19 Sep 2026 23:08:46 +0300
 Subject: [PATCH 02/16] view: windows can be minimized
@@ -20,7 +20,7 @@ toplevel activate request does - brings it back.
  5 files changed, 117 insertions(+), 2 deletions(-)
 
 diff --git a/src/desktop.c b/src/desktop.c
-index 708772c..d65ef57 100644
+index 6a49b4f..a217166 100644
 --- a/src/desktop.c
 +++ b/src/desktop.c
 @@ -331,7 +331,7 @@ phoc_desktop_view_check_visibility (PhocDesktop *self, PhocView *view)

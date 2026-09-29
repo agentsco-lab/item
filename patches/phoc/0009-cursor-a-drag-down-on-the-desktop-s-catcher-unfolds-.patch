@@ -1,4 +1,4 @@
-From 0226462385857a597c9f788ebfa45296ee8c0fc2 Mon Sep 17 00:00:00 2001
+From 90c13c779b459bdcbbcd91d964aadc96496672a6 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Wed, 23 Sep 2026 19:30:16 +0300
 Subject: [PATCH 09/16] cursor: a drag down on the desktop's catcher unfolds
@@ -107,7 +107,7 @@ index f961c5d..a29d50f 100644
      break;
    case PHOC_DRAGGABLE_SURFACE_STATE_REJECTED:
 diff --git a/src/layer-shell-effects.c b/src/layer-shell-effects.c
-index b146dc1..ad48674 100644
+index d4c2fa4..f45ff1a 100644
 --- a/src/layer-shell-effects.c
 +++ b/src/layer-shell-effects.c
 @@ -69,6 +69,10 @@ struct _PhocDraggableLayerSurface {
@@ -121,7 +121,7 @@ index b146dc1..ad48674 100644
      /* Slide in/out animation */
      guint    anim_id;
      float    anim_t;
-@@ -1452,6 +1456,7 @@ phoc_draggable_layer_surface_drag_start (PhocDraggableLayerSurface *drag_surface
+@@ -1492,6 +1496,7 @@ phoc_draggable_layer_surface_drag_start (PhocDraggableLayerSurface *drag_surface
    g_return_val_if_fail (drag_surface->state == PHOC_DRAGGABLE_SURFACE_STATE_NONE, drag_surface->state);
  
    drag_surface->drag.start_margin = start_margin;
@@ -129,7 +129,7 @@ index b146dc1..ad48674 100644
  
    if (drag_surface->current.drag_mode == ZPHOC_DRAGGABLE_LAYER_SURFACE_V1_DRAG_MODE_HANDLE) {
      if (!is_handle)
-@@ -1468,6 +1473,55 @@ phoc_draggable_layer_surface_drag_start (PhocDraggableLayerSurface *drag_surface
+@@ -1508,6 +1513,55 @@ phoc_draggable_layer_surface_drag_start (PhocDraggableLayerSurface *drag_surface
  }
  
  
@@ -185,7 +185,7 @@ index b146dc1..ad48674 100644
  static gboolean
  phoc_draggable_surface_is_vertical (PhocDraggableLayerSurface *drag_surface)
  {
-@@ -1527,6 +1581,15 @@ phoc_draggable_layer_surface_drag_update (PhocDraggableLayerSurface *drag_surfac
+@@ -1567,6 +1621,15 @@ phoc_draggable_layer_surface_drag_update (PhocDraggableLayerSurface *drag_surfac
      return drag_surface->state;
    }
  
@@ -201,7 +201,7 @@ index b146dc1..ad48674 100644
    switch (wlr_layer_surface->current.anchor) {
    case PHOC_LAYER_SHELL_EFFECT_DRAG_FROM_TOP:
      accept = (wlr_layer_surface->current.margin.top == drag_surface->current.unfolded) ? off_y < 0 : true;
-@@ -1625,6 +1688,7 @@ phoc_draggable_layer_surface_drag_end (PhocDraggableLayerSurface *drag_surface,
+@@ -1665,6 +1728,7 @@ phoc_draggable_layer_surface_drag_end (PhocDraggableLayerSurface *drag_surface,
    phoc_layer_shell_arrange (output);
    drag_surface->drag.pending_accept = 0;
    drag_surface->drag.pending_reject = 0;

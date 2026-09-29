@@ -1,4 +1,4 @@
-From 3ef1e9573ca74612dc5a429fb8e04c1dff7681bd Mon Sep 17 00:00:00 2001
+From 63804dd4dfa82f2ed8348f0910756df392446dbf Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 18:08:43 +0300
 Subject: [PATCH 07/16] view-ghost: a ghost is the window, not the whole

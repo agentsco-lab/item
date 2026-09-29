@@ -1,4 +1,4 @@
-From b28f5c6f4634b98d2714aeb3cf7d8b60989f67ee Mon Sep 17 00:00:00 2001
+From c0fb93bd9d5c3ef31569f32c8070bf7d14454d42 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Mon, 28 Sep 2026 09:50:00 +0300
 Subject: [PATCH 16/17] shell: a shade under a finger is said to be heading
@@ -16,10 +16,10 @@ so. Only the dock reads this.
  1 file changed, 27 insertions(+), 4 deletions(-)
 
 diff --git a/src/shell.c b/src/shell.c
-index 56c7acf7..cdadce69 100644
+index 3d6e60b6..fd13e6a6 100644
 --- a/src/shell.c
 +++ b/src/shell.c
-@@ -331,6 +331,23 @@ static const char shade_introspection_xml[] =
+@@ -333,6 +333,23 @@ static const char shade_introspection_xml[] =
    "</node>";
  
  
@@ -43,7 +43,7 @@ index 56c7acf7..cdadce69 100644
  static const char *
  shade_open_halves (PhoshShell *self)
  {
-@@ -340,11 +357,9 @@ shade_open_halves (PhoshShell *self)
+@@ -342,11 +359,9 @@ shade_open_halves (PhoshShell *self)
    if (priv->top_panel == NULL)
      return "none";
  
@@ -57,7 +57,7 @@ index 56c7acf7..cdadce69 100644
  
    /* The near panel is the one anchored to the left of the seam */
    if (near_open && far_open)
-@@ -752,6 +767,10 @@ panels_create (PhoshShell *self)
+@@ -754,6 +769,10 @@ panels_create (PhoshShell *self)
                              "notify::state",
                              G_CALLBACK (on_top_panel_state_changed),
                              self);
@@ -68,7 +68,7 @@ index 56c7acf7..cdadce69 100644
  
    if (priv->top_panel_right) {
      g_signal_connect_swapped (priv->top_panel_right,
-@@ -762,6 +781,10 @@ panels_create (PhoshShell *self)
+@@ -764,6 +783,10 @@ panels_create (PhoshShell *self)
                                "notify::state",
                                G_CALLBACK (on_top_panel_state_changed),
                                self);

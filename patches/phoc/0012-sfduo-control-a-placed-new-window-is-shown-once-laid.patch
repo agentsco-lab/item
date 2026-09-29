@@ -1,4 +1,4 @@
-From 638ac7b68c62d13e61369065675cbb4dd0905a81 Mon Sep 17 00:00:00 2001
+From d8d18a6a8edb4d3117d4d118f7dbc657bcc6d4c1 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 15:40:11 +0300
 Subject: [PATCH 12/16] sfduo-control: a placed new window is shown once laid
