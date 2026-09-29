@@ -1,0 +1,1235 @@
+From 38ceca04b21004819849b2d06bac81981d547c31 Mon Sep 17 00:00:00 2001
+From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
+Date: Mon, 28 Sep 2026 09:49:53 +0300
+Subject: [PATCH 16/16] sfduo-layer-fx: a layer surface's look, drawn by phoc
+ on its own frames
+
+org.sfduo.Phoc.LayerEffect(namespace, target, duration) gives the layer
+surfaces of a namespace an effect, animated from where it stands on the
+output's frames; a newer request takes over from there. The dock's two
+halves use it:
+
+- corners per corner and an inset of the shape, drawn with a rounded-rect
+  signed distance - a half squares its inner corners where it meets the
+  other without repainting;
+- alpha and dim;
+- a squash of the width about an anchor (0.5 .. 1) - the half that is met
+  gives against its screen edge;
+- seamless: across the display's seam a surface is drawn up to where the
+  seam starts and, past a tunnel an icon long, from where it ends; each part
+  rounded at the seam, so it squeezes through rather than being sliced;
+- merge: two merging surfaces side by side flow into each other across a
+  gap of up to half the reach - a neck drawn over them by a smooth union of
+  their shapes - with the region between them damaged as they move.
+
+Works with Droidian's android renderer (legacy pass into the EGL window,
+not flipped) and GLES2's buffer pass (flipped).
+---
+ src/layer-surface.c  |   4 +
+ src/meson.build      |   1 +
+ src/render.c         |  13 +
+ src/sfduo-control.c  |  23 +
+ src/sfduo-layer-fx.c | 981 +++++++++++++++++++++++++++++++++++++++++++
+ src/sfduo-layer-fx.h |  70 +++
+ 6 files changed, 1092 insertions(+)
+ create mode 100644 src/sfduo-layer-fx.c
+ create mode 100644 src/sfduo-layer-fx.h
+
+diff --git a/src/layer-surface.c b/src/layer-surface.c
+index 9335d6c..e057d35 100644
+--- a/src/layer-surface.c
++++ b/src/layer-surface.c
+@@ -13,6 +13,7 @@
+ #include "anim/animatable.h"
+ #include "layer-shell-private.h"
+ #include "layer-surface.h"
++#include "sfduo-layer-fx.h"
+ #include "layer-shell.h"
+ #include "layout-transaction.h"
+ #include "output.h"
+@@ -269,6 +270,9 @@ handle_surface_commit (struct wl_listener *listener, void *data)
+                                      self->geo.y,
+                                      FALSE);
+   }
++  /* drawn across the seam, a surface covers more than its box (sfduo-layer-fx) */
++  if (geo_changed)
++    phoc_sfduo_layer_fx_damage_moved (output, self, &old_geo);
+ 
+   /* Exclusive zone changes affect the surface ordering in a layer */
+   exclusive_zone_changed = !!(wlr_layer_surface->current.committed &
+diff --git a/src/meson.build b/src/meson.build
+index 8ea113e..1e4fe1a 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -114,6 +114,7 @@ sources = files(
+   'view.c',
+   'view-ghost.c',
+   'sfduo-control.c',
++  'sfduo-layer-fx.c',
+   'view.h',
+   'view-child.c',
+   'view-child-private.h',
+diff --git a/src/render.c b/src/render.c
+index 64b0a39..638ff43 100644
+--- a/src/render.c
++++ b/src/render.c
+@@ -20,6 +20,7 @@
+ #include "seat.h"
+ #include "server.h"
+ #include "render.h"
++#include "sfduo-layer-fx.h"
+ #include "render-private.h"
+ #include "xwayland-surface.h"
+ #include "utils.h"
+@@ -131,6 +132,10 @@ phoc_renderer_get_property (GObject    *object,
+ }
+ 
+ 
++/* The effect of the layer surface being drawn, if it has one (sfduo-layer-fx) */
++static const PhocSfduoLayerFxParams *layer_fx;
++
++
+ static void
+ render_texture (PhocOutput               *output,
+                 struct wlr_texture       *texture,
+@@ -155,6 +160,11 @@ render_texture (PhocOutput               *output,
+   phoc_output_transform_damage (output, &damage);
+   transform = wlr_output_transform_compose (surface_transform, output->wlr_output->transform);
+ 
++  if (layer_fx && transform == WL_OUTPUT_TRANSFORM_NORMAL &&
++      phoc_sfduo_layer_fx_render (ctx, layer_fx, texture, src_box, &proj_box, &damage, alpha,
++                                  output->wlr_output->scale))
++    goto buffer_damage_finish;
++
+   wlr_render_pass_add_texture (ctx->render_pass, &(struct wlr_render_texture_options) {
+       .texture = texture,
+       .src_box = *src_box,
+@@ -259,11 +269,14 @@ render_layer (enum zwlr_layer_shell_v1_layer layer, PhocRenderContext *ctx)
+     PhocLayerSurface *layer_surface = PHOC_LAYER_SURFACE (l->data);
+ 
+     ctx->alpha = phoc_layer_surface_get_alpha (layer_surface);
++    layer_fx = phoc_sfduo_layer_fx_lookup (phoc_layer_surface_get_namespace (layer_surface));
+     phoc_output_layer_surface_for_each_surface (ctx->output,
+                                                 layer_surface,
+                                                 render_surface_iterator,
+                                                 ctx);
++    layer_fx = NULL;
+   }
++  phoc_sfduo_layer_fx_render_merges (ctx, layer_surfaces);
+ }
+ 
+ 
+diff --git a/src/sfduo-control.c b/src/sfduo-control.c
+index daf915c..9e0c1f3 100644
+--- a/src/sfduo-control.c
++++ b/src/sfduo-control.c
+@@ -14,6 +14,7 @@
+ #include "seat.h"
+ #include "server.h"
+ #include "sfduo-control.h"
++#include "sfduo-layer-fx.h"
+ #include "view.h"
+ #include "view-ghost.h"
+ #include "output.h"
+@@ -82,6 +83,11 @@
+ static const char introspection_xml[] =
+   "<node>"
+   "  <interface name='org.sfduo.Phoc'>"
++  "    <method name='LayerEffect'>"
++  "      <arg type='s' name='namespace' direction='in'/>"
++  "      <arg type='a{sd}' name='target' direction='in'/>"
++  "      <arg type='u' name='duration' direction='in'/>"
++  "    </method>"
+   "    <method name='Tile'>"
+   "      <arg name='app_id' type='s' direction='in'/>"
+   "      <arg name='side' type='s' direction='in'/>"
+@@ -777,6 +783,23 @@ handle_method_call (GDBusConnection       *connection,
+   PhocViewTileDirection dir;
+   guint tiled = 0;
+ 
++  /* LayerEffect: how a layer surface looks - its corners, alpha, dim - by
++   * its namespace, animated on the output's frames (sfduo-layer-fx) */
++  if (g_strcmp0 (method_name, "LayerEffect") == 0) {
++    const char *namespace;
++    g_autoptr (GVariant) target = NULL;
++    g_autoptr (GError) err = NULL;
++    guint duration;
++
++    g_variant_get (parameters, "(&s@a{sd}u)", &namespace, &target, &duration);
++    if (!phoc_sfduo_layer_fx_animate (namespace, target, duration, &err)) {
++      g_dbus_method_invocation_return_gerror (invocation, err);
++      return;
++    }
++    g_dbus_method_invocation_return_value (invocation, NULL);
++    return;
++  }
++
+   /* Present: woken for a page it is about to show, and shown once it has
+    * stopped drawing. Restore: brought back as it was put away - a tap on
+    * the dock - and shown at its first frame, fading in: waiting for the
+diff --git a/src/sfduo-layer-fx.c b/src/sfduo-layer-fx.c
+new file mode 100644
+index 0000000..d017b99
+--- /dev/null
++++ b/src/sfduo-layer-fx.c
+@@ -0,0 +1,981 @@
++/*
++ * Copyright (C) 2026 The Surface Duo port
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#define G_LOG_DOMAIN "phoc-sfduo-layer-fx"
++
++#include "phoc-config.h"
++
++#include "sfduo-layer-fx.h"
++
++#include "anim/property-easer.h"
++#include "anim/timed-animation.h"
++#include "desktop.h"
++#include "layer-surface.h"
++#include "output.h"
++#include "server.h"
++#include "settings.h"
++
++#include <wlr/types/wlr_output_layout.h>
++
++#include <gio/gio.h>
++#include <math.h>
++#include <stdlib.h>
++#include <GLES2/gl2.h>
++#include <wlr/render/android.h>
++#include <wlr/render/gles2.h>
++#include <wlr/render/wlr_renderer.h>
++#include <wlr/types/wlr_output.h>
++
++/*
++ * Effects are kept by namespace: a client names the surface it means the way
++ * it named it at creation, and a surface that is unmapped and mapped again
++ * keeps its look. Each request starts a run from where the effect stands
++ * now; a newer request makes the older run stop touching it, so a change of
++ * mind half way continues from there rather than jumping.
++ */
++
++typedef struct {
++  char                    *namespace;
++  PhocSfduoLayerFxParams   cur;
++  guint                    generation;
++} LayerFx;
++
++static GHashTable *effects;     /* namespace -> LayerFx */
++
++
++static const PhocSfduoLayerFxParams identity = {
++  .radius = { 0, 0, 0, 0 }, .inset = { 0, 0, 0, 0 }, .alpha = 1.0, .dim = 0.0,
++  .scale_x = 1.0, .anchor_x = 0.5, .seamless = 0.0, .merge = 0.0,
++  .merge_color = { 0, 0, 0, 0 },
++};
++
++
++static gboolean
++params_are_identity (const PhocSfduoLayerFxParams *p)
++{
++  for (int i = 0; i < 4; i++) {
++    if (p->radius[i] > 0.01 || p->inset[i] > 0.01)
++      return FALSE;
++  }
++  return p->alpha > 0.999 && p->dim < 0.001 && p->seamless < 0.5 && p->scale_x > 0.999 &&
++         p->merge < 0.01;
++}
++
++
++static LayerFx *
++get_fx (const char *namespace, gboolean create)
++{
++  LayerFx *fx;
++
++  if (effects == NULL) {
++    if (!create)
++      return NULL;
++    effects = g_hash_table_new (g_str_hash, g_str_equal);
++  }
++  fx = g_hash_table_lookup (effects, namespace);
++  if (fx == NULL && create) {
++    fx = g_new0 (LayerFx, 1);
++    fx->namespace = g_strdup (namespace);
++    fx->cur = identity;
++    g_hash_table_insert (effects, fx->namespace, fx);
++  }
++  return fx;
++}
++
++
++const PhocSfduoLayerFxParams *
++phoc_sfduo_layer_fx_lookup (const char *namespace)
++{
++  LayerFx *fx;
++
++  if (namespace == NULL || effects == NULL)
++    return NULL;
++  fx = g_hash_table_lookup (effects, namespace);
++  if (fx == NULL || params_are_identity (&fx->cur))
++    return NULL;
++  return &fx->cur;
++}
++
++
++/*
++ * The seam of @output in its buffer's pixels, from its left edge: where it
++ * starts and where it ends - the hinge, placed as the tiling places it
++ * (phoc_view_get_tiled_box).
++ */
++static gboolean
++seam_px (PhocOutput *output, int *start, int *end)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  PhocOutputConfig *oc;
++  struct wlr_box box;
++  float scale = output->wlr_output->scale;
++  int seam, first;
++
++  oc = phoc_config_get_output (phoc_server_get_config (phoc_server_get_default ()), output);
++  if (!oc || oc->seam <= 0)
++    return FALSE;
++  wlr_output_layout_get_box (desktop->layout, output->wlr_output, &box);
++  seam = (int) (oc->seam * box.width + 0.5);
++  first = box.width / 2 - seam / 2;
++  *start = first * scale;
++  *end = (first + seam) * scale;
++  return TRUE;
++}
++
++
++/* A seamless surface draws a seam's width beyond its right edge as it
++ * crosses: that has to be damaged too, where it was and where it is. */
++static void
++damage_beyond (PhocOutput *output, const struct wlr_box *geo)
++{
++  float scale = output->wlr_output->scale;
++  struct wlr_box box;
++  int start, end;
++
++  if (!seam_px (output, &start, &end))
++    return;
++  box = (struct wlr_box) {
++    .x = geo->x * scale,
++    .y = geo->y * scale,
++    .width = geo->width * scale + (end - start),
++    .height = geo->height * scale,
++  };
++  if (wlr_damage_ring_add_box (&output->damage_ring, &box))
++    wlr_output_schedule_frame (output->wlr_output);
++}
++
++static const enum zwlr_layer_shell_v1_layer all_layers[] = {
++  ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM,
++  ZWLR_LAYER_SHELL_V1_LAYER_TOP, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
++};
++
++/*
++ * A neck between two merging surfaces is drawn over neither of them: when
++ * either moves or changes, what lies between them is damaged too - the hull
++ * of every merging surface on @output, of @also (where one of them was, or
++ * one that merged until now), @reach further out on either side.
++ */
++static void
++damage_merges (PhocOutput *output, const struct wlr_box *also, double reach)
++{
++  float scale = output->wlr_output->scale;
++  struct wlr_box hull = { 0 }, box;
++  gboolean any = FALSE;
++
++  if (also) {
++    hull = *also;
++    any = TRUE;
++  }
++  for (guint i = 0; i < G_N_ELEMENTS (all_layers); i++) {
++    GQueue *queue = phoc_output_get_layer_surfaces_for_layer (output, all_layers[i]);
++
++    for (GList *l = queue->head; l; l = l->next) {
++      PhocLayerSurface *layer_surface = PHOC_LAYER_SURFACE (l->data);
++      const PhocSfduoLayerFxParams *fx =
++        phoc_sfduo_layer_fx_lookup (phoc_layer_surface_get_namespace (layer_surface));
++
++      if (fx == NULL || fx->merge < 0.01)
++        continue;
++      reach = MAX (reach, fx->merge);
++      if (!any) {
++        hull = layer_surface->geo;
++        any = TRUE;
++      } else {
++        int x2 = MAX (hull.x + hull.width, layer_surface->geo.x + layer_surface->geo.width);
++        int y2 = MAX (hull.y + hull.height, layer_surface->geo.y + layer_surface->geo.height);
++
++        hull.x = MIN (hull.x, layer_surface->geo.x);
++        hull.y = MIN (hull.y, layer_surface->geo.y);
++        hull.width = x2 - hull.x;
++        hull.height = y2 - hull.y;
++      }
++    }
++  }
++  if (!any || reach < 0.01)
++    return;
++  box = (struct wlr_box) {
++    .x = (hull.x - reach) * scale,
++    .y = hull.y * scale,
++    .width = (hull.width + 2 * reach) * scale,
++    .height = hull.height * scale,
++  };
++  if (wlr_damage_ring_add_box (&output->damage_ring, &box))
++    wlr_output_schedule_frame (output->wlr_output);
++}
++
++/**
++ * phoc_sfduo_layer_fx_damage_moved:
++ * @old_geo: where it was, before this commit
++ *
++ * For a layer surface that moved: damage what its seamless drawing covered
++ * and covers now, and the neck it merges by (the surface itself phoc
++ * damages as ever).
++ */
++void
++phoc_sfduo_layer_fx_damage_moved (PhocOutput           *output,
++                                  PhocLayerSurface     *layer_surface,
++                                  const struct wlr_box *old_geo)
++{
++  const PhocSfduoLayerFxParams *fx =
++    phoc_sfduo_layer_fx_lookup (phoc_layer_surface_get_namespace (layer_surface));
++
++  if (fx == NULL)
++    return;
++  if (fx->merge > 0.01)
++    damage_merges (output, old_geo, fx->merge);
++  if (fx->seamless < 0.5)
++    return;
++  damage_beyond (output, old_geo);
++  damage_beyond (output, &layer_surface->geo);
++}
++
++
++/* @merge: how far it merged before or merges now - what lies between it
++ * and the others is damaged as well */
++static void
++damage_namespace (const char *namespace, double merge)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  PhocOutput *output;
++
++  wl_list_for_each (output, &desktop->outputs, link) {
++    for (guint i = 0; i < G_N_ELEMENTS (all_layers); i++) {
++      GQueue *queue = phoc_output_get_layer_surfaces_for_layer (output, all_layers[i]);
++
++      for (GList *l = queue->head; l; l = l->next) {
++        PhocLayerSurface *layer_surface = PHOC_LAYER_SURFACE (l->data);
++
++        if (g_strcmp0 (phoc_layer_surface_get_namespace (layer_surface), namespace) == 0) {
++          phoc_output_damage_from_layer_surface (output, layer_surface, TRUE);
++          damage_beyond (output, &layer_surface->geo);
++          if (merge > 0.01)
++            damage_merges (output, &layer_surface->geo, merge);
++        }
++      }
++    }
++  }
++}
++
++/**
++ * phoc_sfduo_layer_fx_tunnel_x:
++ * @x: a seamless surface's left edge on the output, buffer px
++ * @start: @end: the seam
++ * @tunnel: its length (>= end - start), or 0
++ *
++ * Where it stands as if the seam were @tunnel long. The client moves it
++ * so: left of the seam as it is; with its edge in the tunnel, the tunnel's
++ * length pressed into the seam's width; beyond, a tunnel's length less the
++ * seam's further on. With no length the seam is as if not there, and the
++ * edge is never in it.
++ */
++float
++phoc_sfduo_layer_fx_tunnel_x (float x, int start, int end, float tunnel)
++{
++  if (x < start)
++    return x;
++  if (x < end)
++    return tunnel > 0 ? start + (x - start) * tunnel / (end - start) : x;
++  return x + tunnel - (end - start);
++}
++
++/* ---- a run: one request, animated -------------------------------------- */
++
++#define PHOC_TYPE_SFDUO_FX_RUN (phoc_sfduo_fx_run_get_type ())
++G_DECLARE_FINAL_TYPE (PhocSfduoFxRun, phoc_sfduo_fx_run, PHOC, SFDUO_FX_RUN, GObject)
++
++struct _PhocSfduoFxRun {
++  GObject                 parent;
++  LayerFx                *fx;
++  guint                   generation;
++  PhocSfduoLayerFxParams  from, to;
++  double                  progress;
++};
++
++G_DEFINE_TYPE (PhocSfduoFxRun, phoc_sfduo_fx_run, G_TYPE_OBJECT)
++
++enum { PROP_0, PROP_PROGRESS, PROP_LAST };
++static GParamSpec *props[PROP_LAST];
++
++
++static void
++run_apply (PhocSfduoFxRun *self)
++{
++  LayerFx *fx = self->fx;
++  double k = self->progress;
++
++  if (fx->generation != self->generation)
++    return;                     /* a newer request has taken over */
++  for (int i = 0; i < 4; i++) {
++    fx->cur.radius[i] = self->from.radius[i] + (self->to.radius[i] - self->from.radius[i]) * k;
++    fx->cur.inset[i] = self->from.inset[i] + (self->to.inset[i] - self->from.inset[i]) * k;
++  }
++  fx->cur.alpha = self->from.alpha + (self->to.alpha - self->from.alpha) * k;
++  fx->cur.dim = self->from.dim + (self->to.dim - self->from.dim) * k;
++  fx->cur.scale_x = self->from.scale_x + (self->to.scale_x - self->from.scale_x) * k;
++  fx->cur.anchor_x = self->to.anchor_x;
++  fx->cur.seamless = self->to.seamless;
++  fx->cur.tunnel = self->to.tunnel;
++  fx->cur.merge = self->from.merge + (self->to.merge - self->from.merge) * k;
++  for (int i = 0; i < 4; i++)
++    fx->cur.merge_color[i] = self->to.merge_color[i];
++  damage_namespace (fx->namespace, MAX (self->from.merge, self->to.merge));
++}
++
++
++static void
++phoc_sfduo_fx_run_set_property (GObject *object, guint property_id, const GValue *value,
++                                GParamSpec *pspec)
++{
++  PhocSfduoFxRun *self = PHOC_SFDUO_FX_RUN (object);
++
++  switch (property_id) {
++  case PROP_PROGRESS:
++    self->progress = g_value_get_float (value);
++    run_apply (self);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++  }
++}
++
++
++static void
++phoc_sfduo_fx_run_get_property (GObject *object, guint property_id, GValue *value,
++                                GParamSpec *pspec)
++{
++  PhocSfduoFxRun *self = PHOC_SFDUO_FX_RUN (object);
++
++  switch (property_id) {
++  case PROP_PROGRESS:
++    g_value_set_float (value, self->progress);
++    break;
++  default:
++    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
++  }
++}
++
++
++static void
++phoc_sfduo_fx_run_class_init (PhocSfduoFxRunClass *klass)
++{
++  GObjectClass *object_class = G_OBJECT_CLASS (klass);
++
++  object_class->set_property = phoc_sfduo_fx_run_set_property;
++  object_class->get_property = phoc_sfduo_fx_run_get_property;
++  /* float: PhocPropertyEaser eases float and int properties only */
++  props[PROP_PROGRESS] = g_param_spec_float ("progress", "", "", 0.0, 1.0, 0.0,
++                                             G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY);
++  g_object_class_install_properties (object_class, PROP_LAST, props);
++}
++
++
++static void
++phoc_sfduo_fx_run_init (PhocSfduoFxRun *self)
++{
++}
++
++/**
++ * phoc_sfduo_layer_fx_animate:
++ * @namespace: the layer surfaces' namespace
++ * @target: a{sd}: "radius" (all corners), "radius-tl", "radius-tr",
++ *   "radius-br", "radius-bl", "inset-top", "inset-right", "inset-bottom",
++ *   "inset-left" (layout px), "alpha", "dim", "scale-x" (0.5 .. 1), "anchor-x"
++ *   (0 .. 1 of its width, at once), "seamless" (0 or 1, at once), "tunnel"
++ *   (layout px, at once), "merge"
++ *   (layout px), "merge-r", "merge-g", "merge-b", "merge-a" (0 .. 1, at once);
++ *   keys left out keep their value
++ * @duration_ms: 0 for at once
++ *
++ * Returns: whether the request was understood
++ */
++gboolean
++phoc_sfduo_layer_fx_animate (const char *namespace, GVariant *target, guint duration_ms,
++                             GError **error)
++{
++  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
++  static const char *corners[] = { "radius-tl", "radius-tr", "radius-br", "radius-bl" };
++  static const char *insets[] = { "inset-top", "inset-right", "inset-bottom", "inset-left" };
++  static const char *colour[] = { "merge-r", "merge-g", "merge-b", "merge-a" };
++  g_autoptr (PhocSfduoFxRun) run = NULL;
++  g_autoptr (PhocPropertyEaser) easer = NULL;
++  g_autoptr (PhocTimedAnimation) anim = NULL;
++  PhocOutput *output = NULL;
++  LayerFx *fx;
++  double v;
++
++  if (namespace == NULL || *namespace == '\0') {
++    g_set_error (error, G_IO_ERROR, G_IO_ERROR_INVALID_ARGUMENT, "No namespace");
++    return FALSE;
++  }
++  fx = get_fx (namespace, TRUE);
++
++  run = g_object_new (PHOC_TYPE_SFDUO_FX_RUN, NULL);
++  run->fx = fx;
++  run->generation = ++fx->generation;
++  run->from = fx->cur;
++  run->to = fx->cur;
++  if (g_variant_lookup (target, "radius", "d", &v)) {
++    for (int i = 0; i < 4; i++)
++      run->to.radius[i] = MAX (0.0, v);
++  }
++  for (int i = 0; i < 4; i++) {
++    if (g_variant_lookup (target, corners[i], "d", &v))
++      run->to.radius[i] = MAX (0.0, v);
++    if (g_variant_lookup (target, insets[i], "d", &v))
++      run->to.inset[i] = MAX (0.0, v);
++  }
++  if (g_variant_lookup (target, "alpha", "d", &v))
++    run->to.alpha = CLAMP (v, 0.0, 1.0);
++  if (g_variant_lookup (target, "dim", "d", &v))
++    run->to.dim = CLAMP (v, 0.0, 1.0);
++  /* only drawn in: grown, a surface would draw beyond its damage */
++  if (g_variant_lookup (target, "scale-x", "d", &v))
++    run->to.scale_x = CLAMP (v, 0.5, 1.0);
++  if (g_variant_lookup (target, "anchor-x", "d", &v))
++    run->from.anchor_x = run->to.anchor_x = CLAMP (v, 0.0, 1.0);    /* at once */
++  if (g_variant_lookup (target, "seamless", "d", &v))
++    run->from.seamless = run->to.seamless = v > 0.5 ? 1.0 : 0.0;   /* at once */
++  if (g_variant_lookup (target, "tunnel", "d", &v))
++    run->from.tunnel = run->to.tunnel = CLAMP (v, 0.0, 400.0);      /* at once */
++  if (g_variant_lookup (target, "merge", "d", &v))
++    run->to.merge = CLAMP (v, 0.0, 64.0);
++  for (int i = 0; i < 4; i++) {
++    if (g_variant_lookup (target, colour[i], "d", &v))
++      run->from.merge_color[i] = run->to.merge_color[i] = CLAMP (v, 0.0, 1.0);
++  }
++
++  if (!wl_list_empty (&desktop->outputs))
++    output = wl_container_of (desktop->outputs.next, output, link);
++
++  if (duration_ms == 0 || output == NULL || !phoc_desktop_get_enable_animations (desktop)) {
++    run->progress = 1.0;
++    run_apply (run);
++    return TRUE;
++  }
++
++  easer = g_object_new (PHOC_TYPE_PROPERTY_EASER,
++                        "target", run,
++                        "easing", PHOC_EASING_EASE_IN_OUT_CUBIC,
++                        NULL);
++  phoc_property_easer_set_props (easer, "progress", 0.0, 1.0, NULL);
++  anim = g_object_new (PHOC_TYPE_TIMED_ANIMATION,
++                       "animatable", output,
++                       "duration", (int) duration_ms,
++                       "property-easer", easer,
++                       "dispose-on-done", TRUE,
++                       NULL);
++  /* the run lives as long as its animation */
++  g_object_set_data_full (G_OBJECT (anim), "sfduo-fx-run", g_object_ref (run), g_object_unref);
++  phoc_timed_animation_play (anim);
++  /* the animation runs on the output's frames: ask for the first one */
++  damage_namespace (namespace, MAX (run->from.merge, run->to.merge));
++  return TRUE;
++}
++
++/* ---- drawing ------------------------------------------------------------ */
++
++static const char *vertex_src =
++  "attribute vec2 pos;\n"
++  "uniform vec2 u_vp;\n"
++  "uniform vec4 u_dst;\n"
++  "uniform vec4 u_src;\n"
++  "uniform float u_flip;\n"
++  "uniform vec2 u_scale;\n"
++  "varying vec2 v_uv;\n"
++  "varying vec2 v_px;\n"
++  "void main () {\n"
++  "  vec2 p = u_dst.xy + pos * u_dst.zw;\n"
++  "  float a = u_dst.x + u_scale.y * u_dst.z;\n"
++  "  p.x = a + (p.x - a) * u_scale.x;\n"
++  "  float y = 2.0 * p.y / u_vp.y - 1.0;\n"
++  "  gl_Position = vec4 (2.0 * p.x / u_vp.x - 1.0, u_flip > 0.5 ? y : -y, 0.0, 1.0);\n"
++  "  v_uv = mix (u_src.xy, u_src.zw, pos);\n"
++  "  v_px = pos * u_dst.zw;\n"
++  "}\n";
++
++/* A rounded rectangle's signed distance, a corner radius per quadrant,
++ * anti-aliased over one pixel; premultiplied throughout. */
++static const char *fragment_src =
++  "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
++  "precision highp float;\n"
++  "#else\n"
++  "precision mediump float;\n"
++  "#endif\n"
++  "varying vec2 v_uv;\n"
++  "varying vec2 v_px;\n"
++  "uniform sampler2D tex;\n"
++  "uniform vec4 u_rect;\n"
++  "uniform vec4 u_r;\n"
++  "uniform float u_alpha;\n"
++  "uniform float u_dim;\n"
++  "uniform float u_has_alpha;\n"
++  "void main () {\n"
++  "  vec4 c = texture2D (tex, v_uv);\n"
++  "  if (u_has_alpha < 0.5) c.a = 1.0;\n"
++  "  vec2 h = (u_rect.zw - u_rect.xy) * 0.5;\n"
++  "  vec2 p = v_px - u_rect.xy;\n"
++  "  float r = p.y < h.y ? (p.x < h.x ? u_r.x : u_r.y)\n"
++  "                      : (p.x < h.x ? u_r.w : u_r.z);\n"
++  "  r = min (r, min (h.x, h.y));\n"
++  "  vec2 q = abs (p - h) - (h - vec2 (r));\n"
++  "  float d = length (max (q, 0.0)) + min (max (q.x, q.y), 0.0) - r;\n"
++  "  float m = clamp (0.5 - d, 0.0, 1.0);\n"
++  "  c.rgb *= 1.0 - u_dim;\n"
++  "  gl_FragColor = c * (u_alpha * m);\n"
++  "}\n";
++
++static struct {
++  gboolean tried;
++  GLuint   program;
++  GLint    pos, vp, dst, src, flip, scale, rect, r, alpha, dim, has_alpha, tex;
++} shader;
++
++
++static GLuint
++compile (GLenum type, const char *src)
++{
++  GLuint s = glCreateShader (type);
++  GLint ok = GL_FALSE;
++
++  glShaderSource (s, 1, &src, NULL);
++  glCompileShader (s);
++  glGetShaderiv (s, GL_COMPILE_STATUS, &ok);
++  if (!ok) {
++    char log[1024] = "";
++
++    glGetShaderInfoLog (s, sizeof (log), NULL, log);
++    g_warning ("Layer effect shader failed to compile: %s", log);
++    glDeleteShader (s);
++    return 0;
++  }
++  return s;
++}
++
++
++static gboolean
++ensure_program (void)
++{
++  GLuint vs, fs, p;
++  GLint ok = GL_FALSE;
++
++  if (shader.tried)
++    return shader.program != 0;
++  shader.tried = TRUE;
++
++  vs = compile (GL_VERTEX_SHADER, vertex_src);
++  fs = compile (GL_FRAGMENT_SHADER, fragment_src);
++  if (!vs || !fs) {
++    if (vs)
++      glDeleteShader (vs);
++    if (fs)
++      glDeleteShader (fs);
++    return FALSE;
++  }
++  p = glCreateProgram ();
++  glAttachShader (p, vs);
++  glAttachShader (p, fs);
++  glLinkProgram (p);
++  glDetachShader (p, vs);
++  glDetachShader (p, fs);
++  glDeleteShader (vs);
++  glDeleteShader (fs);
++  glGetProgramiv (p, GL_LINK_STATUS, &ok);
++  if (!ok) {
++    g_warning ("Layer effect shader failed to link");
++    glDeleteProgram (p);
++    return FALSE;
++  }
++  shader.program = p;
++  shader.pos = glGetAttribLocation (p, "pos");
++  shader.vp = glGetUniformLocation (p, "u_vp");
++  shader.dst = glGetUniformLocation (p, "u_dst");
++  shader.src = glGetUniformLocation (p, "u_src");
++  shader.flip = glGetUniformLocation (p, "u_flip");
++  shader.scale = glGetUniformLocation (p, "u_scale");
++  shader.rect = glGetUniformLocation (p, "u_rect");
++  shader.r = glGetUniformLocation (p, "u_r");
++  shader.alpha = glGetUniformLocation (p, "u_alpha");
++  shader.dim = glGetUniformLocation (p, "u_dim");
++  shader.has_alpha = glGetUniformLocation (p, "u_has_alpha");
++  shader.tex = glGetUniformLocation (p, "tex");
++  g_debug ("Layer effect shader ready");
++  return TRUE;
++}
++
++static void
++draw_region (const pixman_region32_t *region, gboolean flipped, int height)
++{
++  const pixman_box32_t *rects;
++  int n;
++
++  rects = pixman_region32_rectangles ((pixman_region32_t *) region, &n);
++  for (int i = 0; i < n; i++) {
++    int h = rects[i].y2 - rects[i].y1;
++
++    glScissor (rects[i].x1, flipped ? rects[i].y1 : height - rects[i].y2,
++               rects[i].x2 - rects[i].x1, h);
++    glDrawArrays (GL_TRIANGLE_STRIP, 0, 4);
++  }
++}
++
++/**
++ * phoc_sfduo_layer_fx_render:
++ * @dst_box: where the texture goes, in the output buffer's pixels
++ * @damage: the part of @dst_box to draw, in the same pixels
++ * @scale: the output's scale, for the radii given in layout pixels
++ *
++ * Draws @texture with @fx into the render pass under way, in place of
++ * wlr_render_pass_add_texture(). Both renderers phoc meets draw at once, and
++ * set their own program, texture, uniforms and blending for each draw; what
++ * they set once per pass - framebuffer, viewport, blend function, scissor
++ * off - is left as found. They differ in which way is up: GLES2's buffer
++ * pass renders into a texture, flipped, while Droidian's android renderer
++ * (hybris) draws through wlroots' legacy pass into the EGL window surface,
++ * not flipped - its scissor turns boxes over, (y = height - y2), to match.
++ *
++ * Returns: %FALSE if it could not draw (not GLES2, an external texture, no
++ * shader), for the caller to draw as usual
++ */
++gboolean
++phoc_sfduo_layer_fx_render (PhocRenderContext            *ctx,
++                            const PhocSfduoLayerFxParams *fx,
++                            struct wlr_texture           *texture,
++                            const struct wlr_fbox        *src_box,
++                            const struct wlr_box         *dst_box,
++                            const pixman_region32_t      *damage,
++                            float                         alpha,
++                            float                         scale)
++{
++  struct wlr_renderer *renderer = ctx->output->wlr_output->renderer;
++  struct wlr_gles2_texture_attribs attribs;
++  GLfloat quad[] = { 0, 0, 1, 0, 0, 1, 1, 1 };
++  GLint vp[4];
++  gboolean flipped, seam;
++  int start, end;
++  float tunnel = 0, virt = 0;
++
++  if (renderer == NULL || !wlr_texture_is_gles2 (texture))
++    return FALSE;
++  if (wlr_renderer_is_gles2 (renderer))
++    flipped = TRUE;
++  else if (wlr_renderer_is_android (renderer))
++    flipped = FALSE;
++  else
++    return FALSE;
++  wlr_gles2_texture_get_attribs (texture, &attribs);
++  if (attribs.target != GL_TEXTURE_2D || !ensure_program ())
++    return FALSE;
++
++  if (!pixman_region32_not_empty ((pixman_region32_t *) damage) && fx->seamless < 0.5)
++    return TRUE;
++
++  glGetIntegerv (GL_VIEWPORT, vp);
++  glUseProgram (shader.program);
++  glEnable (GL_BLEND);
++  glActiveTexture (GL_TEXTURE0);
++  glBindTexture (GL_TEXTURE_2D, attribs.tex);
++  glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++  glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++  glUniform1i (shader.tex, 0);
++  glUniform2f (shader.vp, vp[2], vp[3]);
++  glUniform1f (shader.flip, flipped ? 1.0 : 0.0);
++  glUniform2f (shader.scale, fx->scale_x, fx->anchor_x);
++  glUniform4f (shader.dst, dst_box->x, dst_box->y, dst_box->width, dst_box->height);
++  glUniform4f (shader.src,
++               src_box->x / texture->width, src_box->y / texture->height,
++               (src_box->x + src_box->width) / texture->width,
++               (src_box->y + src_box->height) / texture->height);
++  /* the shape, in the box's own pixels: the box less the insets */
++  glUniform4f (shader.rect, fx->inset[3] * scale, fx->inset[0] * scale,
++               dst_box->width - fx->inset[1] * scale, dst_box->height - fx->inset[2] * scale);
++  glUniform4f (shader.r, fx->radius[0] * scale, fx->radius[1] * scale,
++               fx->radius[2] * scale, fx->radius[3] * scale);
++  glUniform1f (shader.alpha, alpha * fx->alpha);
++  glUniform1f (shader.dim, fx->dim);
++  glUniform1f (shader.has_alpha, attribs.has_alpha ? 1.0 : 0.0);
++
++  glEnableVertexAttribArray (shader.pos);
++  glVertexAttribPointer (shader.pos, 2, GL_FLOAT, GL_FALSE, 0, quad);
++  glEnable (GL_SCISSOR_TEST);
++  seam = fx->seamless > 0.5 && seam_px (ctx->output, &start, &end);
++  if (seam) {
++    /* where it stands as if the seam were `tunnel` long (0: no length) */
++    tunnel = fx->tunnel > 0 ? MAX (fx->tunnel * scale, (float) (end - start)) : 0;
++    virt = phoc_sfduo_layer_fx_tunnel_x (dst_box->x, start, end, tunnel);
++  }
++  if (seam && virt < start + tunnel && virt + dst_box->width > start &&
++      !(tunnel == 0 && dst_box->x >= start)) {
++    /* Across the seam: up to where it starts as it is; what went past the
++     * tunnel's length the tunnel further on, from where the seam ends -
++     * within the frame's damage there, which damage_beyond() saw to - and
++     * in between, in the tunnel, nothing. With no length the seam is as if
++     * it were not there; as long as an icon is wide, an icon goes all the
++     * way in before it comes out. Each part is a shape of its own, rounded
++     * at the seam as at its outer corners: the surface squeezes through
++     * rather than being sliced by the hinge, and a sliver on either side
++     * is a drop, not a strip. */
++    pixman_region32_t part;
++    float shift = (end - start) - tunnel;       /* from where it stands to where it is drawn */
++    float r = MAX (MAX (fx->radius[0], fx->radius[1]), MAX (fx->radius[2], fx->radius[3])) * scale;
++    float top = fx->inset[0] * scale, bottom = dst_box->height - fx->inset[2] * scale;
++
++    if (virt < start) {                         /* in front of the tunnel */
++      glUniform4f (shader.dst, virt, dst_box->y, dst_box->width, dst_box->height);
++      glUniform4f (shader.rect, fx->inset[3] * scale, top, start - virt, bottom);
++      glUniform4f (shader.r, fx->radius[0] * scale, r, r, fx->radius[3] * scale);
++      pixman_region32_init_rect (&part, virt, dst_box->y, start - virt, dst_box->height);
++      pixman_region32_intersect (&part, &part, (pixman_region32_t *) damage);
++      draw_region (&part, flipped, vp[3]);
++      pixman_region32_fini (&part);
++    }
++    if (virt + dst_box->width > start + tunnel) {       /* out of it */
++      pixman_region32_init_rect (&part, end, dst_box->y,
++                                 ceilf (virt + dst_box->width + shift) - end, dst_box->height);
++      pixman_region32_intersect (&part, &part, ctx->damage);
++      glUniform4f (shader.dst, virt + shift, dst_box->y, dst_box->width, dst_box->height);
++      glUniform4f (shader.rect, start + tunnel - virt, top,
++                   dst_box->width - fx->inset[1] * scale, bottom);
++      glUniform4f (shader.r, r, fx->radius[1] * scale, fx->radius[2] * scale, r);
++      draw_region (&part, flipped, vp[3]);
++      pixman_region32_fini (&part);
++    }
++  } else {
++    draw_region (damage, flipped, vp[3]);
++  }
++  glDisable (GL_SCISSOR_TEST);
++  glDisableVertexAttribArray (shader.pos);
++  glBindTexture (GL_TEXTURE_2D, 0);
++  return TRUE;
++}
++
++/* ---- merging: a neck between two surfaces ------------------------------- */
++
++static const char *merge_vertex_src =
++  "attribute vec2 pos;\n"
++  "uniform vec2 u_vp;\n"
++  "uniform vec4 u_box;\n"
++  "uniform float u_flip;\n"
++  "varying vec2 v_px;\n"
++  "void main () {\n"
++  "  vec2 p = u_box.xy + pos * u_box.zw;\n"
++  "  float y = 2.0 * p.y / u_vp.y - 1.0;\n"
++  "  gl_Position = vec4 (2.0 * p.x / u_vp.x - 1.0, u_flip > 0.5 ? y : -y, 0.0, 1.0);\n"
++  "  v_px = p;\n"
++  "}\n";
++
++/* The smooth union of two rounded rectangles (polynomial smooth minimum of
++ * their signed distances, reach u_k), less the rectangles themselves: what
++ * the union adds - the neck. Drawn over them, where their own edge already
++ * covers a pixel in part the neck covers only the rest of it (u - o over
++ * 1 - o): the difference alone left a hairline along their edges. */
++static const char *merge_fragment_src =
++  "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
++  "precision highp float;\n"
++  "#else\n"
++  "precision mediump float;\n"
++  "#endif\n"
++  "varying vec2 v_px;\n"
++  "uniform vec4 u_a;\n"
++  "uniform vec4 u_ra;\n"
++  "uniform vec4 u_b;\n"
++  "uniform vec4 u_rb;\n"
++  "uniform float u_k;\n"
++  "uniform vec4 u_color;\n"
++  "float sd (vec2 px, vec4 rect, vec4 radii) {\n"
++  "  vec2 h = (rect.zw - rect.xy) * 0.5;\n"
++  "  vec2 p = px - rect.xy;\n"
++  "  float r = p.y < h.y ? (p.x < h.x ? radii.x : radii.y)\n"
++  "                      : (p.x < h.x ? radii.w : radii.z);\n"
++  "  r = min (r, min (h.x, h.y));\n"
++  "  vec2 q = abs (p - h) - (h - vec2 (r));\n"
++  "  return length (max (q, 0.0)) + min (max (q.x, q.y), 0.0) - r;\n"
++  "}\n"
++  "void main () {\n"
++  "  float d1 = sd (v_px, u_a, u_ra);\n"
++  "  float d2 = sd (v_px, u_b, u_rb);\n"
++  "  float h = clamp (0.5 + 0.5 * (d2 - d1) / u_k, 0.0, 1.0);\n"
++  "  float d = mix (d2, d1, h) - u_k * h * (1.0 - h);\n"
++  "  float u = clamp (0.5 - d, 0.0, 1.0);\n"
++  "  float o = max (clamp (0.5 - d1, 0.0, 1.0), clamp (0.5 - d2, 0.0, 1.0));\n"
++  "  float m = o < 0.999 ? max (u - o, 0.0) / (1.0 - o) : 0.0;\n"
++  "  gl_FragColor = u_color * m;\n"
++  "}\n";
++
++static struct {
++  gboolean tried;
++  GLuint   program;
++  GLint    pos, vp, box, flip, a, ra, b, rb, k, color;
++} merge_shader;
++
++
++static gboolean
++ensure_merge_program (void)
++{
++  GLuint vs, fs, p;
++  GLint ok = GL_FALSE;
++
++  if (merge_shader.tried)
++    return merge_shader.program != 0;
++  merge_shader.tried = TRUE;
++
++  vs = compile (GL_VERTEX_SHADER, merge_vertex_src);
++  fs = compile (GL_FRAGMENT_SHADER, merge_fragment_src);
++  if (!vs || !fs) {
++    if (vs)
++      glDeleteShader (vs);
++    if (fs)
++      glDeleteShader (fs);
++    return FALSE;
++  }
++  p = glCreateProgram ();
++  glAttachShader (p, vs);
++  glAttachShader (p, fs);
++  glLinkProgram (p);
++  glDetachShader (p, vs);
++  glDetachShader (p, fs);
++  glDeleteShader (vs);
++  glDeleteShader (fs);
++  glGetProgramiv (p, GL_LINK_STATUS, &ok);
++  if (!ok) {
++    g_warning ("Merge shader failed to link");
++    glDeleteProgram (p);
++    return FALSE;
++  }
++  merge_shader.program = p;
++  merge_shader.pos = glGetAttribLocation (p, "pos");
++  merge_shader.vp = glGetUniformLocation (p, "u_vp");
++  merge_shader.box = glGetUniformLocation (p, "u_box");
++  merge_shader.flip = glGetUniformLocation (p, "u_flip");
++  merge_shader.a = glGetUniformLocation (p, "u_a");
++  merge_shader.ra = glGetUniformLocation (p, "u_ra");
++  merge_shader.b = glGetUniformLocation (p, "u_b");
++  merge_shader.rb = glGetUniformLocation (p, "u_rb");
++  merge_shader.k = glGetUniformLocation (p, "u_k");
++  merge_shader.color = glGetUniformLocation (p, "u_color");
++  return TRUE;
++}
++
++
++typedef struct {
++  const PhocSfduoLayerFxParams *fx;
++  float rect[4];                /* x1 y1 x2 y2, the output buffer's pixels */
++  float radius[4];
++} MergeShape;
++
++
++static int
++merge_shape_cmp (const void *a, const void *b)
++{
++  const MergeShape *sa = a, *sb = b;
++
++  return (sa->rect[0] > sb->rect[0]) - (sa->rect[0] < sb->rect[0]);
++}
++
++/**
++ * phoc_sfduo_layer_fx_render_merges:
++ * @layer_surfaces: the layer just drawn
++ *
++ * Draws the necks between the merging surfaces of a layer, over them: two
++ * side by side, a gap of less than half their reach apart, flow into each
++ * other as drops of a liquid do. The shapes are the surfaces' as drawn -
++ * insets, corners, scale - so the neck meets their edges.
++ */
++void
++phoc_sfduo_layer_fx_render_merges (PhocRenderContext *ctx, GQueue *layer_surfaces)
++{
++  PhocOutput *output = ctx->output;
++  struct wlr_renderer *renderer = output->wlr_output->renderer;
++  float scale = output->wlr_output->scale;
++  GLfloat quad[] = { 0, 0, 1, 0, 0, 1, 1, 1 };
++  MergeShape shapes[8];
++  int n = 0, start = 0, end = 0;
++  gboolean flipped, seam;
++  GLint vp[4];
++
++  if (effects == NULL || output->wlr_output->transform != WL_OUTPUT_TRANSFORM_NORMAL ||
++      renderer == NULL)
++    return;
++  seam = seam_px (output, &start, &end);
++
++  for (GList *l = layer_surfaces->head; l && n < (int) G_N_ELEMENTS (shapes); l = l->next) {
++    PhocLayerSurface *layer_surface = PHOC_LAYER_SURFACE (l->data);
++    const PhocSfduoLayerFxParams *fx =
++      phoc_sfduo_layer_fx_lookup (phoc_layer_surface_get_namespace (layer_surface));
++    MergeShape *s = &shapes[n];
++    float bx, bw, a;
++
++    if (fx == NULL || fx->merge < 0.01 || !layer_surface->mapped)
++      continue;
++    bx = layer_surface->geo.x * scale;
++    bw = layer_surface->geo.width * scale;
++    a = bx + fx->anchor_x * bw;
++    s->fx = fx;
++    s->rect[0] = a + (bx + fx->inset[3] * scale - a) * fx->scale_x;
++    s->rect[2] = a + (bx + bw - fx->inset[1] * scale - a) * fx->scale_x;
++    s->rect[1] = (layer_surface->geo.y + fx->inset[0]) * scale;
++    s->rect[3] = (layer_surface->geo.y + layer_surface->geo.height - fx->inset[2]) * scale;
++    for (int i = 0; i < 4; i++)
++      s->radius[i] = fx->radius[i] * scale;
++    /* drawn in two parts across the seam: not merged there */
++    if (seam && fx->seamless > 0.5 && s->rect[0] < start && s->rect[2] > start)
++      continue;
++    n++;
++  }
++  if (n < 2)
++    return;
++  qsort (shapes, n, sizeof (MergeShape), merge_shape_cmp);
++
++  if (wlr_renderer_is_gles2 (renderer))
++    flipped = TRUE;
++  else if (wlr_renderer_is_android (renderer))
++    flipped = FALSE;
++  else
++    return;
++
++  for (int i = 0; i + 1 < n; i++) {
++    const MergeShape *a = &shapes[i], *b = &shapes[i + 1];
++    const double *c = a->fx->merge_color[3] > 0 ? a->fx->merge_color : b->fx->merge_color;
++    float k = MIN (a->fx->merge, b->fx->merge) * scale;
++    float y1 = MAX (a->rect[1], b->rect[1]), y2 = MIN (a->rect[3], b->rect[3]);
++    float x1 = a->rect[2] - k, x2 = b->rect[0] + k;
++    pixman_region32_t region;
++
++    /* apart, too far for a neck; one over the other; the seam between */
++    if (b->rect[0] - a->rect[2] >= k / 2 || y2 <= y1 || c[3] <= 0)
++      continue;
++    if (seam && a->rect[2] < end && b->rect[0] > start)
++      continue;
++    if (!ensure_merge_program ())
++      return;
++
++    /* only across their straight sides' height: over the top and bottom
++     * edges the union would bulge where they touch */
++    pixman_region32_init_rect (&region, floorf (x1), ceilf (y1),
++                               ceilf (x2) - floorf (x1), floorf (y2) - ceilf (y1));
++    pixman_region32_intersect (&region, &region, ctx->damage);
++    if (pixman_region32_not_empty (&region)) {
++      glGetIntegerv (GL_VIEWPORT, vp);
++      glUseProgram (merge_shader.program);
++      glEnable (GL_BLEND);
++      glUniform2f (merge_shader.vp, vp[2], vp[3]);
++      glUniform4f (merge_shader.box, x1, y1, x2 - x1, y2 - y1);
++      glUniform1f (merge_shader.flip, flipped ? 1.0 : 0.0);
++      glUniform4f (merge_shader.a, a->rect[0], a->rect[1], a->rect[2], a->rect[3]);
++      glUniform4f (merge_shader.ra, a->radius[0], a->radius[1], a->radius[2], a->radius[3]);
++      glUniform4f (merge_shader.b, b->rect[0], b->rect[1], b->rect[2], b->rect[3]);
++      glUniform4f (merge_shader.rb, b->radius[0], b->radius[1], b->radius[2], b->radius[3]);
++      glUniform1f (merge_shader.k, MAX (k, 0.001));
++      glUniform4f (merge_shader.color, c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]);
++      glEnableVertexAttribArray (merge_shader.pos);
++      glVertexAttribPointer (merge_shader.pos, 2, GL_FLOAT, GL_FALSE, 0, quad);
++      glEnable (GL_SCISSOR_TEST);
++      draw_region (&region, flipped, vp[3]);
++      glDisable (GL_SCISSOR_TEST);
++      glDisableVertexAttribArray (merge_shader.pos);
++    }
++    pixman_region32_fini (&region);
++  }
++}
+diff --git a/src/sfduo-layer-fx.h b/src/sfduo-layer-fx.h
+new file mode 100644
+index 0000000..4fab015
+--- /dev/null
++++ b/src/sfduo-layer-fx.h
+@@ -0,0 +1,70 @@
++/*
++ * Copyright (C) 2026 The Surface Duo port
++ *
++ * SPDX-License-Identifier: GPL-3.0-or-later
++ */
++
++#pragma once
++
++#include "render.h"
++#include "layer-surface.h"
++
++#include <glib.h>
++#include <pixman.h>
++#include <wlr/render/wlr_texture.h>
++#include <wlr/util/box.h>
++
++G_BEGIN_DECLS
++
++/* Visual effects on a layer surface, drawn by phoc: a client asks for them
++ * by the surface's namespace (org.sfduo.Phoc.LayerEffect) and phoc animates
++ * them on its own frames. They change how the surface looks, not where it
++ * takes input. */
++typedef struct {
++  double radius[4];             /* corners, top-left clockwise; layout px */
++  double inset[4];              /* the shape inside the surface: top, right,
++                                 * bottom, left from its edges; layout px -
++                                 * outside it nothing is drawn */
++  double alpha;                 /* multiplied into the surface's own */
++  double dim;                   /* 0 as it is .. 1 black */
++  double scale_x;               /* width, 0.5 .. 1, about anchor_x */
++  double anchor_x;              /* 0 its left edge .. 1 its right edge */
++  double seamless;              /* > 0.5: on an output with a seam, drawn as if
++                                 * the seam had no width - what reaches it is
++                                 * drawn at once on its far side */
++  double tunnel;                /* seamless, and > 0: the seam is this long a
++                                 * tunnel instead (at least its own width;
++                                 * layout px) - what goes in comes out only
++                                 * after this much more travel: an icon no
++                                 * wider goes all the way in before any of
++                                 * it comes out. The surface stands where
++                                 * phoc_sfduo_layer_fx_tunnel_x() puts it */
++  double merge;                 /* > 0: the shape flows into that of another
++                                 * merging surface beside it on its layer, a
++                                 * neck across a gap up to half this; layout
++                                 * px, the reach of the smooth union */
++  double merge_color[4];        /* the neck's colour, r g b a, 0 .. 1 */
++} PhocSfduoLayerFxParams;
++
++const PhocSfduoLayerFxParams *phoc_sfduo_layer_fx_lookup  (const char *namespace);
++gboolean                      phoc_sfduo_layer_fx_animate (const char *namespace,
++                                                           GVariant   *target,
++                                                           guint       duration_ms,
++                                                           GError    **error);
++gboolean                      phoc_sfduo_layer_fx_render  (PhocRenderContext            *ctx,
++                                                           const PhocSfduoLayerFxParams *fx,
++                                                           struct wlr_texture           *texture,
++                                                           const struct wlr_fbox        *src_box,
++                                                           const struct wlr_box         *dst_box,
++                                                           const pixman_region32_t      *damage,
++                                                           float                         alpha,
++                                                           float                         scale);
++float                         phoc_sfduo_layer_fx_tunnel_x (float x, int start, int end,
++                                                            float tunnel);
++void                          phoc_sfduo_layer_fx_render_merges (PhocRenderContext *ctx,
++                                                                 GQueue            *layer_surfaces);
++void                          phoc_sfduo_layer_fx_damage_moved (PhocOutput             *output,
++                                                                PhocLayerSurface       *layer_surface,
++                                                                const struct wlr_box   *old_geo);
++
++G_END_DECLS
+-- 
+2.43.0
+

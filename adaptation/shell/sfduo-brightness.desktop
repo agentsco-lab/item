@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Surface Duo brightness keeper
-Comment=Restore the backlight level after the panels are powered on
-Exec=/usr/local/bin/sfduo-brightness
-Terminal=false
-NoDisplay=true
