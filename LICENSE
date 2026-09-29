@@ -1,8 +1,7 @@
 This repository is multi-licensed:
 
-- Kernel packaging and kernel patches: GPL-2.0 (see LICENSES/GPL-2.0.txt)
-- Scripts and the adaptation package: MIT (see LICENSES/MIT.txt)
+- The shell's programs, scripts and the package build (shell/, apps/, css/,
+  dconf/, package/, tests/): MIT (see LICENSES/MIT.txt)
+- The patches in patches/ change phoc, phosh and phosh-osk-stevia, and are
+  under the license of the project each one patches (GPL-3.0-or-later)
 - Documentation (docs/, README files): CC BY-SA 4.0 (see LICENSES/CC-BY-SA-4.0.txt)
-- tools/mkbootimg/ is vendored from AOSP: Apache-2.0 (see LICENSES/Apache-2.0.txt)
-
-See the License section of README.md for details.

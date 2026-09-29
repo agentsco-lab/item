@@ -1,0 +1,46 @@
+From 33a9f351d75aa6e4d20ebf864e3736e6b6df6a94 Mon Sep 17 00:00:00 2001
+From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
+Date: Tue, 29 Sep 2026 10:34:01 +0300
+Subject: [PATCH 2/3] osk: shown by a request, the keyboard goes to the active
+ window's panel
+
+Shown by sm.puri.OSK0 - phosh's power button on a folding display - rather
+than by a field, the keyboard follows the active window's panel all the same.
+---
+ src/phosh-osk-stevia.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/phosh-osk-stevia.c b/src/phosh-osk-stevia.c
+index 911888b..5465ffe 100644
+--- a/src/phosh-osk-stevia.c
++++ b/src/phosh-osk-stevia.c
+@@ -367,6 +367,17 @@ follow_active_window (PosApp *self)
+                                      g_strcmp0 (side, "left") == 0 ? 0 : self->panel + self->gap);
+ }
+ 
++static void
++on_surface_visible (PosApp *self)
++{
++  /* shown by a request (sm.puri.OSK0 - phosh's power button on a folding
++   * display) rather than by a field: it goes to the active window's panel
++   * all the same */
++  if (self->input_surface && pos_input_surface_get_visible (self->input_surface))
++    follow_active_window (self);
++}
++
++
+ static void
+ on_active_window_changed (PosApp *self)
+ {
+@@ -470,6 +481,8 @@ create_input_surface (PosApp *self)
+   }
+   if (panel) {
+     pos_input_surface_set_margin_left (self->input_surface, panel + self->gap);
++    g_signal_connect_object (self->input_surface, "notify::surface-visible",
++                             G_CALLBACK (on_surface_visible), self, G_CONNECT_SWAPPED);
+     if (self->activation_filter)
+       g_signal_connect_object (self->activation_filter, "active-changed",
+                                G_CALLBACK (on_active_window_changed), self,
+-- 
+2.43.0
+

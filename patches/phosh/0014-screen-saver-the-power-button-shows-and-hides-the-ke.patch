@@ -1,0 +1,57 @@
+From 1e6f4333e7498eeaf974378fce12ea2303f9e70a Mon Sep 17 00:00:00 2001
+From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
+Date: Fri, 25 Sep 2026 03:24:57 +0300
+Subject: [PATCH 14/17] screen saver the power button shows and hides the
+ keyboard
+
+On a display with a seam - a folding phone, locked and woken by its hinge - a short press with the screen on and unlocked shows or hides the on-screen keyboard instead of blanking; blanked or locked the button does what it did, and a long press is still the power menu.
+---
+ src/screen-saver-manager.c | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/src/screen-saver-manager.c b/src/screen-saver-manager.c
+index a7aed65a..440d7fa8 100644
+--- a/src/screen-saver-manager.c
++++ b/src/screen-saver-manager.c
+@@ -15,6 +15,8 @@
+ #include "login1-manager-dbus.h"
+ #include "login1-session-dbus.h"
+ #include "lockscreen-manager.h"
++#include "layout-manager.h"
++#include "osk-manager.h"
+ #include "session-presence.h"
+ #include "util.h"
+ 
+@@ -227,6 +229,29 @@ on_power_button_pressed (GSimpleAction *action, GVariant *param, gpointer data)
+   if (self->long_press_id == 0)
+     return;
+ 
++  /* A display with a seam is a folding phone: closing it locks and blanks
++   * it, opening it wakes it, and the power button is free. With the screen
++   * on and unlocked a short press shows or hides the on-screen keyboard
++   * instead - which a field that already has the focus cannot bring back,
++   * and which nothing else on this shell can. Blanked or locked, the
++   * button still does what it always did, and a long press is still the
++   * power menu. */
++  {
++    PhoshShell *shell = phosh_shell_get_default ();
++    PhoshOskManager *osk = phosh_shell_get_osk_manager (shell);
++    GdkRectangle seam;
++
++    if (osk && !phosh_shell_get_locked (shell) &&
++        phosh_layout_manager_get_seam (phosh_shell_get_layout_manager (shell), &seam)) {
++      gboolean visible = phosh_osk_manager_get_visible (osk);
++
++      g_debug ("Power button released: keyboard %s", visible ? "hidden" : "shown");
++      phosh_osk_manager_set_visible (osk, !visible);
++      g_clear_handle_id (&self->long_press_id, g_source_remove);
++      return;
++    }
++  }
++
+   g_debug ("Power button released, activating screensaver");
+   screen_saver_set_active (self, TRUE, self->lock_enabled);
+ 
+-- 
+2.43.0
+
