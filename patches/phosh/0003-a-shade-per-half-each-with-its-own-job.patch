@@ -1,4 +1,4 @@
-From 5970b7737505c6769b39c3bf63754ac829ceec05 Mon Sep 17 00:00:00 2001
+From 1201c0abb15c4b057c2c418a9ac26e65604cd4f6 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 22:27:22 +0300
 Subject: [PATCH 03/17] a shade per half each with its own job
@@ -120,10 +120,10 @@ index 8c6ede28..509140a6 100644
  void        phosh_settings_hide_details (PhoshSettings *self);
 +void        phosh_settings_set_half (PhoshSettings *self, PhoshSettingsHalf half);
 diff --git a/src/shell.c b/src/shell.c
-index 3b63aa51..18cc84f6 100644
+index e66e82ad..f5a7b39a 100644
 --- a/src/shell.c
 +++ b/src/shell.c
-@@ -641,6 +641,8 @@ panels_create (PhoshShell *self)
+@@ -643,6 +643,8 @@ panels_create (PhoshShell *self)
       * hides this one's contents and keeps it as a handle for its own shade. */
      gtk_style_context_add_class (gtk_widget_get_style_context (GTK_WIDGET (priv->top_panel_right)),
                                   "phosh-far-half");

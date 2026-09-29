@@ -1,4 +1,4 @@
-From b37f6c59958b0b5beefa7ca54747be544d023265 Mon Sep 17 00:00:00 2001
+From 9ca950fb6588f66a80f326653d1db9fd00d918fe Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 22:27:22 +0300
 Subject: [PATCH 12/17] running apps only placed and follows redo the rows

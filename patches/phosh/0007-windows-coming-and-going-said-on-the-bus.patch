@@ -1,4 +1,4 @@
-From 75219acee34299eec5bfb0085b6e881afc10f67d Mon Sep 17 00:00:00 2001
+From 9916d01e977621800ba3e57d9f218f0587250c2c Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 22:27:22 +0300
 Subject: [PATCH 07/17] windows coming and going said on the bus
@@ -8,10 +8,10 @@ Subject: [PATCH 07/17] windows coming and going said on the bus
  1 file changed, 60 insertions(+)
 
 diff --git a/src/shell.c b/src/shell.c
-index 8d5678ca..f007cc4b 100644
+index ea213954..8016934a 100644
 --- a/src/shell.c
 +++ b/src/shell.c
-@@ -326,6 +326,7 @@ static const char shade_introspection_xml[] =
+@@ -328,6 +328,7 @@ static const char shade_introspection_xml[] =
    "<node>"
    "  <interface name='org.sfduo.Shade'>"
    "    <property name='Open' type='s' access='read'/>"
@@ -19,7 +19,7 @@ index 8d5678ca..f007cc4b 100644
    "  </interface>"
    "</node>";
  
-@@ -403,6 +404,64 @@ shade_publish (PhoshShell *self)
+@@ -405,6 +406,64 @@ shade_publish (PhoshShell *self)
  }
  
  
@@ -84,7 +84,7 @@ index 8d5678ca..f007cc4b 100644
  static void
  shade_service_start (PhoshShell *self)
  {
-@@ -437,6 +496,7 @@ shade_service_start (PhoshShell *self)
+@@ -439,6 +498,7 @@ shade_service_start (PhoshShell *self)
    g_bus_own_name_on_connection (priv->shade_bus, SHADE_BUS_NAME,
                                  G_BUS_NAME_OWNER_FLAGS_NONE, NULL, NULL, NULL, NULL);
    priv->shade_open = "none";

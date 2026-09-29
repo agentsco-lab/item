@@ -1,4 +1,4 @@
-From d09ff58a9be9e3d1352e5a3e19979c24b06f655c Mon Sep 17 00:00:00 2001
+From d4c4d801c776b45b428598263f640a2b736a1525 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 22:27:22 +0300
 Subject: [PATCH 05/17] the lock screen fades away on unlock

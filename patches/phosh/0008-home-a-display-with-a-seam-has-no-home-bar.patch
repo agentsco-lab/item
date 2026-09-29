@@ -1,4 +1,4 @@
-From 5ea0ec77a2be2fe489eccdea174d60ddef198b1a Mon Sep 17 00:00:00 2001
+From bd6947ef466a45948d7f07689f6af2c91948db6b Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Thu, 24 Sep 2026 22:27:22 +0300
 Subject: [PATCH 08/17] home a display with a seam has no home bar
@@ -8,19 +8,19 @@ Subject: [PATCH 08/17] home a display with a seam has no home bar
  1 file changed, 38 insertions(+), 5 deletions(-)
 
 diff --git a/src/home.c b/src/home.c
-index ce199973..3db2fce5 100644
+index 5464f1b8..92a3be8b 100644
 --- a/src/home.c
 +++ b/src/home.c
-@@ -18,6 +18,7 @@
- #include "osk-manager.h"
+@@ -20,6 +20,7 @@
+ #include "phosh-wayland.h"
  #include "style-manager.h"
  #include "feedback-manager.h"
 +#include "layout-manager.h"
  #include "util.h"
  
  #include <handy.h>
-@@ -86,6 +87,38 @@ struct _PhoshHome
- G_DEFINE_TYPE(PhoshHome, phosh_home, PHOSH_TYPE_DRAG_SURFACE);
+@@ -113,6 +114,38 @@ G_DEFINE_TYPE(PhoshHome, phosh_home, PHOSH_TYPE_DRAG_SURFACE);
+ static void phosh_home_set_background_alpha (PhoshHome *self, double alpha);
  
  
 +/*
@@ -58,7 +58,7 @@ index ce199973..3db2fce5 100644
  static void
  phosh_home_update_home_bar (PhoshHome *self)
  {
-@@ -173,7 +206,7 @@ update_drag_handle (PhoshHome *self, gboolean queue_draw)
+@@ -661,7 +694,7 @@ update_drag_handle (PhoshHome *self, gboolean queue_draw)
                                                0, 0, NULL, &handle);
    if (!success) {
      g_warning ("Failed to get handle position");
@@ -67,7 +67,7 @@ index ce199973..3db2fce5 100644
    }
  
    g_debug ("Drag Handle: %d", handle);
-@@ -187,7 +220,7 @@ update_drag_handle (PhoshHome *self, gboolean queue_draw)
+@@ -675,7 +708,7 @@ update_drag_handle (PhoshHome *self, gboolean queue_draw)
  static int
  get_margin (gint height)
  {
@@ -76,7 +76,7 @@ index ce199973..3db2fce5 100644
  }
  
  
-@@ -460,7 +493,7 @@ phosh_home_dragged (PhoshDragSurface *drag_surface, int margin)
+@@ -965,7 +998,7 @@ phosh_home_dragged (PhoshDragSurface *drag_surface, int margin)
    double progress, alpha;
  
    gtk_window_get_size (GTK_WINDOW (self), &width, &height);
@@ -85,7 +85,7 @@ index ce199973..3db2fce5 100644
    /* Avoid negative values when resizing the surface */
    progress = MAX (0, progress);
  
-@@ -722,11 +755,11 @@ phosh_home_new (struct zwlr_layer_shell_v1          *layer_shell,
+@@ -1253,11 +1286,11 @@ phosh_home_new (struct zwlr_layer_shell_v1          *layer_shell,
                                   ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
                         "layer", ZWLR_LAYER_SHELL_V1_LAYER_TOP,
                         "kbd-interactivity", FALSE,

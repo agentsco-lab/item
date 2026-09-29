@@ -1,4 +1,4 @@
-From 8e1197eefbb99ee4408da9153af9908022b08f85 Mon Sep 17 00:00:00 2001
+From ed49c71ac8d13d3a29b9617f9d77a4d8d7c26f90 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Sat, 19 Sep 2026 21:55:30 +0300
 Subject: [PATCH 01/16] view: a closed window fades and shrinks away rather

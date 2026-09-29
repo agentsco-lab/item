@@ -1,4 +1,4 @@
-From cfa2cd122b8d7e7527bfce9234096d3a11082491 Mon Sep 17 00:00:00 2001
+From 805105c59e0a0f79574d3a639025f41597625141 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Sat, 26 Sep 2026 14:15:12 +0300
 Subject: [PATCH 14/16] sfduo-control: a window drawing into subsurfaces slides

@@ -1,4 +1,4 @@
-From 53bdb1dfb95e08dbb1bba622d296dca3a4da73eb Mon Sep 17 00:00:00 2001
+From b57bcd6406ce01910d1d7ef2bf6ea442ed3bb6f2 Mon Sep 17 00:00:00 2001
 From: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Date: Sun, 20 Sep 2026 13:54:35 +0300
 Subject: [PATCH 06/16] view, sfduo-control: a new window is not drawn until it
