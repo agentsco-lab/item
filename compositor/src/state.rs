@@ -101,6 +101,10 @@ pub struct State {
     pub system: crate::sysscreen::SystemScreen,
     /// The pen's tip is on the screen.
     pub pen_down: bool,
+    /// The pen's sheet, right of the right panel (pensheet.rs).
+    pub pen: crate::pensheet::PenSheet,
+    /// The pen draws on the sheet: its stroke began there.
+    pub pen_drawing: bool,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
     /// The panel the next window goes to, asked for by a launch from the
@@ -161,6 +165,8 @@ impl State {
             lock: crate::lock::Lock::new(wake.clone()),
             system: crate::sysscreen::SystemScreen::new(wake.clone()),
             pen_down: false,
+            pen: crate::pensheet::PenSheet::new(),
+            pen_drawing: false,
             put_away: Vec::new(),
             launch_to: None,
             socket_name: Default::default(),

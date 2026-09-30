@@ -198,6 +198,9 @@ impl SystemScreen {
                     self.page = None;
                     self.shown = None;
                 }
+                // One frame more: the dock learns the panel is free only on
+                // a frame.
+                return true;
             }
         }
         if self.p > 0.0 && self.run.is_none() && frame_ns.saturating_sub(self.last_read_ns) > READ_EVERY_NS {

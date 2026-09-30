@@ -12,7 +12,8 @@ use std::path::Path;
 
 use smithay::backend::input::{
     AbsolutePositionEvent, Event, InputEvent, KeyState, KeyboardKeyEvent, Switch, SwitchState, SwitchToggleEvent,
-    TabletToolTipEvent, TabletToolTipState, TouchEvent, TouchSlot,
+    ButtonState, TabletToolButtonEvent, TabletToolEvent, TabletToolTipEvent, TabletToolTipState, TabletToolType,
+    TouchEvent, TouchSlot,
 };
 use smithay::utils::{Logical, Point};
 use smithay::backend::libinput::LibinputInputBackend;
@@ -145,6 +146,24 @@ impl State {
             // The pen: its tip down, moved, up.
             InputEvent::TabletToolTip { event } => {
                 let pos = event.position_transformed(LAYOUT.into());
+                // On the pen's sheet the pen draws, with its pressure; its
+                // other end erases.
+                let down = TabletToolTipEvent::<LibinputInputBackend>::tip_state(&event) == TabletToolTipState::Down;
+                let eraser = TabletToolEvent::<LibinputInputBackend>::tool(&event).tool_type == TabletToolType::Eraser;
+                let pressure = TabletToolEvent::<LibinputInputBackend>::pressure(&event);
+                if down && !self.lock.holds_screen() && self.pen.takes_pen(pos) {
+                    self.pen_drawing = true;
+                    self.pen.pen_down(pos, pressure, eraser);
+                    self.boost.kick(hybris_hwc::now_ns());
+                    self.needs_redraw = true;
+                    return;
+                }
+                if !down && self.pen_drawing {
+                    self.pen_drawing = false;
+                    self.pen.pen_up();
+                    self.needs_redraw = true;
+                    return;
+                }
                 let c = match TabletToolTipEvent::<LibinputInputBackend>::tip_state(&event) {
                     TabletToolTipState::Down => Contact::Down(pen_slot(), pos, event.time()),
                     TabletToolTipState::Up => Contact::Up(pen_slot(), event.time()),
@@ -154,11 +173,24 @@ impl State {
                 return;
             }
             InputEvent::TabletToolAxis { event } => {
+                if self.pen_drawing {
+                    let pos = event.position_transformed(LAYOUT.into());
+                    let eraser = TabletToolEvent::<LibinputInputBackend>::tool(&event).tool_type == TabletToolType::Eraser;
+                    self.pen.pen_motion(pos, TabletToolEvent::<LibinputInputBackend>::pressure(&event), eraser);
+                    self.boost.kick(hybris_hwc::now_ns());
+                    self.needs_redraw = true;
+                    return;
+                }
                 if !self.pen_down {
                     return;
                 }
                 self.contact(Contact::Motion(pen_slot(), event.position_transformed(LAYOUT.into()), event.time()));
                 Contact::Frame
+            }
+            // The pen's barrel button, held: it erases on the sheet.
+            InputEvent::TabletToolButton { event } => {
+                self.pen.set_barrel(TabletToolButtonEvent::<LibinputInputBackend>::button_state(&event) == ButtonState::Pressed);
+                return;
             }
             _ => return,
         };
@@ -222,6 +254,11 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                // The pen's sheet, when it is out (pensheet.rs).
+                if self.pen.down(slot, pos, time) {
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.dock.down(slot, pos) {
                     self.needs_redraw = true;
                     return;
@@ -279,6 +316,11 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.pen.holds(slot) {
+                    self.pen.motion(slot, pos, time);
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.back.holds(slot) {
                     self.back.motion(slot, pos);
                     self.needs_redraw = true;
@@ -295,6 +337,11 @@ impl State {
                         crate::grid::Ask::System(start) => {
                             self.system.grab_from(slot, start, time);
                             self.system.motion(slot, pos, time);
+                        }
+                        // Left on the right panel's: the pen's sheet.
+                        crate::grid::Ask::Pen(start) => {
+                            self.pen.grab_from(slot, start, time);
+                            self.pen.motion(slot, pos, time);
                         }
                         _ => {}
                     }
@@ -324,6 +371,11 @@ impl State {
                 }
                 if self.system.holds(slot) {
                     self.system.up(slot);
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.pen.holds(slot) {
+                    self.pen.up(slot);
                     self.needs_redraw = true;
                     return;
                 }
@@ -364,6 +416,7 @@ impl State {
                 self.grid.cancel();
                 self.back.cancel();
                 self.system.cancel();
+                self.pen.cancel();
                 self.needs_redraw = true;
                 touch.cancel(self)
             }

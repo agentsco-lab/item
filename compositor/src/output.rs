@@ -174,6 +174,7 @@ impl Screen {
         elements.extend(state.layers.elements(&mut self.renderer).into_iter().map(FrameElement::Window));
         let running = state.running();
         elements.extend(state.system.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        elements.extend(state.pen.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.grid.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
         elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
         elements.extend(state.clock.elements(&mut self.renderer, state.dock.home_panel()).into_iter().map(FrameElement::from));
@@ -359,7 +360,7 @@ impl Screen {
     /// Uploads the shell's textures before they are first needed.
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
-        let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer);
+        let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer) + state.pen.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }
 

@@ -29,6 +29,7 @@ mod layout;
 mod notify;
 mod output;
 mod pam;
+mod pensheet;
 mod protocols;
 mod quick;
 mod shade;
@@ -273,6 +274,9 @@ impl Data {
         if self.state.system.out() {
             taken[0] = true;
         }
+        if self.state.pen.out() {
+            taken[1] = true;
+        }
         self.state.dock.follow(taken, started);
         // Callbacks::Draw: frame callbacks before the frame is drawn: the
         // clients' buffers for it are already taken, and a client starts on
@@ -394,6 +398,10 @@ impl Data {
             self.state.needs_redraw = true;
         }
         if self.state.system.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        if self.state.pen.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
@@ -529,6 +537,12 @@ fn main() {
             // unlock.
             if std::fs::remove_file("/tmp/item-rise").is_ok() {
                 data.state.dock.rise(hybris_hwc::now_ns());
+                data.state.needs_redraw = true;
+            }
+            // `touch /tmp/item-stroke` draws a wave with the pen's pressure
+            // rising along it on the open sheet, for tests.
+            if std::fs::remove_file("/tmp/item-stroke").is_ok() {
+                data.state.pen.test_stroke();
                 data.state.needs_redraw = true;
             }
             // `touch /tmp/item-power` is the power key, for tests.

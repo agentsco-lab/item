@@ -42,6 +42,7 @@ item, which keep running the phone day to day.
 | locking | the power key blanks (hwc2 power off) and locks; the lock screen and its PIN pad, the PIN checked by PAM as phosh does; the volume keys | |
 | the system screen | left of the left panel, a swipe right on its desktop: greeting, battery card with 24 h graph, as item's #109 | |
 | the lid, the pen | the lid shut locks and darkens; the pen touches as a finger | |
+| the pen's sheet | right of the right panel, a swipe left on its desktop: the pen draws with its pressure, its other end or button erases; clear, save as PNG, as item's sfduo-pen-screen | a stroke uploads only what it touched |
 | frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, a client's frame drawn at once, the shell's motion late in the frame; never two frames waiting in hwcomposer; drawn whole | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
 What it does not do yet: installing as a session of its own, the pen's own sheet, cheaper shm frames, `wp_presentation`, the portals' Settings interface.
@@ -78,6 +79,7 @@ What it does not do yet: installing as a session of its own, the pen's own sheet
 | 17 | the PIN (pam.rs) | PAM's phosh service on a thread; a wrong one refused (`log/2026-09-30-step-17-pin.md`) |
 | 18 | the lid, the pen, the system screen (sysscreen.rs) | (`log/2026-09-30-step-18-lid-pen-system.md`) |
 | 19 | a window's close, the volume bar, the dock's rise after an unlock | as item's (`log/2026-10-01-step-19-motion.md`) |
+| 20 | the pen's sheet (pensheet.rs) | drawn and saved in a scripted run; the dock now told on the frame after a slide ends (`log/2026-10-01-step-20-pen-sheet.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -136,7 +138,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `quick` (the shades' contents), `notify` (notifications), `layers` (layer surfaces, the keyboard), `protocols` (the globals stevia needs), `lock` (locking, blanking, the keys), `pam` (the PIN), `sysscreen` (the system screen), `text` (fonts and labels), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `quick` (the shades' contents), `notify` (notifications), `layers` (layer surfaces, the keyboard), `protocols` (the globals stevia needs), `lock` (locking, blanking, the keys), `pam` (the PIN), `sysscreen` (the system screen), `pensheet` (the pen's sheet), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences
