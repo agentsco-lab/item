@@ -21,68 +21,96 @@ Why, from a day of probes on the Lindroid chain
 It is an experiment beside the port (iverbovoy/surfaceduo-droidian) and
 item, which keep running the phone day to day.
 
-## First, two probes
+## Where it stands (2026-09-30)
 
 | | | |
 |---|---|---|
-| A | smithay's anvil on the Lindroid chain (duo-lindroid's test image): do smithay's EGL and GLES run on libhybris? | |
-| C1 | smithay's `GlesRenderer` on our EGL over hwcomposer (no GBM: the Android platform and the hwcomposer window) | done 2026-09-30: 60 fps, 1-1.5 ms to render a frame (`log/2026-09-30-probe-c1.md`) |
-| C2 | Wayland clients in it: shm, and GTK4 over `android_wlegl` | done 2026-09-30: both, one per panel, at 60 fps (`log/2026-09-30-probe-c2.md`) |
-| C3 | touch: libinput to `wl_touch`, the window under the finger | done 2026-09-30: both panels, one to one, the port's `sfduo touchscreen` (`log/2026-09-30-probe-c3.md`) |
-| B | a minimal Rust program that puts a GL frame on the Duo's panels through libhybris' hwc2, at vsync: the core of the backend | done 2026-09-30: 60 fps across both panels, 16.7 ms between frames, no copy (`log/2026-09-30-probe-b.md`) |
+| the frame's path | Rust → libhybris hwc2 → hwcomposer, no copy, fences through | 60 fps across both panels, 16.7 ms between frames |
+| the renderer | smithay's `GlesRenderer` on EGL without GBM (the Android platform, hwcomposer's window) | 1-1.5 ms to render a frame |
+| clients | xdg-shell; shm, and GL over libhybris' `android_wlegl` | a window per panel, 60 fps with two |
+| touch | libinput to `wl_touch`, the touchscreen one to one with the output, hinge and all | both panels |
+| the session | the user's, on tty7 as phosh runs; our desktop name, a gtk portals configuration | GTK apps map in under 2 s |
 
-What each must answer - the seams between smithay and libhybris, not the
-language:
+What it does not do yet: frame scheduling (a frame is drawn every vsync and
+the swap blocks the event loop), the shell (shades, dock, gestures), the
+on-screen keyboard, the pen, blanking and the power key, the portals'
+Settings interface.
 
-- **The EGL display.** On the chain (A) libhybris has GBM (libgbm-hybris),
-  as KWin and wlroots used. Without the chain (B) there is no GBM: smithay
-  needs its own `EGLNativeDisplay` (the Android platform or
-  `EGL_DEFAULT_DISPLAY`) and `EGLNativeSurface` over libhybris' hwcomposer
-  native window.
-- **Clients' buffers.** On the port's own path GL apps hand buffers over
-  `android_wlegl`, which libhybris' EGL serves after
-  `eglBindWaylandDisplayWL`: smithay's `bind_wl_display` (feature
-  `use_system_lib`) must work with it, and the buffers must import as
-  textures (`EGL_WAYLAND_BUFFER_WL`), or GL apps will not show. On the chain
-  clients use linux-dmabuf with libhybris' metadata fd instead
-  (duo-lindroid, `log/2026-09-30-probe-plasma-mobile.md`).
-- **Sync.** On the port's path a frame goes to hwcomposer through EGL's swap
-  with its fence; the chain has none (duo-lindroid idea 20).
+## How it was reached
 
-If either fails, or the size turns out too large, the fallback is SwayFX
-with item as a Rust daemon over sway's IPC and layer-shell clients
-(duo-lindroid, `log/2026-09-30-probe-swayfx.md`).
+| | | |
+|---|---|---|
+| B | a minimal Rust program that puts a GL frame on the panels through hwc2 | 60 fps, 16.7 ms, no copy (`log/2026-09-30-probe-b.md`) |
+| C1 | smithay's renderer on our EGL over hwcomposer | 60 fps, 1-1.5 ms a frame; the first frame was wrong, see the log (`log/2026-09-30-probe-c1.md`) |
+| C2 | Wayland clients: shm, and GTK4 over `android_wlegl` | both, a window per panel (`log/2026-09-30-probe-c2.md`) |
+| C3 | touch | both panels, the port's `sfduo touchscreen` (`log/2026-09-30-probe-c3.md`) |
+| 1 | the compositor crate, in the user's session | apps in under 2 s once the session's portals were set up (`log/2026-09-30-step-1-compositor.md`) |
+| A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
-## What the Duo gives a compositor (known from duo-lindroid)
+The seams between smithay and libhybris, which the probes answered:
+
+- **The EGL display.** There is no GBM on this path: smithay gets an
+  `EGLNativeDisplay` on the Android platform and an `EGLNativeSurface` over
+  libhybris' hwcomposer window (`crates/smithay-hybris`).
+- **Clients' buffers.** GL apps hand buffers over `android_wlegl`, which
+  libhybris' EGL serves after `eglBindWaylandDisplayWL`; smithay's
+  `bind_wl_display` (`use_system_lib`) imports them.
+- **Sync.** A frame goes to hwcomposer through EGL's swap with its fence.
+- **Orientation.** GL draws the EGL surface's default framebuffer bottom-up:
+  frames are rendered with `Transform::Flipped180`, clients see a normal
+  output.
+
+The fallback, if this had failed: SwayFX with item as a Rust daemon over
+sway's IPC and layer-shell clients (duo-lindroid,
+`log/2026-09-30-probe-swayfx.md`).
+
+## What the Duo gives a compositor
 
 - One hwcomposer display, 2784x1800: two 1350x1800 panels and 84 columns
-  under the hinge between them. The composer takes only a client target
-  (device layers came back changed to client composition).
+  under the hinge between them. At scale 2 the left panel is x 0-675, the
+  hinge 675-717, the right panel 717-1392. The composer takes only a client
+  target (duo-lindroid: device layers came back changed to client
+  composition).
 - One touchscreen over both panels and the hinge: X 0-17709, Y 0-11411. The
   port's `sfduo-pen-split` grabs it and gives the fingers `sfduo touchscreen`
   and the pen `sfduo pen`.
 - Adreno 640 through libhybris: GLES 3.2, EGL 1.5. Its GLSL ES compiler is
-  strict (an undefined name in `#if` is an error).
+  strict (an undefined name in `#if` is an error). No dmabuf import on this
+  platform.
+- vsync 16.667 ms; `eglSwapBuffers` waits for it.
 - The port's scale is 2.
 
-## The compositor
+## Building and running
 
-`compositor/`, the `item-compositor` binary: the probes' parts as modules,
-run in the user's session on tty7 (`tools/session-run.sh 60 --spawn
-gnome-calculator`). Step 1 and its session (`log/2026-09-30-step-1-compositor.md`): apps map in
-under 2 s. Next: frame scheduling.
+On the PC, once:
+
+    curl https://sh.rustup.rs | sh -s -- --no-modify-path --profile minimal
+    ~/.cargo/bin/rustup target add aarch64-unknown-linux-gnu
+    tools/fetch-sysroot.sh            # the phone's libxkbcommon and libinput
+
+The cross linker is `aarch64-linux-gnu-gcc` (`.cargo/config.toml`); the
+binaries need glibc 2.34, the phone has 2.43. Then:
+
+    ~/.cargo/bin/cargo build --release --target aarch64-unknown-linux-gnu -p item-compositor
+    scp target/aarch64-unknown-linux-gnu/release/item-compositor tools/session-run.sh root@172.16.42.1:/tmp/
+    ssh root@172.16.42.1 sh /tmp/session-run.sh 60 --spawn gnome-calculator --spawn gnome-clocks
+
+`session-run.sh` stops phosh, restarts the Android composer clean, runs the
+compositor as droidian on tty7 for the given seconds, and brings phosh back
+whatever happens. Nothing is installed on the phone. The compositor's log is
+`/tmp/item-compositor.log` there.
 
 ## Layout
 
-- `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client layer, a native window presenting with fences
-- `probes/hwc-frame` - probe B: a GL frame through hwcomposer from Rust
+- `compositor/` - item-compositor: `layout` (the panels and the hinge),
+  `state` (the Wayland protocols), `input` (touch), `output` (hwcomposer,
+  EGL, the renderer)
+- `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
+  layer, a native window presenting with fences
 - `crates/smithay-hybris` - smithay's native EGL traits for libhybris without GBM
-- `probes/smithay-frame` - probe C1: smithay's renderer into that window
-- `probes/wl-panels` - probe C2: a minimal compositor, a window per panel
-- `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against (into `sysroot/`, not tracked)
-- `compositor/` - item-compositor
-- `tools/session-run.sh` - runs item-compositor in the user's session on the phone, and phosh back after
-- `tools/probe-run.sh` - runs a probe on the phone with the shell stopped, and the shell back after
-- `log/` - what each probe found
-- Cross builds: `cargo build --release --target aarch64-unknown-linux-gnu`
-  (the linker is set in `.cargo/config.toml`)
+- `probes/` - the probes: `hwc-frame` (B), `smithay-frame` (C1), `wl-panels` (C2, C3)
+- `tools/session-run.sh` - item-compositor in the user's session on the phone
+- `tools/probe-run.sh` - a probe on the phone with the shell stopped
+- `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against
+  (into `sysroot/`, not tracked)
+- `log/` - what each step found, with the raw output
