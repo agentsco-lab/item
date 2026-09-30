@@ -69,8 +69,10 @@ impl Curtain {
         false
     }
 
-    pub fn is_up(&self) -> bool {
-        self.up.is_some()
+    /// The panel the curtain holds for the app it waits for: the dock
+    /// leaves it at the tap, not when the window comes.
+    pub fn panel(&self) -> Option<usize> {
+        self.up.as_ref().map(|u| u.panel)
     }
 
     /// After a frame for `frame_ns`: whether it still needs frames (fading),

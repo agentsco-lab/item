@@ -239,8 +239,11 @@ impl Data {
         }
         self.state.needs_redraw = false;
         let started = hybris_hwc::now_ns();
-        // The dock stands on the panels no window has.
-        let taken = self.state.panels_taken();
+        // The dock stands on the panels no window has, nor a launch curtain.
+        let mut taken = self.state.panels_taken();
+        if let Some(p) = self.state.curtain.panel() {
+            taken[p] = true;
+        }
         self.state.dock.follow(taken, started);
         // Callbacks::Draw: frame callbacks before the frame is drawn: the
         // clients' buffers for it are already taken, and a client starts on

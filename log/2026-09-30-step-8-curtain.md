@@ -26,3 +26,13 @@ drawn 2.01 s later, then five frames of fade:
 ![lifting](step-8/curtain-lifts.png)
 
 Epiphany: drawn 2.54 s after the tap.
+
+## The dock leaves at the tap
+
+Smooth, but the dock should move at once, not wait. It used to wait for the window to map, 1-2 s
+after the tap. Now a panel under a launch curtain counts as taken
+(`Curtain::panel`), so the half sets off in the frame after the curtain
+goes up. If no window comes, the panel is free again when the curtain
+lifts, and the dock comes back.
+
+![the curtain, then the dock crossing](step-8/dock-leaves-at-tap.png)
