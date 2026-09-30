@@ -35,8 +35,13 @@ pub struct FrameCost {
     pub swapped: bool,
 }
 
+/// The hwcomposer window's buffers.
+const BUFFERS: usize = 3;
+
 pub struct Screen {
     pub output: Output,
+    /// Frames swapped so far (the buffer age follows from it).
+    frames_drawn: u64,
     pub vsync_period_ns: u64,
     /// The output's physical pixels.
     pub pixels: i64,
@@ -50,7 +55,7 @@ pub struct Screen {
 
 impl Screen {
     pub fn new(dh: &DisplayHandle) -> Screen {
-        let hwc = HwcOutput::open(3);
+        let hwc = HwcOutput::open(BUFFERS as i32);
         let (width, height) = (hwc.width, hwc.height);
         tracing::info!("hwcomposer display 0: {width}x{height}, vsync {:.3} ms", hwc.vsync_period_ns as f64 / 1e6);
 
@@ -86,17 +91,22 @@ impl Screen {
 
         let damage_tracker = OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180);
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
+        Screen { output, frames_drawn: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
     ///
-    /// The EGL surface's buffer age says how many frames old the buffer's
-    /// contents are; the damage tracker redraws only what changed since then
-    /// (everything when the age is 0, unknown). Nothing changed: no swap.
+    /// The buffer's age says how many frames old its contents are; the damage
+    /// tracker redraws only what changed since then (everything when the age
+    /// is 0, unknown). Nothing changed: no swap.
     pub fn render(&mut self, state: &State) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
-        let age = self.surface.buffer_age().unwrap_or(0).max(0) as usize;
+        // EGL says 2 here, but libhybris' hwcomposer window hands out its
+        // BUFFERS in strict turn: a buffer last held the frame BUFFERS frames
+        // ago, and nothing before it had been drawn at all. Trusting EGL
+        // left the undamaged parts of a buffer three frames old, not two: an
+        // empty panel flickered.
+        let age = if self.frames_drawn < BUFFERS as u64 { 0 } else { BUFFERS };
         let elements = space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
             .expect("render elements");
         let damaged_px: i64 = {
@@ -114,6 +124,8 @@ impl Screen {
         let swapped = damaged_px > 0;
         if swapped {
             self.surface.swap_buffers(None).expect("swap_buffers");
+            // Only a swapped frame uses up a buffer.
+            self.frames_drawn += 1;
         }
         FrameCost {
             draw_ns: t1 - t0,

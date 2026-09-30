@@ -30,7 +30,7 @@ item, which keep running the phone day to day.
 | clients | xdg-shell; shm, and GL over libhybris' `android_wlegl` | a window per panel, 60 fps with two |
 | touch | libinput to `wl_touch`, the touchscreen one to one with the output, hinge and all | both panels |
 | the session | the user's, on tty7 as phosh runs; our desktop name, a gtk portals configuration | GTK apps map in under 2 s |
-| frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed; the swap does not wait | 0 frames when still; touch to screen about 45 ms through GTK |
+| frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, drawn late in the frame; only the damage redrawn | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
 What it does not do yet: cheap frames (damage, buffer age, present off the loop), `wp_presentation`, the shell (shades, dock, gestures), the
 on-screen keyboard, the pen, blanking and the power key, the portals'
@@ -48,6 +48,7 @@ Settings interface.
 | 2 | frames paced by vsync, drawn only on change | 0 frames when still, touch to screen about 45 ms (`log/2026-09-30-step-2-pacing.md`) |
 | 3 | drawing late in the frame | in, but a frame costs 3-13 ms plus hwcomposer's 3 ms present: make it cheaper first (`log/2026-09-30-step-3-late-draw.md`) |
 | 4a | buffer age and damage: redraw only what changed | one panel instead of the screen; GL client frames 2 ms, shm 9-11 ms (`log/2026-09-30-step-4-damage.md`) |
+| 4b | the present, the buffer age, a tapping benchmark | presentOrValidate crashes; buffer age 3 not EGL's 2 (flicker gone); drawing late takes about 5 ms off, to about 39 ms touch to screen (`log/2026-09-30-step-4b-present.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -116,4 +117,6 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 - `tools/probe-run.sh` - a probe on the phone with the shell stopped
 - `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against
   (into `sysroot/`, not tracked)
+- `tools/bench.sh`, `tools/tap.py` - a benchmark tapping GNOME Calculator
+  through a virtual touchscreen, with no one at the phone
 - `log/` - what each step found, with the raw output

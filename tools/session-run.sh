@@ -76,5 +76,7 @@ systemd-run --wait --collect --unit=item-compositor \
     -p Environment=XDG_SESSION_TYPE=wayland -p Environment=XDG_CURRENT_DESKTOP=item \
     ${CLIENT_ENV:+-p "Environment=CLIENT_ENV=$CLIENT_ENV"} \
     ${LATE:+-p "Environment=LATE=$LATE"} ${LATE_MARGIN_MS:+-p "Environment=LATE_MARGIN_MS=$LATE_MARGIN_MS"} \
+    ${HWC_PRESENT_OR_VALIDATE:+-p "Environment=HWC_PRESENT_OR_VALIDATE=$HWC_PRESENT_OR_VALIDATE"} \
+    ${TOUCHSCREEN:+-p "Environment=TOUCHSCREEN=$TOUCHSCREEN"} \
     /tmp/item-compositor "$@"
 log "session ended"

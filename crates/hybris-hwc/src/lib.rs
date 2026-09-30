@@ -101,6 +101,7 @@ struct Hwc {
     layer_frame: extern "C" fn(*mut Layer, i32, i32, i32, i32) -> i32,
     layer_visible: extern "C" fn(*mut Layer, i32, i32, i32, i32) -> i32,
     validate: extern "C" fn(*mut Disp, *mut u32, *mut u32) -> i32,
+    present_or_validate: extern "C" fn(*mut Disp, *mut u32, *mut u32, *mut i32, *mut u32) -> i32,
     accept_changes: extern "C" fn(*mut Disp) -> i32,
     set_client_target: extern "C" fn(*mut Disp, u32, *mut c_void, i32, i32) -> i32,
     present: extern "C" fn(*mut Disp, *mut i32) -> i32,
@@ -150,6 +151,7 @@ unsafe impl Send for Presenter {}
 
 #[derive(Default)]
 struct Stats {
+    fast: u32,
     frames: u32,
     long: u32,
     sum_ms: f64,
@@ -191,6 +193,11 @@ pub fn last_present_ns() -> u64 {
 static LAST_PRESENT_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_PRESENT_TOOK_NS: AtomicU64 = AtomicU64::new(0);
 
+/// Whether to try presentOrValidate first (`HWC_PRESENT_OR_VALIDATE=1`). Off:
+/// on the Surface Duo it killed the compositor at its first frame (the
+/// Android side of libhybris' hwc2 layer, Halium 11).
+static PRESENT_OR_VALIDATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// How long the last present callback took: validate, set the client target,
 /// present, and the fences (ns).
 pub fn last_present_took_ns() -> u64 {
@@ -217,23 +224,37 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
     let (h, w) = (p.hwc, p.win);
 
     let t_start = now_ns();
-    let mut types = 0u32;
-    let mut requests = 0u32;
-    let err = (h.validate)(p.display, &mut types, &mut requests);
-    if err != HWC2_ERROR_NONE && err != HWC2_ERROR_HAS_CHANGES {
-        p.stats.errors += 1;
-        return;
-    }
-    if types != 0 || requests != 0 {
-        (h.accept_changes)(p.display);
-    }
-
     let acquire = (w.get_fence)(buffer);
     (h.set_client_target)(p.display, 0, buffer, acquire, HAL_DATASPACE_UNKNOWN);
 
+    // presentOrValidate presents at once when nothing in the layers changed
+    // (state 1) - one client layer here, which never does - and only
+    // validates otherwise (state 0), when accept and present follow as before.
+    let mut types = 0u32;
+    let mut requests = 0u32;
     let mut present_fence: i32 = -1;
-    if (h.present)(p.display, &mut present_fence) != HWC2_ERROR_NONE {
-        p.stats.errors += 1;
+    let mut state = 0u32;
+    let fast = PRESENT_OR_VALIDATE.load(Ordering::Relaxed)
+        && (h.present_or_validate)(p.display, &mut types, &mut requests, &mut present_fence, &mut state)
+            == HWC2_ERROR_NONE
+        && state == 1;
+    if fast {
+        p.stats.fast += 1;
+    } else {
+        if !PRESENT_OR_VALIDATE.load(Ordering::Relaxed) {
+            let err = (h.validate)(p.display, &mut types, &mut requests);
+            if err != HWC2_ERROR_NONE && err != HWC2_ERROR_HAS_CHANGES {
+                p.stats.errors += 1;
+                return;
+            }
+        }
+        if types != 0 || requests != 0 {
+            (h.accept_changes)(p.display);
+        }
+        present_fence = -1;
+        if (h.present)(p.display, &mut present_fence) != HWC2_ERROR_NONE {
+            p.stats.errors += 1;
+        }
     }
 
     let mut fences: *mut Fences = null_mut();
@@ -292,6 +313,8 @@ pub struct Output {
 /// Frames presented since the last call: count, times between them, errors.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct FrameStats {
+    /// Frames presented at once by presentOrValidate, without a validate.
+    pub fast: u32,
     pub frames: u32,
     pub over_20ms: u32,
     pub mean_ms: f64,
@@ -308,7 +331,7 @@ pub fn take_stats() -> FrameStats {
     let mut guard = PRESENTER.lock().unwrap();
     let st = std::mem::take(&mut guard.as_mut().expect("presenter").stats);
     let f = st.frames.max(1) as f64;
-    FrameStats { frames: st.frames, over_20ms: st.long, mean_ms: st.sum_ms / f, max_ms: st.max_ms, errors: st.errors }
+    FrameStats { fast: st.fast, frames: st.frames, over_20ms: st.long, mean_ms: st.sum_ms / f, max_ms: st.max_ms, errors: st.errors }
 }
 
 pub fn now_ns() -> u64 {
@@ -340,6 +363,7 @@ impl Output {
                     layer_frame: sym(hwc2, "hwc2_compat_layer_set_display_frame"),
                     layer_visible: sym(hwc2, "hwc2_compat_layer_set_visible_region"),
                     validate: sym(hwc2, "hwc2_compat_display_validate"),
+                    present_or_validate: sym(hwc2, "hwc2_compat_display_present_or_validate"),
                     accept_changes: sym(hwc2, "hwc2_compat_display_accept_changes"),
                     set_client_target: sym(hwc2, "hwc2_compat_display_set_client_target"),
                     present: sym(hwc2, "hwc2_compat_display_present"),
@@ -356,6 +380,10 @@ impl Output {
             )
         };
         *HWC.lock().unwrap() = Some(hwc);
+        PRESENT_OR_VALIDATE.store(
+            std::env::var("HWC_PRESENT_OR_VALIDATE").map(|v| v == "1").unwrap_or(false),
+            Ordering::Relaxed,
+        );
 
         let listener = Box::leak(Box::new(Listener { on_vsync, on_hotplug, on_refresh }));
         let dev = (hwc.device_new)(false);
