@@ -1,0 +1,6 @@
+[workspace]
+members = ["probes/hwc-frame"]
+resolver = "2"
+
+[profile.release]
+debug = 1

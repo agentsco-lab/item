@@ -26,7 +26,7 @@ item, which keep running the phone day to day.
 | | | |
 |---|---|---|
 | A | smithay's anvil on the Lindroid chain (duo-lindroid's test image): do smithay's EGL and GLES run on libhybris? | |
-| B | a minimal Rust program that puts a GL frame on the Duo's panels through libhybris' hwc2, at vsync: the core of the backend | |
+| B | a minimal Rust program that puts a GL frame on the Duo's panels through libhybris' hwc2, at vsync: the core of the backend | done 2026-09-30: 60 fps across both panels, 16.7 ms between frames, no copy (`log/2026-09-30-probe-b.md`) |
 
 What each must answer - the seams between smithay and libhybris, not the
 language:
@@ -59,3 +59,11 @@ with item as a Rust daemon over sway's IPC and layer-shell clients
 - Adreno 640 through libhybris: GLES 3.2, EGL 1.5. Its GLSL ES compiler is
   strict (an undefined name in `#if` is an error).
 - The port's scale is 2.
+
+## Layout
+
+- `probes/hwc-frame` - probe B: a GL frame through hwcomposer from Rust
+- `tools/probe-run.sh` - runs a probe on the phone with the shell stopped, and the shell back after
+- `log/` - what each probe found
+- Cross builds: `cargo build --release --target aarch64-unknown-linux-gnu`
+  (the linker is set in `.cargo/config.toml`)

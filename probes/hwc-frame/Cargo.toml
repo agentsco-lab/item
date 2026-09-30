@@ -1,0 +1,7 @@
+[package]
+name = "hwc-frame"
+version = "0.1.0"
+edition = "2021"
+description = "Probe B: a GL frame on the Surface Duo's panels through libhybris' hwc2, at vsync"
+
+[dependencies]

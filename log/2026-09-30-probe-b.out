@@ -1,0 +1,29 @@
+Created symlink '/run/systemd/system/phosh.service' → '/dev/null'.
+[14:55:45.955] composer up: 1
+hotplug: display 0 connected primary
+display 0: 2784x1800, vsync period 16.667 ms (60.00 Hz)
+GL: OpenGL ES 3.2 V@0502.0 (GIT@9b824c0bed, I6c7bff0fbd, 1633761806) (Date:10/09/21) / Adreno (TM) 640
+  1.0 s:  27 fps  mean 16.06 ms  max  17.39 ms  over 20 ms  0  swap 36.90 ms  vsyncs  27  errors 0
+  2.0 s:  60 fps  mean 16.66 ms  max  18.08 ms  over 20 ms  0  swap 16.28 ms  vsyncs  60  errors 0
+  3.0 s:  60 fps  mean 16.68 ms  max  17.47 ms  over 20 ms  0  swap 16.38 ms  vsyncs  60  errors 0
+  4.0 s:  60 fps  mean 16.66 ms  max  17.30 ms  over 20 ms  0  swap 16.39 ms  vsyncs  60  errors 0
+  5.0 s:  60 fps  mean 16.66 ms  max  17.53 ms  over 20 ms  0  swap 16.39 ms  vsyncs  60  errors 0
+  6.0 s:  60 fps  mean 16.69 ms  max  17.50 ms  over 20 ms  0  swap 16.42 ms  vsyncs  60  errors 0
+  7.0 s:  60 fps  mean 16.68 ms  max  17.28 ms  over 20 ms  0  swap 16.37 ms  vsyncs  60  errors 0
+  8.0 s:  60 fps  mean 16.69 ms  max  17.40 ms  over 20 ms  0  swap 16.41 ms  vsyncs  60  errors 0
+  9.0 s:  60 fps  mean 16.68 ms  max  17.85 ms  over 20 ms  0  swap 16.41 ms  vsyncs  60  errors 0
+ 10.0 s:  60 fps  mean 16.68 ms  max  18.80 ms  over 20 ms  0  swap 16.40 ms  vsyncs  60  errors 0
+ 11.0 s:  60 fps  mean 16.70 ms  max  21.74 ms  over 20 ms  2  swap 16.37 ms  vsyncs  60  errors 0
+ 12.0 s:  59 fps  mean 16.68 ms  max  17.33 ms  over 20 ms  0  swap 16.42 ms  vsyncs  59  errors 0
+ 13.0 s:  60 fps  mean 16.69 ms  max  17.82 ms  over 20 ms  0  swap 16.35 ms  vsyncs  60  errors 0
+ 14.0 s:  60 fps  mean 16.69 ms  max  17.60 ms  over 20 ms  0  swap 16.41 ms  vsyncs  60  errors 0
+ 15.0 s:  60 fps  mean 16.69 ms  max  17.64 ms  over 20 ms  0  swap 16.40 ms  vsyncs  60  errors 0
+ 16.0 s:  60 fps  mean 16.69 ms  max  17.42 ms  over 20 ms  0  swap 16.40 ms  vsyncs  60  errors 0
+ 17.0 s:  60 fps  mean 16.69 ms  max  17.60 ms  over 20 ms  0  swap 16.43 ms  vsyncs  60  errors 0
+ 18.0 s:  60 fps  mean 16.71 ms  max  18.68 ms  over 20 ms  0  swap 16.41 ms  vsyncs  61  errors 0
+ 19.0 s:  60 fps  mean 16.67 ms  max  17.40 ms  over 20 ms  0  swap 16.41 ms  vsyncs  60  errors 0
+ 20.0 s:  60 fps  mean 16.66 ms  max  17.41 ms  over 20 ms  0  swap 16.40 ms  vsyncs  60  errors 0
+done
+[14:56:06.321] exit 0
+[14:56:06.326] rollback
+[14:56:19.989] phosh active
