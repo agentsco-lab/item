@@ -92,6 +92,8 @@ pub struct State {
     pub boost: GpuBoost,
     pub curtain: Curtain,
     pub gestures: Gestures,
+    /// Windows closing, by their surface, and since when (output.rs).
+    pub closing: Vec<(smithay::reexports::wayland_server::backend::ObjectId, u64)>,
     pub grid: Grid,
     pub clock: Clock,
     pub back: Back,
@@ -152,6 +154,7 @@ impl State {
             boost: GpuBoost::new(),
             curtain: Curtain::new(),
             gestures: Gestures::default(),
+            closing: Vec::new(),
             grid: Grid::new(),
             clock: Clock::new(),
             back: Back::new(),
@@ -542,9 +545,10 @@ impl XdgShellHandler for State {
         );
     }
 
-    fn toplevel_destroyed(&mut self, _: ToplevelSurface) {
+    fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         // The space drops the window at its next refresh; the dock may come
-        // back onto its panel.
+        // back onto its panel. Its last frame is seen closing.
+        self.closing.push((surface.wl_surface().id(), hybris_hwc::now_ns()));
         self.needs_redraw = true;
     }
 

@@ -52,6 +52,8 @@ use crate::state::{ClientState, State};
 
 /// The event loop's data: the Wayland state and the screen it is drawn on.
 pub struct Data {
+    /// The volume bar was up at the last frame.
+    volume_bar_up: bool,
     pub state: State,
     pub screen: Screen,
     started: Instant,
@@ -361,6 +363,26 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
+        // Windows closing: frames until they are gone, then their last frames
+        // forgotten with those of windows no longer there.
+        self.state.closing.retain(|(_, since)| now < since + crate::output::CLOSE_NS);
+        if !self.state.closing.is_empty() {
+            self.state.needs_redraw = true;
+        }
+        let mut keep: Vec<_> = self.state.closing.iter().map(|(id, _)| id.clone()).collect();
+        keep.extend(self.state.space.elements().map(|w| smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())));
+        self.screen.forget(&keep);
+        // The volume bar: frames while it fades, one more when it is gone.
+        match self.state.shade.quick.volume_bar_state(now) {
+            (true, true) => self.state.needs_redraw = true,
+            (true, false) => self.volume_bar_up = true,
+            (false, _) if std::mem::take(&mut self.volume_bar_up) => self.state.needs_redraw = true,
+            _ => {}
+        }
+        // The dock's halves come in from the sides after an unlock.
+        if let Some(t) = self.state.lock.take_unlocked() {
+            self.state.dock.rise(t + 250_000_000);
+        }
         // A notification's banner slides in and out.
         if let Some(n) = self.state.notes.banner(now) {
             let age = now.saturating_sub(n.at_ns);
@@ -503,6 +525,12 @@ fn main() {
             if data.state.shade.visible() && data.state.shade.refresh_text() {
                 data.state.needs_redraw = true;
             }
+            // For tests: `touch /tmp/item-rise` is the dock's rise after an
+            // unlock.
+            if std::fs::remove_file("/tmp/item-rise").is_ok() {
+                data.state.dock.rise(hybris_hwc::now_ns());
+                data.state.needs_redraw = true;
+            }
             // `touch /tmp/item-power` is the power key, for tests.
             if std::fs::remove_file("/tmp/item-power").is_ok() {
                 data.state.lock.power_key();
@@ -522,6 +550,9 @@ fn main() {
                 data.state.needs_redraw = true;
             }
             // A banner up, or just gone: a frame, so it goes.
+            if data.state.shade.quick.volume_bar_state(hybris_hwc::now_ns()).0 || data.volume_bar_up {
+                data.state.needs_redraw = true;
+            }
             if data.state.notes.banner(hybris_hwc::now_ns()).is_some() || data.state.shade.quick.banner_at.get().is_some() {
                 data.state.needs_redraw = true;
             }
@@ -574,7 +605,8 @@ fn main() {
         if pacing.asap { "at once" } else { "at the vsync" },
         pacing.callbacks
     );
-    let mut data = Data { state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing };
+    let mut data = Data {
+        volume_bar_up: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.

@@ -46,6 +46,8 @@ pub struct Sys {
 
 enum Job {
     Read,
+    /// A volume key: the volume read as it is, then a step up or down.
+    VolumeStep(bool),
     Brightness(f64),
     Volume(f64),
     Toggle(Tile, bool),
@@ -132,6 +134,10 @@ const ICON: i32 = 24;
 const ROWS_Y: f64 = -520.0;
 const ROW_H: f64 = 64.0;
 const MAX_ROWS: usize = 7;
+const BAR_W: f64 = 12.0;
+const BAR_H: f64 = 220.0;
+const VOLUME_SHOW_NS: u64 = 1_500_000_000;
+const VOLUME_FADE_NS: u64 = 200_000_000;
 
 pub struct Quick {
     pub sys: Arc<Mutex<Sys>>,
@@ -149,6 +155,10 @@ pub struct Quick {
     app_icons: std::cell::RefCell<HashMap<String, Option<MemoryRenderBuffer>>>,
     /// The windows' row caption when there are none.
     empty: String,
+    /// When a volume key was last pressed (0: never).
+    volume_at: std::cell::Cell<u64>,
+    bar_track: MemoryRenderBuffer,
+    bar_fill: MemoryRenderBuffer,
     /// The banner's card as last drawn, and its notification, for touches.
     pub banner_at: std::cell::Cell<Option<(Rectangle<f64, Logical>, u32)>>,
 }
@@ -191,6 +201,9 @@ impl Quick {
             app_icons: Default::default(),
             empty: "Нет окон и уведомлений".into(),
             banner_at: std::cell::Cell::new(None),
+            volume_at: std::cell::Cell::new(0),
+            bar_track: crate::grid::rounded(BAR_W, BAR_H, BAR_W / 2.0, [30, 32, 36, 220]),
+            bar_fill: crate::grid::rounded(BAR_W, BAR_H, BAR_W / 2.0, [240, 240, 240, 240]),
         }
     }
 
@@ -264,11 +277,49 @@ impl Quick {
         }
     }
 
-    /// The volume keys: up or down by a step.
+    /// The volume keys: up or down by a step, and the bar shown.
     pub fn volume_step(&self, up: bool) {
-        let mut sys = self.sys.lock().unwrap();
-        sys.volume = (sys.volume + if up { 0.05 } else { -0.05 }).clamp(0.0, 1.0);
-        let _ = self.jobs.send(Job::Volume(sys.volume));
+        // The step is taken from the volume as it is, read on the thread:
+        // what was last read here may be stale, or never read (a step from
+        // an unread 0 set the volume to 0 %).
+        let _ = self.jobs.send(Job::VolumeStep(up));
+        self.volume_at.set(hybris_hwc::now_ns());
+    }
+
+    /// Whether the volume bar is up at `now`, and whether it is fading.
+    pub fn volume_bar_state(&self, now: u64) -> (bool, bool) {
+        let age = now.saturating_sub(self.volume_at.get());
+        let up = self.volume_at.get() != 0 && age < VOLUME_SHOW_NS + VOLUME_FADE_NS;
+        (up, up && age >= VOLUME_SHOW_NS)
+    }
+
+    /// The volume as an upright bar beside the keys (item's): at the right
+    /// panel's right edge, near its top, where the keys are on the Duo; up
+    /// 1.5 s after the last press, then fading over 200 ms.
+    pub fn volume_bar(&self, renderer: &mut GlesRenderer, now: u64) -> Vec<ShellElement> {
+        let (up, _) = self.volume_bar_state(now);
+        if !up {
+            return Vec::new();
+        }
+        let age = now.saturating_sub(self.volume_at.get());
+        let alpha = if age < VOLUME_SHOW_NS { 1.0 } else { 1.0 - (age - VOLUME_SHOW_NS) as f32 / VOLUME_FADE_NS as f32 };
+        let v = self.sys.lock().unwrap().volume;
+        let (w, h) = (BAR_W, BAR_H);
+        let x = crate::layout::LAYOUT.0 as f64 - 22.0 - w;
+        let y = 110.0;
+        let s = SCALE as f64;
+        let mut out = Vec::new();
+        let filled = (h * v).round();
+        let src = Rectangle::<f64, Logical>::new((0.0, h - filled).into(), (w, filled).into());
+        if filled > 0.0 {
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * s).round(), ((y + h - filled) * s).round()), &self.bar_fill, Some(alpha), Some(src), Some(src.size.to_i32_round()), Kind::Unspecified) {
+                out.push(ShellElement::Text(e));
+            }
+        }
+        if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * s).round(), (y * s).round()), &self.bar_track, Some(alpha), None, None, Kind::Unspecified) {
+            out.push(ShellElement::Text(e));
+        }
+        out
     }
 
     /// A tile tapped: toggled (Settings is the caller's to open).
@@ -524,6 +575,13 @@ fn worker(rx: mpsc::Receiver<Job>, sys: Arc<Mutex<Sys>>, wake: Ping) {
                             &["call", "--system", "org.freedesktop.login1", "/org/freedesktop/login1/session/auto", "org.freedesktop.login1.Session", "SetBrightness", "ssu", "backlight", bl, &n],
                         );
                     }
+                }
+                Job::VolumeStep(up) => {
+                    let now = read_sys();
+                    let v = (now.volume + if up { 0.05 } else { -0.05 }).clamp(0.0, 1.0);
+                    set("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &format!("{}%", (v * 100.0).round() as u32)]);
+                    *sys.lock().unwrap() = Sys { volume: v, ..now };
+                    wake.ping();
                 }
                 Job::Volume(v) if Some(i) == last_v => {
                     set("pactl", &["set-sink-volume", "@DEFAULT_SINK@", &format!("{}%", (v * 100.0).round() as u32)]);

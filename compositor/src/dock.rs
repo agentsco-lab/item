@@ -126,7 +126,12 @@ struct Move {
     start_ns: u64,
 }
 
+/// The halves coming in from the sides after an unlock (item's RISE_MS).
+const RISE_NS: u64 = 360_000_000;
+
 pub struct Dock {
+    /// When the halves start coming in from the sides (an unlock).
+    rise: Option<u64>,
     halves: Vec<Half>,
     /// The neck between the halves as they meet, as last drawn: its size.
     neck: std::cell::RefCell<Option<((i32, i32, i32), MemoryRenderBuffer)>>,
@@ -167,7 +172,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { halves, neck: Default::default(), dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None }
+        Dock { rise: None, halves, neck: Default::default(), dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -209,8 +214,30 @@ impl Dock {
         m.from == Mode::Both && matches!(m.to, Mode::On(_))
     }
 
-    /// Each half's place at `frame_ns` (item's `_pane_path`, `_spring`).
+    /// The halves off the screen's sides, coming in from `at` over RISE_NS,
+    /// easing out (item's rise after an unlock, #72).
+    pub fn rise(&mut self, at: u64) {
+        self.rise = Some(at);
+    }
+
+    /// Each half's place at `frame_ns`: its path, and the rise over it.
     fn places(&self, frame_ns: u64) -> [Place; 2] {
+        let mut p = self.path(frame_ns);
+        if let Some(at) = self.rise {
+            let k = (frame_ns.saturating_sub(at) as f64 / RISE_NS as f64).clamp(0.0, 1.0);
+            let off = 1.0 - (1.0 - (1.0 - k).powi(3));
+            let (w0, w1) = (self.halves[0].size.0 as f64, self.halves[1].size.0 as f64);
+            let width = layout::LAYOUT.0 as f64;
+            p[0].x -= (p[0].x + w0 + 10.0) * off;
+            p[1].x += (width - p[1].x + 10.0) * off;
+            p[0].anchor = p[0].x;
+            p[1].anchor = p[1].x + w1;
+        }
+        p
+    }
+
+    /// Each half's place on its path at `frame_ns` (item's `_pane_path`, `_spring`).
+    fn path(&self, frame_ns: u64) -> [Place; 2] {
         let Some(m) = &self.moving else { return self.targets(self.mode) };
         let all = (frame_ns.saturating_sub(m.start_ns) as f64 / Self::duration(m) as f64).clamp(0.0, 1.0);
         let travel = MOVE_NS as f64 / Self::duration(m) as f64;
@@ -325,6 +352,13 @@ impl Dock {
 
     /// After a frame for `frame_ns`: whether the halves are still moving.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
+        if let Some(at) = self.rise {
+            if frame_ns >= at + RISE_NS {
+                self.rise = None;
+            } else {
+                return true;
+            }
+        }
         match &self.moving {
             Some(m) if frame_ns >= m.start_ns + Self::duration(m) => {
                 self.moving = None;

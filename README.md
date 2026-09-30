@@ -77,6 +77,7 @@ What it does not do yet: installing as a session of its own, the pen's own sheet
 | 16 | the power key, blanking, the lock screen, the volume keys (lock.rs) | locks, blanks, unlocks with a swipe (`log/2026-09-30-step-16-lock.md`) |
 | 17 | the PIN (pam.rs) | PAM's phosh service on a thread; a wrong one refused (`log/2026-09-30-step-17-pin.md`) |
 | 18 | the lid, the pen, the system screen (sysscreen.rs) | (`log/2026-09-30-step-18-lid-pen-system.md`) |
+| 19 | a window's close, the volume bar, the dock's rise after an unlock | as item's (`log/2026-10-01-step-19-motion.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:

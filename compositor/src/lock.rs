@@ -71,6 +71,8 @@ pub struct Lock {
     pub idle_ns: u64,
     /// The display was lit again since last asked.
     relit: bool,
+    /// When the last unlock began, not yet asked for.
+    unlocked: Option<u64>,
 }
 
 impl Lock {
@@ -111,6 +113,7 @@ impl Lock {
             last_touch_ns: hybris_hwc::now_ns(),
             idle_ns: idle_s * 1_000_000_000,
             relit: false,
+            unlocked: None,
         };
         if let Some((_, regular)) = &lock.fonts {
             for (l, k) in lock.keys.iter_mut().zip(KEYS) {
@@ -186,6 +189,7 @@ impl Lock {
                 if ok {
                     tracing::info!("lock: unlocked");
                     self.fading = Some(hybris_hwc::now_ns());
+                    self.unlocked = self.fading;
                     self.entering = false;
                     self.say("Введите PIN");
                 } else {
@@ -252,6 +256,11 @@ impl Lock {
             self.refresh();
             self.relit = true;
         }
+    }
+
+    /// When an unlock began, once: the dock rises after it.
+    pub fn take_unlocked(&mut self) -> Option<u64> {
+        self.unlocked.take()
     }
 
     /// Whether the display was lit again since last asked: it wants whole

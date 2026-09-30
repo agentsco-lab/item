@@ -15,7 +15,8 @@ use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::{Bind, ExportMem, ImportEgl};
+use smithay::backend::renderer::{Bind, ExportMem, ImportEgl, Renderer};
+use smithay::reexports::wayland_server::Resource;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement, RescaleRenderElement};
 use smithay::backend::renderer::element::AsRenderElements;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
@@ -46,12 +47,29 @@ render_elements! {
     FrameElement<=GlesRenderer>;
     Shell=ShellElement,
     Window=WaylandSurfaceRenderElement<GlesRenderer>,
+    /// A window that closed: its last frame, shrinking and fading.
+    Snapshot=smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>,
     /// A window being put away or brought back: smaller, moved, fading.
     Moving=RelocateRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
 }
 
 /// The rows of the screen's bottom a run of frames keeps: the dock and above.
 const FRAME_ROWS: i32 = 600;
+
+/// A window's last frame: its main surface's texture and where it stood,
+/// kept so that a window can be seen closing after its surface is gone.
+pub struct Snapshot {
+    texture: smithay::backend::renderer::gles::GlesTexture,
+    loc: smithay::utils::Point<i32, smithay::utils::Logical>,
+    size: smithay::utils::Size<i32, smithay::utils::Logical>,
+    scale: i32,
+    transform: Transform,
+    id: smithay::backend::renderer::element::Id,
+}
+
+/// A window's close (item's, phoc's): 200 ms, easing out, to 0.92 of its
+/// size, fading.
+pub const CLOSE_NS: u64 = 200_000_000;
 
 /// The hwcomposer window's buffers.
 const BUFFERS: usize = 3;
@@ -65,6 +83,8 @@ pub struct Screen {
     /// Frames to draw whole and present whatever changed: after the display
     /// is lit again, as at start (hwcomposer does not show the first).
     pub reprime: u32,
+    /// Each window's last frame, by its surface.
+    snapshots: std::collections::HashMap<smithay::reexports::wayland_server::backend::ObjectId, Snapshot>,
     /// A run of frames asked for: this many more swapped frames are saved as
     /// they are, not drawn whole, the bottom `FRAME_ROWS` rows only.
     pub frames_left: u32,
@@ -125,7 +145,7 @@ impl Screen {
 
         let damage_tracker = OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180);
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -137,7 +157,9 @@ impl Screen {
         let t0 = hybris_hwc::now_ns();
         // The shade over the launch curtain over the dock over the windows.
         // The lock screen over everything.
-        let mut elements: Vec<FrameElement> = state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        // The volume bar over everything, the lock screen next.
+        let mut elements: Vec<FrameElement> = state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        elements.extend(state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.back.elements(&mut self.renderer).into_iter().map(FrameElement::from));
         let rows: Vec<crate::quick::Row> = if state.shade.visible() { state.shade_rows() } else { Vec::new() };
         // A new notification's banner, on top of everything.
@@ -158,8 +180,43 @@ impl Screen {
         // The windows, topmost first; one put away or brought back as the
         // gesture has it (gesture.rs).
         let scale = smithay::utils::Scale::from(SCALE as f64);
+        // Windows closing: their last frame, shrinking about its centre and
+        // fading, over the windows left.
+        for (sid, since) in &state.closing {
+            let Some(snap) = self.snapshots.get(sid) else { continue };
+            let k = (frame_ns.saturating_sub(*since) as f64 / CLOSE_NS as f64).clamp(0.0, 1.0);
+            let e = 1.0 - (1.0 - k).powi(3);
+            let s = 1.0 - 0.08 * e;
+            let size = snap.size.to_f64().upscale(s).to_i32_round();
+            let centre = snap.loc.to_f64() + snap.size.to_f64().downscale(2.0).to_point();
+            let at = (centre - size.to_f64().downscale(2.0).to_point()).to_physical(SCALE as f64);
+            elements.push(FrameElement::Snapshot(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
+                snap.id.clone(),
+                self.renderer.context_id(),
+                at,
+                snap.texture.clone(),
+                snap.scale,
+                snap.transform,
+                Some((1.0 - e) as f32),
+                None,
+                Some(size),
+                None,
+                smithay::backend::renderer::element::Kind::Unspecified,
+            )));
+        }
+        let context = self.renderer.context_id();
         for window in state.space.elements().rev() {
             let Some(mut loc) = state.space.element_location(window) else { continue };
+            // Its last frame, in case it closes.
+            let surface = window.toplevel().unwrap().wl_surface();
+            let snap = smithay::backend::renderer::utils::with_renderer_surface_state(surface, |rs| {
+                Some((rs.texture::<smithay::backend::renderer::gles::GlesTexture>(context.clone())?.clone(), rs.surface_size()?, rs.buffer_scale(), rs.buffer_transform()))
+            })
+            .flatten();
+            if let Some((texture, size, bscale, transform)) = snap {
+                let id = self.snapshots.get(&surface.id()).map(|s| s.id.clone()).unwrap_or_else(smithay::backend::renderer::element::Id::new);
+                self.snapshots.insert(surface.id(), Snapshot { texture, loc, size, scale: bscale, transform, id });
+            }
             if let Some(dx) = state.gestures.slide_offset(window, frame_ns) {
                 loc.x += dx;
             }
@@ -292,6 +349,11 @@ impl Screen {
     /// Whether every buffer of the window has had a frame.
     pub fn primed(&self) -> bool {
         self.frames_drawn >= BUFFERS as u64
+    }
+
+    /// Forgets the last frames of windows gone and done closing.
+    pub fn forget(&mut self, keep: &[smithay::reexports::wayland_server::backend::ObjectId]) {
+        self.snapshots.retain(|id, _| keep.contains(id));
     }
 
     /// Uploads the shell's textures before they are first needed.
