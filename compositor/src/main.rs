@@ -25,6 +25,7 @@ mod grid;
 mod input;
 mod layout;
 mod output;
+mod quick;
 mod shade;
 mod state;
 mod text;
@@ -483,7 +484,15 @@ fn main() {
         })
         .expect("report timer");
 
-    let mut state = State::new(dh.clone(), event_loop.get_signal());
+    // The quick settings' thread wakes the loop when it has read the system.
+    let (wake, wake_source) = make_ping().expect("ping");
+    handle
+        .insert_source(wake_source, |_, _, data: &mut Data| {
+            data.state.needs_redraw = true;
+            data.on_client_frame();
+        })
+        .expect("wake source");
+    let mut state = State::new(dh.clone(), event_loop.get_signal(), wake);
     state.stop_after = args.seconds;
     state.space.map_output(&screen.output, (0, 0));
     tracing::info!("listening on {:?}", socket_name);

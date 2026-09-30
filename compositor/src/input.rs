@@ -134,7 +134,7 @@ impl State {
             InputEvent::TouchMotion { event } => {
                 let pos = event.position_transformed(LAYOUT.into());
                 if self.shade.holds(event.slot()) {
-                    self.shade.motion(event.slot(), pos.y, event.time());
+                    self.shade.motion_at(event.slot(), pos.x, pos.y, event.time());
                     self.needs_redraw = true;
                     return;
                 }
@@ -166,7 +166,9 @@ impl State {
             }
             InputEvent::TouchUp { event } => {
                 if self.shade.holds(event.slot()) {
-                    self.shade.up(event.slot());
+                    if let Some(ask) = self.shade.up(event.slot()) {
+                        self.shade_ask(ask);
+                    }
                     self.needs_redraw = true;
                     return;
                 }

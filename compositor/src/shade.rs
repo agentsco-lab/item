@@ -17,7 +17,10 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
 use smithay::utils::{Physical, Rectangle};
 
+use smithay::utils::Point;
+
 use crate::layout::{self, SCALE};
+use crate::quick::{Control, Quick, Row, Tile};
 use crate::text::{Font, Label};
 
 render_elements! {
@@ -37,7 +40,7 @@ const FLING: f64 = 0.3;
 /// A touch that moves less than this is a tap.
 const TAP: f64 = 8.0;
 
-const SHEET: [f32; 4] = premultiplied([0.06, 0.08, 0.12], 0.88);
+const SHEET: [f32; 4] = premultiplied([0.06, 0.08, 0.12], 0.97);
 const TEXT: [f32; 4] = [0.93, 0.95, 0.97, 1.0];
 const DIM: [f32; 4] = [0.62, 0.66, 0.72, 1.0];
 const HANDLE: [f32; 4] = [0.45, 0.48, 0.52, 1.0];
@@ -116,7 +119,27 @@ impl Sheet {
     }
 }
 
+/// A finger on a control of an open sheet.
+struct Press {
+    slot: TouchSlot,
+    panel: usize,
+    control: Control,
+    start: (f64, f64),
+}
+
+/// What a tap on a shade asks of the state.
+pub enum ShadeAsk {
+    /// Close the open window of the right shade's row `i`.
+    Close(usize),
+    /// Open Settings on this panel.
+    Settings(usize),
+}
+
 pub struct Shade {
+    pub quick: Quick,
+    press: Option<Press>,
+    /// How many window rows the right shade shows.
+    rows: std::cell::Cell<usize>,
     sheets: [Sheet; 2],
     /// A finger's move the screen has not shown yet: the event's time (µs,
     /// CLOCK_MONOTONIC as libinput stamps it) and when it reached us (ns).
@@ -128,7 +151,7 @@ pub struct Shade {
 }
 
 impl Shade {
-    pub fn new() -> Shade {
+    pub fn new(wake: smithay::reexports::calloop::ping::Ping) -> Shade {
         let sheet = || Sheet { height: 0.0, grab: None, run: None, ids: (0..40).map(|_| Id::new()).collect() };
         let light = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
         let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
@@ -136,6 +159,9 @@ impl Shade {
             tracing::warn!("shade: no fonts, no text");
         }
         let mut shade = Shade {
+            quick: Quick::new(wake),
+            press: None,
+            rows: std::cell::Cell::new(0),
             sheets: [sheet(), sheet()],
             moved: None,
             fonts: light.zip(regular),
@@ -176,6 +202,22 @@ impl Shade {
         if sheet.grab.is_some() || !(y < EDGE || y < height) {
             return false;
         }
+        // On a control of a sheet at rest, the finger works the control.
+        let at_rest = sheet.run.is_none() && height > 0.0;
+        if at_rest && y < height {
+            let panel_x = layout::panels()[p].loc.x as f64;
+            let local = Point::from((x - panel_x, y - height));
+            let hit = self.quick.hit(p, local, self.rows.get());
+            tracing::debug!("shade {p}: touch at {:.0},{:.0} from the edge: {hit:?}", local.x, local.y);
+            if let Some(control) = hit {
+                if matches!(control, Control::Brightness | Control::Volume) {
+                    self.quick.slide(control, local.x);
+                }
+                self.press = Some(Press { slot, panel: p, control, start: (x, y) });
+                return true;
+            }
+        }
+        let sheet = &mut self.sheets[p];
         // Caught mid-run: it stops under the finger.
         sheet.run = None;
         sheet.height = height;
@@ -183,6 +225,9 @@ impl Shade {
         sheet.grab = Some(sheet_grab);
         tracing::debug!("shade {p}: grabbed at {y:.0}, height {height:.0}");
         self.refresh_text();
+        if height == 0.0 {
+            self.quick.read();
+        }
         true
     }
 
@@ -200,11 +245,34 @@ impl Shade {
         sheet.height = height;
         sheet.grab = Some(Grab { slot, offset: height - start_y, start_y, moved: true, last: (time_us, start_y), velocity: 0.0 });
         self.refresh_text();
+        self.quick.read();
     }
 
     /// Whether a touch belongs to a sheet.
     pub fn holds(&self, slot: TouchSlot) -> bool {
-        self.sheets.iter().any(|s| s.grab.as_ref().is_some_and(|g| g.slot == slot))
+        self.press.as_ref().is_some_and(|p| p.slot == slot) || self.sheets.iter().any(|s| s.grab.as_ref().is_some_and(|g| g.slot == slot))
+    }
+
+    /// A finger on a control moves: a slider follows it; a tap that became a
+    /// drag goes to the sheet, which it pulls.
+    pub fn motion_at(&mut self, slot: TouchSlot, x: f64, y: f64, time_us: u64) {
+        if let Some(press) = self.press.as_ref().filter(|p| p.slot == slot) {
+            let panel_x = layout::panels()[press.panel].loc.x as f64;
+            match press.control {
+                Control::Brightness | Control::Volume => self.quick.slide(press.control, x - panel_x),
+                _ => {
+                    if (y - press.start.1).abs() > TAP || (x - press.start.0).abs() > TAP {
+                        let press = self.press.take().unwrap();
+                        let sheet = &mut self.sheets[press.panel];
+                        let height = sheet.height_at(hybris_hwc::now_ns());
+                        sheet.grab = Some(Grab { slot, offset: height - press.start.1, start_y: press.start.1, moved: true, last: (time_us, y), velocity: 0.0 });
+                        self.motion(slot, y, time_us);
+                    }
+                }
+            }
+            return;
+        }
+        self.motion(slot, y, time_us);
     }
 
     pub fn motion(&mut self, slot: TouchSlot, y: f64, time_us: u64) {
@@ -223,8 +291,25 @@ impl Shade {
         self.moved.get_or_insert((time_us, hybris_hwc::now_ns()));
     }
 
-    /// The finger lets go: the sheet runs open or closed.
-    pub fn up(&mut self, slot: TouchSlot) {
+    /// The finger lets go: a tap on a control works it; the sheet runs open
+    /// or closed.
+    pub fn up(&mut self, slot: TouchSlot) -> Option<ShadeAsk> {
+        if let Some(press) = self.press.take_if(|p| p.slot == slot) {
+            return match press.control {
+                Control::Tile(Tile::Settings) => Some(ShadeAsk::Settings(press.panel)),
+                Control::Tile(t) => {
+                    self.quick.toggle(t);
+                    None
+                }
+                Control::Close(i) => Some(ShadeAsk::Close(i)),
+                _ => None,
+            };
+        }
+        self.release(slot);
+        None
+    }
+
+    fn release(&mut self, slot: TouchSlot) {
         let full = layout::LAYOUT.1 as f64;
         for (p, sheet) in self.sheets.iter_mut().enumerate() {
             if !sheet.grab.as_ref().is_some_and(|g| g.slot == slot) {
@@ -232,9 +317,9 @@ impl Shade {
             }
             let grab = sheet.grab.take().unwrap();
             let open = if !grab.moved {
-                // A tap closes an open sheet; a touch at the edge of a closed
-                // one that did not pull it leaves it closed.
-                false
+                // A tap leaves an open sheet open (it has controls now); a
+                // touch at the edge of a closed one leaves it closed.
+                sheet.height > full / 2.0
             } else if grab.velocity.abs() > FLING {
                 grab.velocity > 0.0
             } else {
@@ -249,8 +334,9 @@ impl Shade {
 
     pub fn cancel(&mut self) {
         let slots: Vec<TouchSlot> = self.sheets.iter().filter_map(|s| s.grab.as_ref().map(|g| g.slot)).collect();
+        self.press = None;
         for slot in slots {
-            self.up(slot);
+            self.release(slot);
         }
     }
 
@@ -281,6 +367,7 @@ impl Shade {
             .iter()
             .filter(|l| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), &l.buffer, None, None, None, Kind::Unspecified).is_ok())
             .count()
+            + self.quick.warm_up(renderer)
     }
 
     /// The sheets' state, for the log.
@@ -297,9 +384,10 @@ impl Shade {
     }
 
     /// What the sheets draw for a frame shown at `frame_ns`, topmost first.
-    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
+    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, rows: &[Row]) -> Vec<ShellElement> {
         let mut out = Vec::new();
-        for (sheet, panel) in self.sheets.iter().zip(layout::panels()) {
+        self.rows.set(rows.len());
+        for (i, (sheet, panel)) in self.sheets.iter().zip(layout::panels()).enumerate() {
             let height = sheet.height_at(frame_ns);
             // In physical px, whole ones, so an edge does not shimmer.
             let h = (height * SCALE as f64).round() as i32;
@@ -307,9 +395,11 @@ impl Shade {
                 continue;
             }
             let panel = panel.to_physical(SCALE);
+            // The settings (left) or the open windows (right), over the head.
+            out.extend(self.quick.elements(renderer, i, panel.loc.x, h, rows));
             // The sheet's content hangs from its bottom edge: `y` is logical
             // px from it, and a label is centred on the panel.
-            for (label, y) in [(&self.time, -210), (&self.date, -118), (&self.battery, -80)] {
+            for (label, y) in [(&self.time, -760), (&self.date, -668), (&self.battery, -632)] {
                 if label.extent.w == 0 {
                     continue;
                 }

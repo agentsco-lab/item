@@ -134,7 +134,8 @@ impl Screen {
         let t0 = hybris_hwc::now_ns();
         // The shade over the launch curtain over the dock over the windows.
         let mut elements: Vec<FrameElement> = state.back.elements(&mut self.renderer).into_iter().map(FrameElement::from).collect();
-        elements.extend(state.shade.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        let rows: Vec<crate::quick::Row> = if state.shade.visible() { state.window_rows().into_iter().map(|(_, r)| r).collect() } else { Vec::new() };
+        elements.extend(state.shade.elements(&mut self.renderer, frame_ns, &rows).into_iter().map(FrameElement::from));
         elements.extend(state.curtain.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         let running = state.running();
         elements.extend(state.grid.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));

@@ -69,6 +69,8 @@ pub struct State {
     /// Stop after this many seconds (for tests).
     pub stop_after: Option<u64>,
     pub shade: Shade,
+    /// Every app's desktop entry, read once (apps.rs).
+    pub entries: Vec<crate::apps::Entry>,
     /// A client committed a new buffer since the loop last looked.
     pub client_frame: bool,
     pub dock: Dock,
@@ -88,7 +90,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new(display_handle: DisplayHandle, loop_signal: LoopSignal) -> State {
+    pub fn new(display_handle: DisplayHandle, loop_signal: LoopSignal, wake: smithay::reexports::calloop::ping::Ping) -> State {
         let dh = &display_handle;
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(dh, "duo");
@@ -115,7 +117,8 @@ impl State {
             touch_pending: None,
             touch_answered: None,
             stop_after: None,
-            shade: Shade::new(),
+            shade: Shade::new(wake),
+            entries: crate::apps::all(),
             client_frame: false,
             dock: Dock::new(),
             boost: GpuBoost::new(),
@@ -173,6 +176,42 @@ impl State {
             }
         }
         taken
+    }
+
+    /// The right shade's rows: the open windows, shown and put away, topmost
+    /// first.
+    pub fn window_rows(&self) -> Vec<(Window, crate::quick::Row)> {
+        let entries = &self.entries;
+        self.space
+            .elements()
+            .rev()
+            .chain(self.put_away.iter().map(|(w, _)| w))
+            .map(|w| {
+                let id = app_id(w);
+                let entry = entries.iter().find(|e| e.ids.contains(&id));
+                let name = entry.map(|e| e.name.clone()).unwrap_or_else(|| if id.is_empty() { "Окно".into() } else { id.clone() });
+                (w.clone(), crate::quick::Row { app_id: id, name, icon: entry.and_then(|e| e.icon.clone()) })
+            })
+            .collect()
+    }
+
+    /// A tap on a shade: a window closed, Settings opened.
+    pub fn shade_ask(&mut self, ask: crate::shade::ShadeAsk) {
+        match ask {
+            crate::shade::ShadeAsk::Close(i) => {
+                if let Some((window, _)) = self.window_rows().into_iter().nth(i) {
+                    tracing::info!("shade: closing {}", app_id(&window));
+                    window.toplevel().unwrap().send_close();
+                }
+            }
+            crate::shade::ShadeAsk::Settings(panel) => {
+                if let Some(e) = crate::apps::entry("org.sfduo.Settings.desktop").or_else(|| crate::apps::entry("org.gnome.Settings.desktop")) {
+                    let icon = e.icon.as_deref().and_then(|n| crate::apps::icon(n, crate::curtain::ICON));
+                    self.launch(&e.exec, &e.ids, icon, panel);
+                }
+            }
+        }
+        self.needs_redraw = true;
     }
 
     /// The window on top on a panel.
