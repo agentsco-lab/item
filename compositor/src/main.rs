@@ -15,7 +15,9 @@
 //! the time from a touch to the first frame showing a client's answer to it.
 
 mod apps;
+mod back;
 mod boost;
+mod clock;
 mod curtain;
 mod dock;
 mod gesture;
@@ -467,6 +469,9 @@ fn main() {
                 data.screen.frames_left = 40;
             }
             if data.state.shade.visible() && data.state.shade.refresh_text() {
+                data.state.needs_redraw = true;
+            }
+            if data.state.clock.refresh() {
                 data.state.needs_redraw = true;
             }
             if let Some(s) = data.state.stop_after {

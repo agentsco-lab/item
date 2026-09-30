@@ -65,6 +65,7 @@ Settings interface.
 | 8 | the launch curtain (curtain.rs) | the tap answered at once (`log/2026-09-30-step-8-curtain.md`) |
 | 9 | the swipe up that puts a window away (gesture.rs) | the window follows the finger; the dock comes back as it goes (`log/2026-09-30-step-9-put-away.md`) |
 | 10 | the app grid (grid.rs, apps.rs) | 18 apps; a tap launches under the curtain or brings a window back (`log/2026-09-30-step-10-grid.md`) |
+| 11 | the desktop clock, running dots, back from the edge, an open app called over (clock.rs, back.rs) | all as item's (`log/2026-09-30-step-11-clock-dots-back-call.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -123,7 +124,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `text` (fonts and labels), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences

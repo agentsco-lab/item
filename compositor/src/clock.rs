@@ -1,0 +1,98 @@
+//! The clock on the desktop, item's (sfduo-dock's DesktopClock): with no
+//! status bar, the time and the date stand on the free panel - the right one
+//! when both are free, none when neither is - where the dock stands. Grey
+//! and thin (the time 88 px at 62 %, the date 20 px at 45 %), 20 % down the
+//! panel, and each minute it steps up to 12 px from its place, so no pixel
+//! of it is lit all day on the OLED. It takes no touches. No weather yet.
+
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::gles::GlesRenderer;
+
+use crate::layout::{self, SCALE};
+use crate::shade::{date_line, local_time, ShellElement};
+use crate::text::{Font, Label};
+
+const TOP: f64 = 0.2;
+const SHIFT: i32 = 12;
+const GAP: i32 = 6;
+
+pub struct Clock {
+    fonts: Option<(Font, Font)>,
+    time: Label,
+    date: Label,
+    /// The step aside, logical px, and the minute it was taken for.
+    step: (i32, i32),
+    minute: i32,
+}
+
+impl Clock {
+    pub fn new() -> Clock {
+        let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
+        let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
+        let mut clock = Clock {
+            fonts: thin.zip(regular),
+            time: Label::new(88.0, [1.0, 1.0, 1.0, 0.62]),
+            date: Label::new(20.0, [1.0, 1.0, 1.0, 0.45]),
+            step: (0, 0),
+            minute: -1,
+        };
+        clock.refresh();
+        clock
+    }
+
+    /// Brings it up to the minute; returns whether it changed.
+    pub fn refresh(&mut self) -> bool {
+        let Some((thin, regular)) = &self.fonts else { return false };
+        let now = local_time();
+        let minute = now.tm_hour * 60 + now.tm_min;
+        if minute == self.minute {
+            return false;
+        }
+        self.minute = minute;
+        self.time.set(thin, &format!("{}:{:02}", now.tm_hour, now.tm_min));
+        self.date.set(regular, &date_line(&now));
+        // A step aside each minute: a small generator on the minute.
+        let mut x = (minute as u32).wrapping_mul(2654435761) ^ 0x9e37_79b9;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            (x % (2 * SHIFT as u32 + 1)) as i32 - SHIFT
+        };
+        self.step = (next(), next());
+        true
+    }
+
+    pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
+        [&self.time, &self.date]
+            .iter()
+            .filter(|l| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), &l.buffer, None, None, None, Kind::Unspecified).is_ok())
+            .count()
+    }
+
+    /// What it draws on `panel`, if any.
+    pub fn elements(&self, renderer: &mut GlesRenderer, panel: Option<usize>) -> Vec<ShellElement> {
+        let Some(panel) = panel else { return Vec::new() };
+        let rect = layout::panels()[panel];
+        let top = (rect.size.h as f64 * TOP) as i32 + self.step.1;
+        let mut out = Vec::new();
+        let mut y = top;
+        for label in [&self.time, &self.date] {
+            let x = rect.loc.x + (rect.size.w - label.extent.w) / 2 + self.step.0;
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                ((x * SCALE) as f64, (y * SCALE) as f64),
+                &label.buffer,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                out.push(ShellElement::Text(e));
+            }
+            y += label.extent.h + GAP;
+        }
+        out
+    }
+}

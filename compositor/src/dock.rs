@@ -107,6 +107,7 @@ struct Move {
 
 pub struct Dock {
     halves: Vec<Half>,
+    dot: MemoryRenderBuffer,
     mode: Mode,
     /// The mode before the last Hidden, whose places Hidden dips from.
     shown: Mode,
@@ -143,7 +144,7 @@ impl Dock {
                 Half { apps, slab: slab(w, h, false, false), slab_joined: joined, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { halves, mode: Mode::Both, shown: Mode::Both, moving: None }
+        Dock { halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -207,6 +208,16 @@ impl Dock {
         out[0].joined = touching;
         out[1].joined = touching;
         out
+    }
+
+    /// The panel the dock stands on alone, where the desktop's clock goes:
+    /// the right one when both are free, none when neither is.
+    pub fn home_panel(&self) -> Option<usize> {
+        match self.mode {
+            Mode::Both => Some(1),
+            Mode::On(p) => Some(p),
+            Mode::Hidden => None,
+        }
     }
 
     /// Where the halves go for the panels windows have. Returns whether they
@@ -320,13 +331,13 @@ impl Dock {
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
         self.halves
             .iter()
-            .flat_map(|h| [&h.slab, &h.slab_joined].into_iter().chain(h.apps.iter().flat_map(|a| a.icon.iter().chain(a.large.iter()))))
+            .flat_map(|h| [&h.slab, &h.slab_joined, &self.dot].into_iter().chain(h.apps.iter().flat_map(|a| a.icon.iter().chain(a.large.iter()))))
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
 
     /// What the dock draws for a frame shown at `frame_ns`, topmost first.
-    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
+    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, running: &[String]) -> Vec<ShellElement> {
         let mut out = Vec::new();
         let places = self.places(frame_ns);
         let bottom = layout::LAYOUT.1 as f64;
@@ -345,6 +356,12 @@ impl Dock {
                 }
             };
             for (i, app) in half.apps.iter().enumerate() {
+                // A dot under a running app, in the slab's bottom padding.
+                if app.ids.iter().any(|id| running.contains(id)) {
+                    let c = self.cell(i, &p);
+                    let d = crate::grid::DOT;
+                    push(&self.dot, c.loc.x + (c.size.w - d) / 2.0, c.loc.y + c.size.h + (PAD as f64 - d) / 2.0, None, 1.0);
+                }
                 if let Some(icon) = &app.icon {
                     // A pressed icon dims under the finger.
                     let alpha = if half.pressed.is_some_and(|(q, _, _)| q == i) { 0.55 } else { 1.0 };

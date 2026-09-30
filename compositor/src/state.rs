@@ -33,6 +33,8 @@ use smithay::{
 
 use crate::layout;
 use crate::boost::GpuBoost;
+use crate::back::Back;
+use crate::clock::Clock;
 use crate::curtain::Curtain;
 use crate::dock::Dock;
 use crate::gesture::Gestures;
@@ -74,6 +76,8 @@ pub struct State {
     pub curtain: Curtain,
     pub gestures: Gestures,
     pub grid: Grid,
+    pub clock: Clock,
+    pub back: Back,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
     /// The panel the next window goes to, asked for by a launch from the
@@ -118,6 +122,8 @@ impl State {
             curtain: Curtain::new(),
             gestures: Gestures::default(),
             grid: Grid::new(),
+            clock: Clock::new(),
+            back: Back::new(),
             put_away: Vec::new(),
             launch_to: None,
             socket_name: Default::default(),
@@ -144,6 +150,14 @@ impl State {
             Ok(_) => tracing::info!("spawned: {command}"),
             Err(e) => tracing::warn!("could not spawn {command}: {e}"),
         }
+    }
+
+    /// The app ids of the apps with a window, shown or put away.
+    pub fn running(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.space.elements().chain(self.put_away.iter().map(|(w, _)| w)).map(app_id).collect();
+        ids.sort();
+        ids.dedup();
+        ids
     }
 
     /// Which panels a window has. A window on its way away no longer has
@@ -189,7 +203,7 @@ impl State {
     /// An app onto a panel, from the dock or the grid: a window of it put
     /// away comes back; else it is launched under the curtain.
     pub fn launch(&mut self, exec: &str, ids: &[String], icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>, panel: usize) {
-        if self.bring_back(ids, panel) {
+        if self.bring_back(ids, panel) || self.call_over(ids, panel) {
             return;
         }
         let now = hybris_hwc::now_ns();
@@ -197,6 +211,51 @@ impl State {
         self.curtain.raise(panel, icon, now);
         self.spawn(exec);
         self.needs_redraw = true;
+    }
+
+    /// An app with a window open, called from the dock or the grid on a
+    /// panel: its window comes to that panel, sliding across, and takes the
+    /// focus (item's "an open app, called to the other panel"). Returns
+    /// whether it had one.
+    pub fn call_over(&mut self, ids: &[String], panel: usize) -> bool {
+        let Some(window) = self.space.elements().rev().find(|w| ids.iter().any(|id| id == &app_id(w))).cloned() else {
+            return false;
+        };
+        let rect = layout::panels()[panel];
+        let from = self.space.element_location(&window).unwrap_or(rect.loc);
+        if from != rect.loc {
+            window.toplevel().unwrap().with_pending_state(|s| s.size = Some(rect.size));
+            window.toplevel().unwrap().send_pending_configure();
+            self.gestures.slide(window.clone(), from.x, rect.loc.x, hybris_hwc::now_ns());
+        }
+        self.space.map_element(window.clone(), rect.loc, true);
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+        self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+        tracing::info!("called over: {} onto the {} panel", app_id(&window), if panel == 0 { "left" } else { "right" });
+        self.needs_redraw = true;
+        true
+    }
+
+    /// Back on a panel: its window gets the focus and Alt+Left (back.rs).
+    pub fn go_back(&mut self, panel: usize) {
+        let Some(window) = self.top_window(panel) else { return };
+        let id = app_id(&window);
+        if !crate::back::wants_back(&id) {
+            tracing::info!("back: not for {id}");
+            return;
+        }
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+        // Alt+Left: evdev's KEY_LEFTALT (56) and KEY_LEFT (105), +8 for xkb.
+        let time = (hybris_hwc::now_ns() / 1_000_000) as u32;
+        use smithay::backend::input::KeyState;
+        use smithay::input::keyboard::{FilterResult, Keycode};
+        for (key, state) in [(64u32, KeyState::Pressed), (113, KeyState::Pressed), (113, KeyState::Released), (64, KeyState::Released)] {
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            keyboard.input::<(), _>(self, Keycode::new(key), state, serial, time, |_, _, _| FilterResult::Forward);
+        }
+        tracing::info!("back: Alt+Left to {id}");
     }
 
     /// A window put away of one of these apps, if there is one, back onto

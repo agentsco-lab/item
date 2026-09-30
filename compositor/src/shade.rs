@@ -153,7 +153,7 @@ impl Shade {
         let Some((light, regular)) = &self.fonts else { return false };
         let now = local_time();
         let time = format!("{}:{:02}", now.tm_hour, now.tm_min);
-        let date = format!("{}, {} {}", WEEKDAYS[now.tm_wday as usize], now.tm_mday, MONTHS[now.tm_mon as usize]);
+        let date = date_line(&now);
         let battery = battery();
         let mut changed = self.time.set(light, &time);
         changed |= self.date.set(regular, &date);
@@ -345,7 +345,12 @@ const MONTHS: [&str; 12] = [
     "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря",
 ];
 
-fn local_time() -> libc::tm {
+/// "Среда, 30 сентября".
+pub fn date_line(tm: &libc::tm) -> String {
+    format!("{}, {} {}", WEEKDAYS[tm.tm_wday as usize], tm.tm_mday, MONTHS[tm.tm_mon as usize])
+}
+
+pub fn local_time() -> libc::tm {
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();

@@ -63,10 +63,23 @@ pub enum Done {
     PutAway(Window, usize),
 }
 
+/// A window crossing to the other panel (item's "an open app, called to the
+/// other panel"): it stands at its new place at once and is drawn sliding
+/// there from the old, 260 ms eased in and out.
+struct Slide {
+    window: Window,
+    from_x: i32,
+    to_x: i32,
+    start_ns: u64,
+}
+
+const SLIDE_NS: u64 = 260_000_000;
+
 #[derive(Default)]
 pub struct Gestures {
     grab: Option<Grab>,
     runs: Vec<Run>,
+    slides: Vec<Slide>,
 }
 
 impl Gestures {
@@ -138,13 +151,28 @@ impl Gestures {
     }
 
     pub fn moving(&self) -> bool {
-        self.grab.is_some() || !self.runs.is_empty()
+        self.grab.is_some() || !self.runs.is_empty() || !self.slides.is_empty()
+    }
+
+    /// A window moved from x `from_x` to `to_x` (logical px): drawn sliding.
+    pub fn slide(&mut self, window: Window, from_x: i32, to_x: i32, now_ns: u64) {
+        self.slides.retain(|s| s.window != window);
+        self.slides.push(Slide { window, from_x, to_x, start_ns: now_ns });
+    }
+
+    /// How far a sliding window is drawn from where it stands, logical px.
+    pub fn slide_offset(&self, window: &Window, frame_ns: u64) -> Option<i32> {
+        let s = self.slides.iter().find(|s| &s.window == window)?;
+        let k = (frame_ns.saturating_sub(s.start_ns) as f64 / SLIDE_NS as f64).clamp(0.0, 1.0);
+        let e = if k < 0.5 { 4.0 * k * k * k } else { 1.0 - (-2.0 * k + 2.0).powi(3) / 2.0 };
+        Some(((s.from_x - s.to_x) as f64 * (1.0 - e)).round() as i32)
     }
 
     /// After a frame for `frame_ns`: the runs that are over, and what they
     /// leave to do.
     pub fn settle(&mut self, frame_ns: u64) -> Vec<Done> {
         let mut done = Vec::new();
+        self.slides.retain(|s| frame_ns < s.start_ns + SLIDE_NS);
         self.runs.retain(|r| {
             if frame_ns < r.start_ns + r.duration_ns {
                 return true;

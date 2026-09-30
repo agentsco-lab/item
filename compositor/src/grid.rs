@@ -88,6 +88,7 @@ pub struct Grid {
     cells: Vec<Rectangle<f64, Logical>>,
     texture: Option<MemoryRenderBuffer>,
     highlight: MemoryRenderBuffer,
+    dot: MemoryRenderBuffer,
     panel: usize,
     /// How far up it stands at rest (0 down, 1 up).
     p: f64,
@@ -112,7 +113,7 @@ impl Grid {
         let texture = draw(&entries, &cells, w, h);
         tracing::info!("grid: {} apps", entries.len());
         let highlight = rounded(cell_w, cell_h, 16.0, [255, 255, 255, 31]);
-        Grid { entries, cells, texture, highlight, panel: 0, p: 0.0, pending: None, grab: None, run: None, pressed: None }
+        Grid { entries, cells, texture, highlight, dot: running_dot(), panel: 0, p: 0.0, pending: None, grab: None, run: None, pressed: None }
     }
 
     fn at(&self, frame_ns: u64) -> f64 {
@@ -263,14 +264,14 @@ impl Grid {
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [self.texture.as_ref(), Some(&self.highlight)]
+        [self.texture.as_ref(), Some(&self.highlight), Some(&self.dot)]
             .into_iter()
             .flatten()
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
 
-    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
+    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, running: &[String]) -> Vec<ShellElement> {
         let p = self.at(frame_ns);
         let Some(texture) = &self.texture else { return Vec::new() };
         if p <= 0.0 {
@@ -281,6 +282,18 @@ impl Grid {
         let y = ((layout::LAYOUT.1 as f64 * (1.0 - p)) * SCALE as f64).round();
         let x = (panel.loc.x * SCALE) as f64;
         let mut out = Vec::new();
+        // A dot under each running app's name.
+        for (e, c) in self.entries.iter().zip(&self.cells) {
+            if e.ids.iter().any(|id| running.contains(id)) {
+                let loc = (
+                    x + ((c.loc.x + (c.size.w - DOT) / 2.0) * SCALE as f64).round(),
+                    y + ((c.loc.y + c.size.h - CELL_PAD / 2.0 - DOT / 2.0) * SCALE as f64).round(),
+                );
+                if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &self.dot, None, None, None, Kind::Unspecified) {
+                    out.push(ShellElement::Text(el));
+                }
+            }
+        }
         if let Some(i) = self.pressed {
             let c = self.cells[i];
             let loc = (x + (c.loc.x * SCALE as f64).round(), y + (c.loc.y * SCALE as f64).round());
@@ -293,6 +306,14 @@ impl Grid {
         }
         out
     }
+}
+
+/// The running dot's size, logical px (item's "•" at 9 px).
+pub const DOT: f64 = 4.0;
+
+/// A running app's dot, item's #e8e4d9.
+pub fn running_dot() -> MemoryRenderBuffer {
+    rounded(DOT, DOT, DOT / 2.0, [0xe8, 0xe4, 0xd9, 255])
 }
 
 /// The grid on black, one panel's size: every app's icon and name in its
@@ -328,7 +349,7 @@ fn draw(entries: &[Entry], cells: &[Rectangle<f64, Logical>], w: f64, h: f64) ->
 }
 
 /// A rounded rectangle `w` by `h` logical px, premultiplied RGBA colour.
-fn rounded(w: f64, h: f64, r: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
+pub fn rounded(w: f64, h: f64, r: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
     let s = SCALE as f64;
     let (pw, ph) = ((w * s).round() as u32, (h * s).round() as u32);
     let mut pixmap = tiny_skia::Pixmap::new(pw.max(1), ph.max(1)).expect("pixmap");

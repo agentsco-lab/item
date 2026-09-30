@@ -89,6 +89,14 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                // The outer edge of a panel with a window: back (back.rs).
+                if let Some(panel) = crate::back::Back::strip_at(pos) {
+                    if self.top_window(panel).is_some() && self.grid.panel() != Some(panel) {
+                        self.back.down(event.slot(), pos, panel);
+                        self.needs_redraw = true;
+                        return;
+                    }
+                }
                 // The bottom band of a panel with a window: the swipe that
                 // puts it away (gesture.rs).
                 if pos.y >= LAYOUT.1 as f64 - crate::gesture::EDGE {
@@ -130,6 +138,11 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.back.holds(event.slot()) {
+                    self.back.motion(event.slot(), pos);
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.grid.holds(event.slot()) {
                     if let crate::grid::Ask::Shade(start) = self.grid.motion(event.slot(), pos, event.time()) {
                         self.shade.grab_from(event.slot(), start.x, start.y, event.time());
@@ -154,6 +167,13 @@ impl State {
             InputEvent::TouchUp { event } => {
                 if self.shade.holds(event.slot()) {
                     self.shade.up(event.slot());
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.back.holds(event.slot()) {
+                    if let Some(panel) = self.back.up(event.slot()) {
+                        self.go_back(panel);
+                    }
                     self.needs_redraw = true;
                     return;
                 }
@@ -185,6 +205,7 @@ impl State {
                 self.dock.cancel();
                 self.gestures.cancel(hybris_hwc::now_ns());
                 self.grid.cancel();
+                self.back.cancel();
                 self.needs_redraw = true;
                 touch.cancel(self)
             }
