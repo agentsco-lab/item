@@ -1,0 +1,58 @@
+hotplug: display 0 connected primary
+2026-09-30T12:40:42.516643Z  INFO item_compositor::output: hwcomposer display 0: 2784x1800, vsync 16.667 ms
+2026-09-30T12:40:42.553346Z  WARN smithay::backend::egl::ffi: [EGL] 0x3000 (SUCCESS) eglDebugMessageControlKHR: eglDebugMessageControlKHR is not supported by vendor library. Error reporting may not work correctly.
+2026-09-30T12:40:42.585431Z  WARN smithay::backend::egl::display: Dmabuf import extension not available
+2026-09-30T12:40:42.762624Z  INFO item_compositor::output: EGL bound to the Wayland display
+2026-09-30T12:40:42.765570Z  INFO item_compositor::input: touch: sfduo touchscreen (/dev/input/event6)
+2026-09-30T12:40:42.769286Z  INFO item_compositor: listening on "wayland-1"
+2026-09-30T12:40:42.771215Z  INFO item_compositor: spawned: sleep 3; gnome-calculator
+2026-09-30T12:40:43.773947Z  INFO item_compositor:  26 fps  mean 16.29 ms  max  22.37 ms  over 20 ms  1  windows 0  touches 0  errors 0
+2026-09-30T12:40:44.774889Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.61 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:45.775839Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.30 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:46.777085Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  21.96 ms  over 20 ms  2  windows 0  touches 0  errors 0
+2026-09-30T12:40:47.778127Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  19.15 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:48.779626Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.29 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:49.780758Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.81 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:50.782385Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.57 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:51.786116Z  INFO item_compositor:  60 fps  mean 16.73 ms  max  19.00 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:52.786885Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  19.72 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:53.786282Z  INFO item_compositor:  60 fps  mean 16.66 ms  max  17.34 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:54.787602Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  18.72 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:55.472404Z  INFO item_compositor::state: window mapped on the left panel
+Terminated
+2026-09-30T12:40:55.771836Z  INFO item_compositor:  59 fps  mean 16.68 ms  max  22.83 ms  over 20 ms  3  windows 0  touches 0  errors 0
+2026-09-30T12:40:56.772816Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.53 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:57.774534Z  INFO item_compositor:  60 fps  mean 16.70 ms  max  17.56 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:58.774834Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  18.56 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:40:59.776368Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  19.05 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:00.776865Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.57 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:01.776982Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  18.35 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:02.777748Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  20.54 ms  over 20 ms  1  windows 0  touches 0  errors 0
+2026-09-30T12:41:03.778515Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.31 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:04.779482Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.17 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:05.780210Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  18.92 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:06.780754Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.54 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:07.781540Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.71 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:08.781903Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  17.28 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:09.784929Z  INFO item_compositor:  60 fps  mean 16.72 ms  max  18.79 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:10.784854Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  17.33 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:11.785090Z  INFO item_compositor:  59 fps  mean 16.95 ms  max  38.28 ms  over 20 ms  1  windows 0  touches 0  errors 0
+2026-09-30T12:41:12.785309Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  19.51 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:13.786051Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.19 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:14.787060Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.34 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:15.772474Z  INFO item_compositor:  59 fps  mean 16.70 ms  max  17.31 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:16.773076Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.26 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:17.774948Z  INFO item_compositor:  60 fps  mean 16.70 ms  max  17.65 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:18.775108Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  17.26 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:19.776014Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.41 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:20.776997Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.68 ms  over 20 ms  0  windows 0  touches 0  errors 0
+2026-09-30T12:41:21.778061Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  18.21 ms  over 20 ms  0  windows 0  touches 0  errors 0
+  60 fps  mean 16.68 ms  max  17.20 ms  over 20 ms  0  windows 1  touches 0  errors 0
+2026-09-30T12:39:58.562507Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  18.09 ms  over 20 ms  0  windows 1  touches 0  errors 0
+rs 0
+2026-09-30T12:36:55.870177Z  INFO item_compositor:  60 fps  mean 16.70 ms  max  18.65 ms  over 20 ms  0  windows 1  touches 0  errors 0
+2026-09-30T12:36:56.869776Z  INFO item_compositor:  60 fps  mean 16.66 ms  max  17.47 ms  over 20 ms  0  windows 1  touches 0  errors 0
+2026-09-30T12:36:57.871774Z  INFO item_compositor:  60 fps  mean 16.70 ms  max  17.51 ms  over 20 ms  0  windows 1  touches 0  errors 0
+2026-09-30T12:36:58.873561Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.37 ms  over 20 ms  0  windows 1  touches 0  errors 0
+2026-09-30T12:36:59.875011Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.26 ms  over 20 ms  0  windows 1  touches 0  errors 0
+ouches 0  errors 0

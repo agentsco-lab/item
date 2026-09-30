@@ -353,6 +353,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36eee07d8e02bd95bf52b2e642cf13d33701b94c6e4b04fbf1d1fb07e9cb19e7"
 
 [[package]]
+name = "item-compositor"
+version = "0.1.0"
+dependencies = [
+ "hybris-hwc",
+ "smithay",
+ "smithay-hybris",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-sys",
+]
+
+[[package]]
 name = "khronos_api"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

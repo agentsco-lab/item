@@ -65,6 +65,13 @@ with item as a Rust daemon over sway's IPC and layer-shell clients
   strict (an undefined name in `#if` is an error).
 - The port's scale is 2.
 
+## The compositor
+
+`compositor/`, the `item-compositor` binary: the probes' parts as modules,
+run in the user's session on tty7 (`tools/session-run.sh 60 --spawn
+gnome-calculator`). Step 1 (`log/2026-09-30-step-1-compositor.md`); next:
+the session's portals, then frame scheduling.
+
 ## Layout
 
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client layer, a native window presenting with fences
@@ -73,6 +80,8 @@ with item as a Rust daemon over sway's IPC and layer-shell clients
 - `probes/smithay-frame` - probe C1: smithay's renderer into that window
 - `probes/wl-panels` - probe C2: a minimal compositor, a window per panel
 - `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against (into `sysroot/`, not tracked)
+- `compositor/` - item-compositor
+- `tools/session-run.sh` - runs item-compositor in the user's session on the phone, and phosh back after
 - `tools/probe-run.sh` - runs a probe on the phone with the shell stopped, and the shell back after
 - `log/` - what each probe found
 - Cross builds: `cargo build --release --target aarch64-unknown-linux-gnu`
