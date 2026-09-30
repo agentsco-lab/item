@@ -264,6 +264,13 @@ impl Quick {
         }
     }
 
+    /// The volume keys: up or down by a step.
+    pub fn volume_step(&self, up: bool) {
+        let mut sys = self.sys.lock().unwrap();
+        sys.volume = (sys.volume + if up { 0.05 } else { -0.05 }).clamp(0.0, 1.0);
+        let _ = self.jobs.send(Job::Volume(sys.volume));
+    }
+
     /// A tile tapped: toggled (Settings is the caller's to open).
     pub fn toggle(&self, tile: Tile) {
         let mut sys = self.sys.lock().unwrap();

@@ -386,6 +386,15 @@ pub fn vsyncs() -> u64 {
     VSYNCS.load(Ordering::Relaxed)
 }
 
+/// The display on or off (hwc2's power modes ON and OFF): off, the panel and
+/// its backlight go dark; frames are not presented while it is.
+pub fn set_display_power(on: bool) -> bool {
+    let guard = PRESENTER.lock().unwrap();
+    let Some(p) = guard.as_ref() else { return false };
+    let mode = if on { HWC2_POWER_MODE_ON } else { 0 };
+    (p.hwc.set_power_mode)(p.display, mode) == HWC2_ERROR_NONE
+}
+
 pub fn take_stats() -> FrameStats {
     let mut guard = PRESENTER.lock().unwrap();
     let st = std::mem::take(&mut guard.as_mut().expect("presenter").stats);

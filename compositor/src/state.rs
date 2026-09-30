@@ -95,6 +95,7 @@ pub struct State {
     pub grid: Grid,
     pub clock: Clock,
     pub back: Back,
+    pub lock: crate::lock::Lock,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
     /// The panel the next window goes to, asked for by a launch from the
@@ -151,6 +152,7 @@ impl State {
             grid: Grid::new(),
             clock: Clock::new(),
             back: Back::new(),
+            lock: crate::lock::Lock::new(),
             put_away: Vec::new(),
             launch_to: None,
             socket_name: Default::default(),

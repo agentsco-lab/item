@@ -10,7 +10,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-use smithay::backend::input::{AbsolutePositionEvent, Event, InputEvent, TouchEvent};
+use smithay::backend::input::{AbsolutePositionEvent, Event, InputEvent, KeyState, KeyboardKeyEvent, TouchEvent};
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
 use smithay::reexports::calloop::LoopHandle;
@@ -56,8 +56,24 @@ fn find_touchscreen() -> Option<String> {
     })
 }
 
+/// An input device by its name, as a node.
+fn find(name: &str) -> Option<String> {
+    std::fs::read_dir("/sys/class/input").ok()?.flatten().find_map(|d| {
+        let n = std::fs::read_to_string(d.path().join("device/name")).ok()?;
+        let node = d.file_name().to_string_lossy().into_owned();
+        (n.trim() == name && node.starts_with("event")).then(|| format!("/dev/input/{node}"))
+    })
+}
+
 pub fn init(handle: &LoopHandle<'static, Data>) {
     let mut libinput = Libinput::new_from_path(OpenDirect);
+    // The power key and the volume keys (lock.rs).
+    for name in ["qpnp_pon", "gpio-keys"] {
+        match find(name).and_then(|p| libinput.path_add_device(&p).map(|_| p)) {
+            Some(p) => tracing::info!("keys: {name} ({p})"),
+            None => tracing::warn!("keys: no {name}"),
+        }
+    }
     match find_touchscreen() {
         Some(path) => match libinput.path_add_device(&path) {
             Some(d) => tracing::info!("touch: {} ({path})", d.name()),
@@ -72,7 +88,46 @@ pub fn init(handle: &LoopHandle<'static, Data>) {
 
 impl State {
     fn on_input(&mut self, event: InputEvent<LibinputInputBackend>) {
+        // The keys: power, volume (evdev codes, +8 for xkb).
+        if let InputEvent::Keyboard { event } = &event {
+            if event.state() == KeyState::Pressed {
+                match event.key_code().raw().saturating_sub(8) {
+                    116 => self.lock.power_key(),
+                    115 => self.shade.quick.volume_step(true),
+                    114 => self.shade.quick.volume_step(false),
+                    _ => {}
+                }
+                self.needs_redraw = true;
+            }
+            return;
+        }
         let Some(touch) = self.seat.get_touch() else { return };
+        // A dark screen takes no touches; any other touch keeps it lit.
+        if self.lock.blank {
+            return;
+        }
+        self.lock.last_touch_ns = hybris_hwc::now_ns();
+        // Locked: every touch is the lock screen's.
+        match &event {
+            InputEvent::TouchDown { event } if self.lock.holds_screen() => {
+                let pos = event.position_transformed(LAYOUT.into());
+                self.lock.down(event.slot(), pos.y, event.time());
+                self.needs_redraw = true;
+                return;
+            }
+            InputEvent::TouchMotion { event } if self.lock.holds(event.slot()) => {
+                let pos = event.position_transformed(LAYOUT.into());
+                self.lock.motion(event.slot(), pos.y, event.time());
+                self.needs_redraw = true;
+                return;
+            }
+            InputEvent::TouchUp { event } if self.lock.holds(event.slot()) => {
+                self.lock.up(event.slot());
+                self.needs_redraw = true;
+                return;
+            }
+            _ => {}
+        }
         // Anything the finger does wakes the GPU's clock (boost.rs).
         if matches!(event, InputEvent::TouchDown { .. } | InputEvent::TouchMotion { .. } | InputEvent::TouchUp { .. }) {
             self.boost.kick(hybris_hwc::now_ns());

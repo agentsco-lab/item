@@ -39,9 +39,10 @@ item, which keep running the phone day to day.
 | the shades' contents | left: brightness, volume, six quick settings; right: the open windows with close buttons, as item's split | brightness through logind from the session |
 | notifications | the session's notification server; a banner on the right panel, the list in the right shade | |
 | the on-screen keyboard | the port's stevia (item's build) through layer-shell, input-method, text-input and virtual-keyboard; windows shorten under it | types |
+| locking | the power key blanks (hwc2 power off) and locks; the lock screen, swipe up to unlock; the volume keys | no PIN yet |
 | frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, a client's frame drawn at once, the shell's motion late in the frame; never two frames waiting in hwcomposer; drawn whole | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
-What it does not do yet: the system screen, the lock screen, the pen, blanking and the power key, cheaper shm frames, `wp_presentation`, the portals' Settings interface.
+What it does not do yet: a PIN on the lock screen, the system screen, the pen, the lid, cheaper shm frames, `wp_presentation`, the portals' Settings interface.
 
 ## How it was reached
 
@@ -71,6 +72,7 @@ What it does not do yet: the system screen, the lock screen, the pen, blanking a
 | 13 | notifications (notify.rs, zbus) | banner and shade list; actions and dismissals signalled (`log/2026-09-30-step-13-notifications.md`) |
 | 14 | the on-screen keyboard (layers.rs, protocols.rs) | stevia needs phoc's device state, wlr foreign toplevel and data control to start; the output after xdg-output; one stevia, its user unit (`log/2026-09-30-step-14-keyboard.md`) |
 | 15 | the dock's motion: contact, bump and squash, corners, the neck; windows through the hinge | as item's (`log/2026-09-30-step-15-dock-motion.md`) |
+| 16 | the power key, blanking, the lock screen, the volume keys (lock.rs) | locks, blanks, unlocks with a swipe (`log/2026-09-30-step-16-lock.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -129,7 +131,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `quick` (the shades' contents), `notify` (notifications), `layers` (layer surfaces, the keyboard), `protocols` (the globals stevia needs), `text` (fonts and labels), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `quick` (the shades' contents), `notify` (notifications), `layers` (layer surfaces, the keyboard), `protocols` (the globals stevia needs), `lock` (locking, blanking, the keys), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences

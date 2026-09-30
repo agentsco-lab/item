@@ -24,6 +24,7 @@ mod gesture;
 mod grid;
 mod input;
 mod layers;
+mod lock;
 mod layout;
 mod notify;
 mod output;
@@ -210,6 +211,7 @@ impl Data {
     /// draw anyway.
     fn on_watchdog(&mut self) {
         let now = hybris_hwc::now_ns();
+        self.state.lock.idle(now);
         self.state.boost.tick(now);
         if now.saturating_sub(hybris_hwc::last_vsync_ns()) > 50_000_000 {
             self.pacing.target_ns = now + self.screen.vsync_period_ns;
@@ -242,6 +244,13 @@ impl Data {
     fn draw_if_needed(&mut self) {
         if !self.state.needs_redraw {
             return;
+        }
+        // A dark screen draws nothing; it is drawn again when lit.
+        if self.state.lock.blank {
+            return;
+        }
+        if self.state.lock.relit() {
+            self.screen.reprime = 3;
         }
         if Pacing::pending() {
             return;
@@ -331,7 +340,7 @@ impl Data {
         // hwcomposer does not show the first frame after it powers the
         // display on: with nothing moving, the screen stayed black. Every
         // buffer gets a frame at start.
-        if !self.screen.primed() {
+        if !self.screen.primed() || self.screen.reprime > 0 {
             self.state.needs_redraw = true;
         }
         if self.state.dock.settle(self.pacing.target_ns) {
@@ -353,6 +362,9 @@ impl Data {
             if age < 300_000_000 || age + 300_000_000 > crate::notify::BANNER_NS {
                 self.state.needs_redraw = true;
             }
+        }
+        if self.state.lock.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
         }
         if self.state.grid.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
@@ -480,6 +492,18 @@ fn main() {
                 data.screen.frames_left = 40;
             }
             if data.state.shade.visible() && data.state.shade.refresh_text() {
+                data.state.needs_redraw = true;
+            }
+            // `touch /tmp/item-power` is the power key, for tests.
+            if std::fs::remove_file("/tmp/item-power").is_ok() {
+                data.state.lock.power_key();
+                data.state.needs_redraw = true;
+            }
+            if data.state.lock.relit() {
+                data.screen.reprime = 3;
+                data.state.needs_redraw = true;
+            }
+            if data.state.lock.locked && data.state.lock.refresh() {
                 data.state.needs_redraw = true;
             }
             if data.state.clock.refresh() {

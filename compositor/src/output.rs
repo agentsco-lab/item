@@ -62,6 +62,9 @@ pub struct Screen {
     frames_drawn: u64,
     /// A screenshot asked for: the next frame is drawn whole and saved here.
     pub shot: Option<String>,
+    /// Frames to draw whole and present whatever changed: after the display
+    /// is lit again, as at start (hwcomposer does not show the first).
+    pub reprime: u32,
     /// A run of frames asked for: this many more swapped frames are saved as
     /// they are, not drawn whole, the bottom `FRAME_ROWS` rows only.
     pub frames_left: u32,
@@ -122,7 +125,7 @@ impl Screen {
 
         let damage_tracker = OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180);
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -133,7 +136,9 @@ impl Screen {
     pub fn render(&mut self, state: &State, frame_ns: u64) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
         // The shade over the launch curtain over the dock over the windows.
-        let mut elements: Vec<FrameElement> = state.back.elements(&mut self.renderer).into_iter().map(FrameElement::from).collect();
+        // The lock screen over everything.
+        let mut elements: Vec<FrameElement> = state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        elements.extend(state.back.elements(&mut self.renderer).into_iter().map(FrameElement::from));
         let rows: Vec<crate::quick::Row> = if state.shade.visible() { state.shade_rows() } else { Vec::new() };
         // A new notification's banner, on top of everything.
         state.shade.quick.banner_at.set(None);
@@ -190,7 +195,8 @@ impl Screen {
         // nothing, and there is no frame. PARTIAL=1 draws the damage only, for
         // tests.
         let partial = std::env::var_os("PARTIAL").is_some_and(|v| v == "1");
-        let primed = self.frames_drawn >= BUFFERS as u64;
+        let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
+        self.reprime = self.reprime.saturating_sub(1);
         if !partial && primed && self.shot.is_none() {
             let changed = self.damage_tracker.damage_output(1, &elements).map(|(d, _)| d.is_some()).unwrap_or(true);
             if !changed {
@@ -290,7 +296,7 @@ impl Screen {
     /// Uploads the shell's textures before they are first needed.
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
-        let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer);
+        let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }
 
