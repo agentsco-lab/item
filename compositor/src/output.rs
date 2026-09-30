@@ -130,8 +130,9 @@ impl Screen {
     /// will be on screen: the shade's runs are drawn where they will be then.
     pub fn render(&mut self, state: &State, frame_ns: u64) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
-        // The shade over the dock over the windows.
+        // The shade over the launch curtain over the dock over the windows.
         let mut elements: Vec<FrameElement> = state.shade.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        elements.extend(state.curtain.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.dock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(
             space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)

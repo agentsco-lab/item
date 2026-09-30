@@ -58,6 +58,8 @@ struct App {
     name: String,
     exec: String,
     icon: Option<MemoryRenderBuffer>,
+    /// The icon at the launch curtain's size.
+    large: Option<MemoryRenderBuffer>,
 }
 
 /// Where the halves stand.
@@ -110,8 +112,8 @@ pub struct Dock {
 
 /// What a touch on the dock asks for.
 pub enum Tap {
-    /// Launch this command on this panel.
-    Launch(String, usize),
+    /// Launch this command on this panel; the app's icon for the curtain.
+    Launch(String, usize, Option<MemoryRenderBuffer>),
 }
 
 impl Dock {
@@ -295,7 +297,7 @@ impl Dock {
                 if s == slot {
                     half.pressed = None;
                     let panel = layout::panel_at(at).unwrap_or(0);
-                    return Some(Tap::Launch(half.apps[i].exec.clone(), panel));
+                    return Some(Tap::Launch(half.apps[i].exec.clone(), panel, half.apps[i].large.clone()));
                 }
             }
         }
@@ -312,7 +314,7 @@ impl Dock {
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
         self.halves
             .iter()
-            .flat_map(|h| [&h.slab, &h.slab_joined].into_iter().chain(h.apps.iter().filter_map(|a| a.icon.as_ref())))
+            .flat_map(|h| [&h.slab, &h.slab_joined].into_iter().chain(h.apps.iter().flat_map(|a| a.icon.iter().chain(a.large.iter()))))
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
@@ -433,13 +435,15 @@ fn app(desktop: &str) -> Option<App> {
         .filter(|w| !(w.starts_with('%') && w.len() == 2))
         .collect::<Vec<_>>()
         .join(" ");
-    let icon = key("Icon").and_then(|name| icon(&name));
-    Some(App { name: key("Name").unwrap_or_else(|| desktop.to_owned()), exec, icon })
+    let name = key("Icon");
+    let small = name.as_deref().and_then(|n| icon(n, ICON));
+    let large = name.as_deref().and_then(|n| icon(n, crate::curtain::ICON));
+    Some(App { name: key("Name").unwrap_or_else(|| desktop.to_owned()), exec, icon: small, large })
 }
 
-/// An icon from the hicolor theme, `ICON` logical px at the output's scale.
-fn icon(name: &str) -> Option<MemoryRenderBuffer> {
-    let px = (ICON * SCALE) as u32;
+/// An icon from the hicolor theme, `size` logical px at the output's scale.
+fn icon(name: &str, size: i32) -> Option<MemoryRenderBuffer> {
+    let px = (size * SCALE) as u32;
     let base = "/usr/share/icons/hicolor";
     let pixmap = if let Ok(data) = std::fs::read(format!("{base}/scalable/apps/{name}.svg")) {
         let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;

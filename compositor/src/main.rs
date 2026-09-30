@@ -15,6 +15,7 @@
 //! the time from a touch to the first frame showing a client's answer to it.
 
 mod boost;
+mod curtain;
 mod dock;
 mod input;
 mod layout;
@@ -318,6 +319,10 @@ impl Data {
             self.state.needs_redraw = true;
         }
         if self.state.dock.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(hybris_hwc::now_ns());
+        }
+        if self.state.curtain.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(hybris_hwc::now_ns());
         }

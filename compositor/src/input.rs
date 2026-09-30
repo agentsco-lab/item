@@ -129,8 +129,9 @@ impl State {
                     return;
                 }
                 if self.dock.holds(event.slot()) {
-                    if let Some(Tap::Launch(command, panel)) = self.dock.up(event.slot()) {
+                    if let Some(Tap::Launch(command, panel, icon)) = self.dock.up(event.slot()) {
                         self.launch_to = Some((panel, hybris_hwc::now_ns()));
+                        self.curtain.raise(panel, icon, hybris_hwc::now_ns());
                         self.spawn(&command);
                     }
                     self.needs_redraw = true;

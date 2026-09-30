@@ -33,6 +33,7 @@ use smithay::{
 
 use crate::layout;
 use crate::boost::GpuBoost;
+use crate::curtain::Curtain;
 use crate::dock::Dock;
 use crate::shade::Shade;
 
@@ -68,6 +69,7 @@ pub struct State {
     pub client_frame: bool,
     pub dock: Dock,
     pub boost: GpuBoost,
+    pub curtain: Curtain,
     /// The panel the next window goes to, asked for by a launch from the
     /// dock, and when (CLOCK_MONOTONIC ns).
     pub launch_to: Option<(usize, u64)>,
@@ -107,6 +109,7 @@ impl State {
             client_frame: false,
             dock: Dock::new(),
             boost: GpuBoost::new(),
+            curtain: Curtain::new(),
             launch_to: None,
             socket_name: Default::default(),
         }
@@ -191,6 +194,10 @@ impl CompositorHandler for State {
         }
         let kind = with_renderer_surface_state(surface, |rs| rs.buffer().map(|b| format!("{:?}", buffer_type(b))))
             .flatten();
+        // The launched app's window drew: the curtain over it lifts.
+        if kind.is_some() && self.curtain.drawn(surface, hybris_hwc::now_ns()) {
+            self.needs_redraw = true;
+        }
         if let Some(kind) = kind {
             let id = format!("{:?}", surface.id());
             if self.buffer_kinds.insert(id.clone(), kind.clone()).as_ref() != Some(&kind) {
@@ -260,6 +267,10 @@ impl XdgShellHandler for State {
             state.states.set(xdg_toplevel::State::Maximized);
             state.states.set(xdg_toplevel::State::Activated);
         });
+        if asked.is_some() {
+            let p = panels.iter().position(|r| *r == panel).unwrap_or(0);
+            self.curtain.adopt(p, surface.wl_surface());
+        }
         let window = Window::new_wayland_window(surface);
         self.space.map_element(window, panel.loc, true);
         self.needs_redraw = true;
