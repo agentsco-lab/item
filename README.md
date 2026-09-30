@@ -28,6 +28,24 @@ item, which keep running the phone day to day.
 | A | smithay's anvil on the Lindroid chain (duo-lindroid's test image): do smithay's EGL and GLES run on libhybris? | |
 | B | a minimal Rust program that puts a GL frame on the Duo's panels through libhybris' hwc2, at vsync: the core of the backend | |
 
+What each must answer - the seams between smithay and libhybris, not the
+language:
+
+- **The EGL display.** On the chain (A) libhybris has GBM (libgbm-hybris),
+  as KWin and wlroots used. Without the chain (B) there is no GBM: smithay
+  needs its own `EGLNativeDisplay` (the Android platform or
+  `EGL_DEFAULT_DISPLAY`) and `EGLNativeSurface` over libhybris' hwcomposer
+  native window.
+- **Clients' buffers.** On the port's own path GL apps hand buffers over
+  `android_wlegl`, which libhybris' EGL serves after
+  `eglBindWaylandDisplayWL`: smithay's `bind_wl_display` (feature
+  `use_system_lib`) must work with it, and the buffers must import as
+  textures (`EGL_WAYLAND_BUFFER_WL`), or GL apps will not show. On the chain
+  clients use linux-dmabuf with libhybris' metadata fd instead
+  (duo-lindroid, `log/2026-09-30-probe-plasma-mobile.md`).
+- **Sync.** On the port's path a frame goes to hwcomposer through EGL's swap
+  with its fence; the chain has none (duo-lindroid idea 20).
+
 If either fails, or the size turns out too large, the fallback is SwayFX
 with item as a Rust daemon over sway's IPC and layer-shell clients
 (duo-lindroid, `log/2026-09-30-probe-swayfx.md`).
