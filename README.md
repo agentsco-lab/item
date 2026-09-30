@@ -70,6 +70,7 @@ What it does not do yet: the system screen, the lock screen, the pen, blanking a
 | 12 | the shades' contents (quick.rs) | settings left, open windows right; system commands on a thread (`log/2026-09-30-step-12-shade-contents.md`) |
 | 13 | notifications (notify.rs, zbus) | banner and shade list; actions and dismissals signalled (`log/2026-09-30-step-13-notifications.md`) |
 | 14 | the on-screen keyboard (layers.rs, protocols.rs) | stevia needs phoc's device state, wlr foreign toplevel and data control to start; the output after xdg-output; one stevia, its user unit (`log/2026-09-30-step-14-keyboard.md`) |
+| 15 | the dock's motion: contact, bump and squash, corners, the neck; windows through the hinge | as item's (`log/2026-09-30-step-15-dock-motion.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:

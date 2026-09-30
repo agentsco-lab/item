@@ -165,7 +165,10 @@ impl Gestures {
         let s = self.slides.iter().find(|s| &s.window == window)?;
         let k = (frame_ns.saturating_sub(s.start_ns) as f64 / SLIDE_NS as f64).clamp(0.0, 1.0);
         let e = if k < 0.5 { 4.0 * k * k * k } else { 1.0 - (-2.0 * k + 2.0).powi(3) / 2.0 };
-        Some(((s.from_x - s.to_x) as f64 * (1.0 - e)).round() as i32)
+        // Across the hinge as the dock's halves cross it, a tunnel an icon
+        // long: the window's edge goes all the way in before it comes out.
+        let x = crate::dock::lerp_x(s.from_x as f64, s.to_x as f64, e);
+        Some((x - s.to_x as f64).round() as i32)
     }
 
     /// After a frame for `frame_ns`: the runs that are over, and what they
