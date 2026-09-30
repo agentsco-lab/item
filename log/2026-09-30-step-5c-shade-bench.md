@@ -18,12 +18,12 @@ validate and present. It also logs whether the GPU had finished the frame
 when it was handed over (the acquire fence, polled), the time since the
 last present, and the sheets' state (hybris-hwc's `last_present_detail`).
 
-Raw output: `log/step-5c/swipe-N.out` (1: before the fixes, 6: after).
+Raw output: `log/step-5c/swipe-N.out`, 2-6 (the first run, before the fixes, was not saved; its numbers are quoted below).
 
 ## What it found
 
 **Chains of missed frames.** The first run gave 40-odd misses in runs of 8
-and 22 (swipe-1). Each run started with the first frame after a pause: a
+and 22. Each run started with the first frame after a pause: a
 vsync with no frame, a GPU that had slowed down, the frame handed over
 unfinished, presented 1-3 ms after its vsync. From then on each frame was
 handed over while the one before still waited in hwcomposer for the vsync.
