@@ -1,0 +1,655 @@
+//! item-compositor: a Wayland compositor for the Surface Duo, drawing through
+//! hwcomposer (libhybris' hwc2), on smithay. The base of item-shell.
+//!
+//! `item-compositor [--seconds N] [--spawn COMMAND]...`
+//!
+//! It runs in the user's session (see `tools/session-run.sh`), listens on
+//! `wayland-item` in `$XDG_RUNTIME_DIR`, and spawns each COMMAND with
+//! `WAYLAND_DISPLAY` set.
+//!
+//! Frames are paced by hwcomposer's vsync: the event loop sleeps until there
+//! is something to do - a client, a touch, a vsync - and at a vsync draws a
+//! frame only if something changed. The swap does not wait for the display,
+//! so input and clients are served while a frame is on its way. Once a second
+//! it logs frames drawn, vsyncs, time between presents, windows, touches, and
+//! the time from a touch to the first frame showing a client's answer to it.
+
+mod apps;
+mod back;
+mod boost;
+mod clock;
+mod curtain;
+mod dock;
+mod gesture;
+mod grid;
+mod input;
+mod layers;
+mod lock;
+mod layout;
+mod notify;
+mod output;
+mod pam;
+mod pensheet;
+mod protocols;
+mod quick;
+mod shade;
+mod state;
+mod sysscreen;
+mod text;
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use hybris_hwc::{now_ns, take_stats, vsyncs};
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::ping::make_ping;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
+use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, Mode as CalloopMode, PostAction};
+use smithay::reexports::wayland_server::Display;
+use smithay::wayland::socket::ListeningSocketSource;
+
+use crate::output::Screen;
+use crate::state::{ClientState, State};
+
+/// The event loop's data: the Wayland state and the screen it is drawn on.
+pub struct Data {
+    /// The volume bar was up at the last frame.
+    volume_bar_up: bool,
+    pub state: State,
+    pub screen: Screen,
+    started: Instant,
+    report: Report,
+    handle: LoopHandle<'static, Data>,
+    pacing: Pacing,
+    /// Swapped frames' presentation feedback, with the vsync each shows at.
+    feedback: Vec<(u64, smithay::desktop::utils::OutputPresentationFeedback)>,
+}
+
+/// When in the frame to draw.
+///
+/// A frame drawn right at a vsync shows at the next one, and anything a client
+/// commits after that vsync waits a whole frame more. Drawn late - at the next
+/// vsync less what a frame takes and a margin for hwcomposer's present - it
+/// takes in whatever came during the frame. Too late, and it misses the vsync
+/// and shows a frame later: a stutter. `LATE_MARGIN_MS` sets the margin
+/// (default 4), `LATE=0` draws at the vsync as before.
+struct Pacing {
+    late: bool,
+    margin_ns: u64,
+    /// A running average of the time a frame takes to render and hand over.
+    render_ns: f64,
+    /// The vsync the frame being drawn aims for.
+    target_ns: u64,
+    /// When the last frame went to hwcomposer.
+    last_swap_ns: u64,
+    /// Draw a client's new frame at once (`ASAP=0` waits for the vsync).
+    asap: bool,
+    /// When clients hear their frame was taken (`CALLBACKS`).
+    callbacks: Callbacks,
+    /// A frame went to hwcomposer; its clients hear of it at the vsync that
+    /// puts it on screen (`Callbacks::Vsync`).
+    callbacks_due: bool,
+}
+
+/// When frame callbacks go out.
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum Callbacks {
+    /// As the frame is drawn (`draw`, the default): a client starts its
+    /// next frame while ours waits for the vsync, as under phoc. Settings
+    /// scrolls at 60 fps with the GPU boosted (43 without). A client quicker
+    /// than a frame commits while ours still waits, and its frame shows a
+    /// vsync later: with the boost the calculator answers a tap in 36-37 ms,
+    /// 28 without.
+    Draw,
+    /// At the vsync that puts the frame on screen (`vsync`): the client
+    /// draws right after it, and its frame is drawn at once for the next.
+    /// Taps 34 ms with the boost, but Settings, which needs 12-14 ms a frame
+    /// even boosted, scrolls at 39-48 fps (26 without the boost).
+    Vsync,
+    /// After the frame is drawn and presented (`after`).
+    After,
+}
+
+impl Pacing {
+    fn from_env() -> Pacing {
+        let late = std::env::var("LATE").map(|v| v != "0").unwrap_or(true);
+        let margin_ms: f64 = std::env::var("LATE_MARGIN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
+        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
+            callbacks: match std::env::var("CALLBACKS").as_deref() {
+                Ok("vsync") => Callbacks::Vsync,
+                Ok("after") => Callbacks::After,
+                _ => Callbacks::Draw,
+            },
+            callbacks_due: false,
+        }
+    }
+
+    fn budget_ns(&self) -> u64 {
+        (self.render_ns * 1.5) as u64 + self.margin_ns
+    }
+
+    /// Whether the last frame handed to hwcomposer is still waiting for a
+    /// vsync to go on screen. Nothing is drawn meanwhile: a frame presented
+    /// behind a waiting one queues, hwcomposer's present then blocks until
+    /// the vsync (11-14 ms), and every frame after it is a frame late for
+    /// good (step 5c). If vsyncs stop, 50 ms ends the wait.
+    fn pending() -> bool {
+        let presented = hybris_hwc::last_present_ns();
+        presented != 0
+            && presented >= hybris_hwc::last_vsync_ns()
+            && hybris_hwc::now_ns().saturating_sub(presented) < 50_000_000
+    }
+}
+
+/// What is logged once a second.
+#[derive(Default)]
+struct Report {
+    drawn: u32,
+    missed: u32,
+    vsync_ticks: u32,
+    vsyncs_at_last: u64,
+    render_max_ms: f64,
+    draw_ms: Vec<f64>,
+    elements_ms: Vec<f64>,
+    swap_ms: Vec<f64>,
+    present_ms: Vec<f64>,
+    touch_to_screen_ms: Vec<f64>,
+    /// From a finger's move on the shade (the kernel's time) to the frame
+    /// showing it.
+    shade_ms: Vec<f64>,
+    /// The same, from when the move reached the compositor.
+    shade_loop_ms: Vec<f64>,
+    /// Frames by buffer age.
+    ages: std::collections::BTreeMap<usize, u32>,
+    /// Share of the screen redrawn, %.
+    damaged_share: Vec<f64>,
+    /// Frames drawn with nothing damaged (no swap).
+    no_damage: u32,
+    /// Frames drawn at once for a client's commit.
+    asap: u32,
+}
+
+/// "mean/max" of a second's samples.
+fn mean_max(v: &[f64]) -> String {
+    if v.is_empty() {
+        return "-".into();
+    }
+    let mean = v.iter().sum::<f64>() / v.len() as f64;
+    format!("{:.1}/{:.1}", mean, v.iter().cloned().fold(0.0, f64::max))
+}
+
+impl Data {
+    /// At each vsync: aim the next frame at the next vsync, and draw it now
+    /// or late in the frame.
+    fn on_vsync(&mut self) {
+        self.report.vsync_ticks += 1;
+        let vsync = hybris_hwc::last_vsync_ns();
+        let period = self.screen.vsync_period_ns;
+        self.pacing.target_ns = vsync + period;
+        // The frame presented before this vsync is on screen now.
+        if self.pacing.callbacks_due && hybris_hwc::last_present_ns() < vsync {
+            self.pacing.callbacks_due = false;
+            let time = std::time::Duration::from_nanos(vsync.saturating_sub(self.screen.clock_origin_ns));
+            self.screen.send_frames(&self.state, time);
+            let _ = self.state.display_handle.flush_clients();
+        }
+        // wp_presentation: the frames that were to show at this vsync are on
+        // screen; their time is the vsync's (CLOCK_MONOTONIC, hwcomposer's).
+        if self.feedback.first().is_some_and(|(at, _)| *at <= vsync + period as u64 / 2) {
+            use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
+            let refresh = smithay::wayland::presentation::Refresh::fixed(std::time::Duration::from_nanos(period as u64));
+            let seq = hybris_hwc::vsyncs();
+            while self.feedback.first().is_some_and(|(at, _)| *at <= vsync + period as u64 / 2) {
+                let (_, mut f) = self.feedback.remove(0);
+                f.presented::<_, smithay::utils::Monotonic>(std::time::Duration::from_nanos(vsync), refresh, seq, Kind::Vsync);
+            }
+            let _ = self.state.display_handle.flush_clients();
+        }
+        // The first frame after a pause is drawn at once: the GPU wakes slowly,
+        // and drawn late such a frame missed its vsync.
+        let idle = vsync.saturating_sub(self.pacing.last_swap_ns) > period * 3 / 2;
+        if !self.pacing.late || (idle && self.state.needs_redraw) {
+            self.draw_if_needed();
+            return;
+        }
+        let draw_at = self.pacing.target_ns.saturating_sub(self.pacing.budget_ns());
+        let now = hybris_hwc::now_ns();
+        if draw_at <= now {
+            self.draw_if_needed();
+            return;
+        }
+        let delay = std::time::Duration::from_nanos(draw_at - now);
+        let _ = self.handle.insert_source(Timer::from_duration(delay), |_, _, data: &mut Data| {
+            data.draw_if_needed();
+            TimeoutAction::Drop
+        });
+    }
+
+    /// hwcomposer sends no vsync before the first frame it is given, and may
+    /// stop between frames: if something changed and no vsync came for 50 ms,
+    /// draw anyway.
+    fn on_watchdog(&mut self) {
+        let now = hybris_hwc::now_ns();
+        self.state.lock.idle(now);
+        self.state.boost.tick(now);
+        if now.saturating_sub(hybris_hwc::last_vsync_ns()) > 50_000_000 {
+            self.pacing.target_ns = now + self.screen.vsync_period_ns;
+            self.draw_if_needed();
+        }
+    }
+
+    /// A client committed a frame: draw it now, rather than at the next vsync,
+    /// unless a frame is still waiting in hwcomposer. It shows at the same
+    /// vsync either way (or one later, if it came too late for this one), but
+    /// the client hears it was taken (the frame callback, sent as a frame is
+    /// drawn) half a frame sooner on average, and starts its next one. A GTK app that takes 15-20 ms a
+    /// frame scrolled at 30 fps waiting for our vsync, at 40 under phoc, which
+    /// answers a commit in 3 ms. The shell's own motion still draws late, at
+    /// the vsync, with the finger's latest place.
+    fn on_client_frame(&mut self) {
+        if !self.pacing.asap || !self.state.needs_redraw || Pacing::pending() {
+            return;
+        }
+        let now = hybris_hwc::now_ns();
+        let period = self.screen.vsync_period_ns;
+        let last = hybris_hwc::last_vsync_ns();
+        // vsyncs may have stopped while nothing was drawn: aim at the next
+        // one on their grid.
+        self.pacing.target_ns = last + (now.saturating_sub(last) / period + 1) * period;
+        self.report.asap += 1;
+        self.draw_if_needed();
+    }
+
+    fn draw_if_needed(&mut self) {
+        if !self.state.needs_redraw {
+            return;
+        }
+        // A dark screen draws nothing; it is drawn again when lit.
+        if self.state.lock.blank {
+            return;
+        }
+        if self.state.lock.relit() {
+            self.screen.reprime = 3;
+        }
+        if Pacing::pending() {
+            return;
+        }
+        self.state.needs_redraw = false;
+        let started = hybris_hwc::now_ns();
+        self.state.follow_keyboard();
+        // The dock stands on the panels no window has, nor a launch curtain.
+        let mut taken = self.state.panels_taken();
+        if let Some(p) = self.state.curtain.panel() {
+            taken[p] = true;
+        }
+        if let Some(p) = self.state.grid.panel() {
+            taken[p] = true;
+        }
+        if self.state.system.out() {
+            taken[0] = true;
+        }
+        if self.state.pen.out() {
+            taken[1] = true;
+        }
+        self.state.dock.follow(taken, started);
+        // Callbacks::Draw: frame callbacks before the frame is drawn: the
+        // clients' buffers for it are already taken, and a client starts on
+        // its next frame while this one is drawn and presented (8-9 ms).
+        // Sent after, a GTK app had 7 ms left before the next vsync, missed
+        // it, and scrolled at 28 fps. Their time is the vsync the frame aims
+        // for.
+        if self.pacing.callbacks == Callbacks::Draw {
+            let time = std::time::Duration::from_nanos(self.pacing.target_ns.saturating_sub(self.screen.clock_origin_ns));
+            self.screen.send_frames(&self.state, time);
+            let _ = self.state.display_handle.flush_clients();
+        }
+        let cost = self.screen.render(&self.state, self.pacing.target_ns);
+        let (draw_ns, swap_ns) = (cost.draw_ns, cost.swap_ns);
+        let took = draw_ns + swap_ns;
+        *self.report.ages.entry(cost.age).or_default() += 1;
+        self.report.damaged_share.push(cost.damaged_px as f64 / self.screen.pixels as f64 * 100.0);
+        if !cost.swapped {
+            self.report.no_damage += 1;
+        }
+        if cost.swapped {
+            self.pacing.last_swap_ns = hybris_hwc::now_ns();
+            // Only a frame that went to hwcomposer says what the next will
+            // take (one with nothing damaged costs nothing), and not one of
+            // more than two periods (the first, a stall). A slower frame
+            // raises the estimate at once, faster ones lower it slowly: a
+            // budget too short misses vsyncs.
+            if took < 2 * self.screen.vsync_period_ns {
+                let weight = if took as f64 > self.pacing.render_ns { 0.5 } else { 0.1 };
+                self.pacing.render_ns += (took as f64 - self.pacing.render_ns) * weight;
+            }
+        }
+        self.report.render_max_ms = self.report.render_max_ms.max(took as f64 / 1e6);
+        self.report.draw_ms.push(draw_ns as f64 / 1e6);
+        self.report.elements_ms.push(cost.elements_ns as f64 / 1e6);
+        self.report.swap_ms.push(swap_ns as f64 / 1e6);
+        if cost.swapped {
+            self.report.present_ms.push(hybris_hwc::last_present_took_ns() as f64 / 1e6);
+        }
+        self.report.drawn += 1;
+
+        // The frame shows at the vsync it aimed for, or one later if its
+        // present came after that vsync.
+        let target = self.pacing.target_ns;
+        let presented = hybris_hwc::last_present_ns();
+        let shown_at = if presented <= target {
+            target
+        } else {
+            self.report.missed += 1;
+            // Each missed frame, with where its time went.
+            let d = hybris_hwc::last_present_detail();
+            let ms = |ns: u64| ns as f64 / 1e6;
+            tracing::info!(
+                "missed: drawn {:.1} ms before the vsync, draw {:.1} swap {:.1}, presented {:.1} ms late: {:.1} after the last present, validate {:.1}, present {:.1}, GPU {}; redrawn {:.0}%, shade {}",
+                target as f64 / 1e6 - started as f64 / 1e6, ms(draw_ns), ms(swap_ns), ms(presented - target),
+                ms(d.since_last_ns), ms(d.validate_ns), ms(d.present_ns), if d.gpu_pending { "busy" } else { "done" },
+                cost.damaged_px as f64 / self.screen.pixels as f64 * 100.0, self.state.shade.describe()
+            );
+            target + self.screen.vsync_period_ns
+        };
+        if cost.swapped {
+            let feedback = self.screen.take_feedback(&self.state);
+            self.feedback.push((shown_at, feedback));
+        }
+        if let Some(touched) = self.state.touch_answered.take() {
+            self.report.touch_to_screen_ms.push(shown_at.saturating_sub(touched) as f64 / 1e6);
+        }
+        if let Some((moved_us, reached_ns)) = self.state.shade.take_moved() {
+            let moved_ns = moved_us * 1000;
+            // libinput's time is the kernel's CLOCK_MONOTONIC; skip it if not.
+            if moved_ns <= reached_ns {
+                self.report.shade_ms.push(shown_at.saturating_sub(moved_ns) as f64 / 1e6);
+            }
+            self.report.shade_loop_ms.push(shown_at.saturating_sub(reached_ns) as f64 / 1e6);
+        }
+        // hwcomposer does not show the first frame after it powers the
+        // display on: with nothing moving, the screen stayed black. Every
+        // buffer gets a frame at start.
+        if !self.screen.primed() || self.screen.reprime > 0 {
+            self.state.needs_redraw = true;
+        }
+        if self.state.dock.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(hybris_hwc::now_ns());
+        }
+        let now = hybris_hwc::now_ns();
+        for done in self.state.gestures.settle(self.pacing.target_ns) {
+            let crate::gesture::Done::PutAway(window, panel) = done;
+            self.state.put_window_away(window, panel);
+        }
+        if self.state.gestures.moving() {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        // Windows closing: frames until they are gone, then their last frames
+        // forgotten with those of windows no longer there.
+        self.state.closing.retain(|(_, since)| now < since + crate::output::CLOSE_NS);
+        if !self.state.closing.is_empty() {
+            self.state.needs_redraw = true;
+        }
+        let mut keep: Vec<_> = self.state.closing.iter().map(|(id, _)| id.clone()).collect();
+        keep.extend(self.state.space.elements().map(|w| smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())));
+        self.screen.forget(&keep);
+        // The volume bar: frames while it fades, one more when it is gone.
+        match self.state.shade.quick.volume_bar_state(now) {
+            (true, true) => self.state.needs_redraw = true,
+            (true, false) => self.volume_bar_up = true,
+            (false, _) if std::mem::take(&mut self.volume_bar_up) => self.state.needs_redraw = true,
+            _ => {}
+        }
+        // The dock's halves come in from the sides after an unlock.
+        if let Some(t) = self.state.lock.take_unlocked() {
+            self.state.dock.rise(t + 250_000_000);
+        }
+        // A notification's banner slides in and out.
+        if let Some(n) = self.state.notes.banner(now) {
+            let age = now.saturating_sub(n.at_ns);
+            if age < 300_000_000 || age + 300_000_000 > crate::notify::BANNER_NS {
+                self.state.needs_redraw = true;
+            }
+        }
+        if self.state.lock.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+        }
+        if self.state.system.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        if self.state.pen.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        if self.state.grid.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        if self.state.curtain.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(hybris_hwc::now_ns());
+        }
+        if self.state.shade.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(hybris_hwc::now_ns());
+        }
+        // Nothing went to hwcomposer (nothing changed): no vsync will show
+        // it, so the clients hear now.
+        if self.pacing.callbacks == Callbacks::After || (self.pacing.callbacks == Callbacks::Vsync && !cost.swapped) {
+            let time = std::time::Duration::from_nanos(shown_at.saturating_sub(self.screen.clock_origin_ns));
+            self.screen.send_frames(&self.state, time);
+            let _ = self.state.display_handle.flush_clients();
+        } else if self.pacing.callbacks == Callbacks::Vsync {
+            self.pacing.callbacks_due = true;
+        }
+    }
+
+    fn log_report(&mut self) {
+        let st = take_stats();
+        let v = vsyncs();
+        let r = std::mem::take(&mut self.report);
+        let lat = &r.touch_to_screen_ms;
+        let lat_text = if lat.is_empty() {
+            String::from("-")
+        } else {
+            let mean = lat.iter().sum::<f64>() / lat.len() as f64;
+            let max = lat.iter().cloned().fold(0.0, f64::max);
+            format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
+        };
+        tracing::info!(
+            "drawn {:3} of {:3}  missed {:2}  commits {:3} (at once {})  draw {} (elements {}) swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  GPU boost {:.0}%  errors {}",
+            r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits), r.asap,
+            mean_max(&r.draw_ms), mean_max(&r.elements_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), st.fast, mean_max(&r.damaged_share),
+            r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text,
+            mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms),
+            self.state.boost.take_share(hybris_hwc::now_ns(), 1_000_000_000), st.errors
+        );
+        self.report.vsyncs_at_last = v;
+    }
+}
+
+struct Args {
+    seconds: Option<u64>,
+    spawn: Vec<String>,
+}
+
+fn args() -> Args {
+    let mut a = Args { seconds: None, spawn: Vec::new() };
+    let mut it = std::env::args().skip(1);
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "--seconds" => a.seconds = it.next().and_then(|s| s.parse().ok()),
+            "--spawn" => a.spawn.extend(it.next()),
+            other => eprintln!("unknown argument: {other}"),
+        }
+    }
+    a
+}
+
+fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,item_compositor=info")),
+        )
+        .init();
+    let args = args();
+
+    let mut event_loop: EventLoop<Data> = EventLoop::try_new().expect("event loop");
+    let display: Display<State> = Display::new().expect("display");
+    let dh = display.handle();
+
+    let screen = Screen::new(&dh);
+
+    // A fixed name, so the session can hand it to the portals before we run.
+    let listening = ListeningSocketSource::with_name("wayland-item").expect("wayland socket");
+    let socket_name = listening.socket_name().to_os_string();
+    let handle = event_loop.handle();
+    handle
+        .insert_source(listening, |stream, _, data: &mut Data| {
+            if let Err(e) = data.state.display_handle.insert_client(stream, Arc::new(ClientState::default())) {
+                tracing::warn!("a client could not connect: {e}");
+            }
+        })
+        .expect("socket source");
+    handle
+        .insert_source(Generic::new(display, Interest::READ, CalloopMode::Level), |_, display, data: &mut Data| {
+            unsafe { display.get_mut().dispatch_clients(&mut data.state).unwrap() };
+            if std::mem::take(&mut data.state.client_frame) {
+                data.on_client_frame();
+            }
+            Ok(PostAction::Continue)
+        })
+        .expect("display source");
+    input::init(&handle);
+
+    // hwcomposer's vsync, on its own thread, wakes the loop.
+    let (ping, vsync_source) = make_ping().expect("ping");
+    hybris_hwc::set_vsync_handler(move |_| ping.ping());
+    handle.insert_source(vsync_source, |_, _, data: &mut Data| data.on_vsync()).expect("vsync source");
+
+    handle
+        .insert_source(Timer::from_duration(std::time::Duration::from_millis(50)), |_, _, data: &mut Data| {
+            data.on_watchdog();
+            TimeoutAction::ToDuration(std::time::Duration::from_millis(50))
+        })
+        .expect("watchdog timer");
+    handle
+        .insert_source(Timer::from_duration(std::time::Duration::from_secs(1)), |_, _, data: &mut Data| {
+            data.log_report();
+            // `touch /tmp/item-shot` asks for a screenshot of the next frame.
+            if std::fs::remove_file("/tmp/item-shot").is_ok() {
+                data.screen.shot = Some(format!("/tmp/item-shot-{}.rgba", data.started.elapsed().as_secs()));
+                data.state.needs_redraw = true;
+            }
+            // `touch /tmp/item-frames` asks for the next 40 frames.
+            if std::fs::remove_file("/tmp/item-frames").is_ok() {
+                data.screen.frames_left = 40;
+            }
+            if data.state.shade.visible() && data.state.shade.refresh_text() {
+                data.state.needs_redraw = true;
+            }
+            // For tests: `touch /tmp/item-rise` is the dock's rise after an
+            // unlock.
+            if std::fs::remove_file("/tmp/item-rise").is_ok() {
+                data.state.dock.rise(hybris_hwc::now_ns());
+                data.state.needs_redraw = true;
+            }
+            // `touch /tmp/item-stroke` draws a wave with the pen's pressure
+            // rising along it on the open sheet, for tests.
+            if std::fs::remove_file("/tmp/item-stroke").is_ok() {
+                data.state.pen.test_stroke();
+                data.state.needs_redraw = true;
+            }
+            // `touch /tmp/item-power` is the power key, for tests.
+            if std::fs::remove_file("/tmp/item-power").is_ok() {
+                data.state.lock.power_key();
+                data.state.needs_redraw = true;
+            }
+            if data.state.lock.relit() {
+                data.screen.reprime = 3;
+                data.state.needs_redraw = true;
+            }
+            if data.state.lock.locked && data.state.lock.refresh() {
+                data.state.needs_redraw = true;
+            }
+            if data.state.system.refresh() {
+                data.state.needs_redraw = true;
+            }
+            if data.state.clock.refresh() {
+                data.state.needs_redraw = true;
+            }
+            // A banner up, or just gone: a frame, so it goes.
+            if data.state.shade.quick.volume_bar_state(hybris_hwc::now_ns()).0 || data.volume_bar_up {
+                data.state.needs_redraw = true;
+            }
+            if data.state.notes.banner(hybris_hwc::now_ns()).is_some() || data.state.shade.quick.banner_at.get().is_some() {
+                data.state.needs_redraw = true;
+            }
+            if let Some(s) = data.state.stop_after {
+                if data.started.elapsed().as_secs() >= s {
+                    data.state.loop_signal.stop();
+                }
+            }
+            TimeoutAction::ToDuration(std::time::Duration::from_secs(1))
+        })
+        .expect("report timer");
+
+    // The quick settings' thread wakes the loop when it has read the system.
+    let (wake, wake_source) = make_ping().expect("ping");
+    handle
+        .insert_source(wake_source, |_, _, data: &mut Data| {
+            data.state.lock.poll();
+            data.state.system.refresh();
+            data.state.needs_redraw = true;
+            data.on_client_frame();
+        })
+        .expect("wake source");
+    let mut state = State::new(dh.clone(), event_loop.get_signal(), wake);
+    // The output's global after xdg-output's manager (made in State::new):
+    // phosh-osk-stevia asks the manager for each wl_output as it is
+    // announced, and crashed on a null manager when the output came first.
+    let _output_global = screen.output.create_global::<State>(&dh);
+    state.stop_after = args.seconds;
+    state.space.map_output(&screen.output, (0, 0));
+    tracing::info!("listening on {:?}", socket_name);
+
+    state.socket_name = socket_name.clone();
+    // The on-screen keyboard, the port's (layers.rs): its user unit, which
+    // phosh's session starts, restarted now that our socket is up - it takes
+    // the session's WAYLAND_DISPLAY, ours for the run. A second stevia of our
+    // own fought it for the input method (the second one gets "unavailable").
+    // No unit: stevia started directly. NO_OSK=1 leaves it out.
+    if std::env::var_os("NO_OSK").is_none() {
+        state.spawn("systemctl --user restart mobi.phosh.OSK.service 2>/dev/null || exec phosh-osk-stevia --replace");
+    }
+    for command in &args.spawn {
+        state.spawn(command);
+    }
+
+    let pacing = Pacing::from_env();
+    tracing::info!(
+        "pacing: {}, margin {:.1} ms, clients' frames {}, frame callbacks {:?}",
+        if pacing.late { "late in the frame" } else { "at the vsync" },
+        pacing.margin_ns as f64 / 1e6,
+        if pacing.asap { "at once" } else { "at the vsync" },
+        pacing.callbacks
+    );
+    let mut data = Data {
+        volume_bar_up: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+    data.report.vsyncs_at_last = vsyncs();
+    let _ = now_ns();
+    // The shade's text goes to the GPU now, not at the first pull.
+    data.screen.warm_up(&data.state);
+    // The first frame, which starts hwcomposer's vsyncs.
+    data.draw_if_needed();
+    event_loop
+        .run(None, &mut data, |data| {
+            data.state.space.refresh();
+            data.state.popups.cleanup();
+            let _ = data.state.display_handle.flush_clients();
+        })
+        .expect("event loop");
+}

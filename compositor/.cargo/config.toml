@@ -1,0 +1,7 @@
+# Cross builds for the Duo: cargo build --release --target aarch64-unknown-linux-gnu
+# (tools/fetch-sysroot.sh first: the phone's libraries to link against).
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+# The phone's libraries want a newer glibc than the cross toolchain's; they
+# resolve on the phone, which has it.
+rustflags = ["-L", "native=sysroot/lib", "-C", "link-arg=-Wl,--allow-shlib-undefined"]

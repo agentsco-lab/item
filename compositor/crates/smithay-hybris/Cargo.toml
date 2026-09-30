@@ -1,0 +1,8 @@
+[package]
+name = "smithay-hybris"
+version = "0.1.0"
+edition = "2021"
+description = "smithay's native EGL traits for libhybris without GBM: the Android platform and hwcomposer's window"
+
+[dependencies]
+smithay = { version = "0.7", default-features = false, features = ["backend_egl"] }

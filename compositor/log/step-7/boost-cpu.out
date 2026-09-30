@@ -1,0 +1,309 @@
+touch: item swipe (/dev/input/event10)
+pacing: late in the frame, margin 4.0 ms, clients' frames at once
+warm-up: 12 textures in 2.1 ms
+missed: drawn -14991305.2 ms before the vsync, draw 10.0 swap 531.7, presented 14991846.9 ms late: 0.0 after the last present, validate 4.2, present 527.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.0 ms before the vsync, draw 10.4 swap 4.1, presented 7.4 ms late: 29.9 after the last present, validate 1.4, present 2.5, GPU done; redrawn 100%, shade 0 still / 0 still
+drawn   3 of  23  missed  2  commits   0 (at once 0)  draw 7.9/10.4 (elements 0.1/0.1) swap 179.7/531.7 (present 179.6/531.6, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 16.2  touches 1  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+drawn  29 of  60  missed  0  commits   5 (at once 3)  draw 2.1/4.0 (elements 0.2/1.3) swap 1.6/2.3 (present 1.7/2.2, fast 0) ms  redrawn 86.2/100.0%  no damage 4  budget 10.9  touches 2  touch->screen 1 mean 24.8 max 24.8 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 0.4 ms before the vsync, draw 3.0 swap 2.0, presented 4.7 ms late: 21.8 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.1 ms before the vsync, draw 3.1 swap 2.9, presented 4.1 ms late: 25.7 after the last present, validate 1.3, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  34 of  60  missed  2  commits   8 (at once 8)  draw 1.7/3.6 (elements 0.3/1.3) swap 1.4/3.2 (present 1.8/3.1, fast 0) ms  redrawn 73.5/100.0%  no damage 9  budget 12.6  touches 3  touch->screen 1 mean 76.6 max 76.6 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 0.2 ms before the vsync, draw 2.8 swap 2.4, presented 5.0 ms late: 24.4 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.0 ms before the vsync, draw 2.5 swap 2.4, presented 3.0 ms late: 25.7 after the last present, validate 0.8, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.6 ms before the vsync, draw 2.7 swap 2.3, presented 0.6 ms late: 26.6 after the last present, validate 1.1, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 3.3 swap 2.6, presented 3.6 ms late: 23.6 after the last present, validate 1.1, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.9 swap 2.5, presented 2.5 ms late: 25.1 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.4 ms before the vsync, draw 2.6 swap 2.1, presented 2.3 ms late: 19.0 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.5 ms before the vsync, draw 2.7 swap 3.2, presented 0.4 ms late: 17.5 after the last present, validate 2.0, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.4 swap 2.1, presented 1.5 ms late: 22.1 after the last present, validate 0.9, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.9 ms before the vsync, draw 5.3 swap 2.7, presented 0.1 ms late: 27.2 after the last present, validate 1.0, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.1 ms before the vsync, draw 2.4 swap 2.2, presented 0.5 ms late: 21.2 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.1 ms before the vsync, draw 1.9 swap 1.5, presented 2.4 ms late: 20.0 after the last present, validate 0.6, present 0.9, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.6 ms before the vsync, draw 3.4 swap 3.0, presented 1.8 ms late: 39.6 after the last present, validate 1.2, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  42 of  60  missed 12  commits  42 (at once 40)  draw 2.7/5.3 (elements 1.0/1.4) swap 2.5/6.6 (present 2.3/6.4, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 13.2  touches 4  touch->screen 1 mean 22.6 max 22.6 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 6.1 ms before the vsync, draw 2.6 swap 4.0, presented 0.6 ms late: 25.5 after the last present, validate 2.5, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.4 ms before the vsync, draw 3.0 swap 3.7, presented 6.3 ms late: 26.3 after the last present, validate 2.2, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.8 ms before the vsync, draw 3.3 swap 2.5, presented 1.0 ms late: 22.3 after the last present, validate 1.1, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.1 ms before the vsync, draw 2.7 swap 2.5, presented 1.2 ms late: 20.6 after the last present, validate 1.0, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.8 ms before the vsync, draw 3.0 swap 2.5, presented 3.7 ms late: 23.4 after the last present, validate 1.0, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 3.6 swap 2.3, presented 3.6 ms late: 22.7 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.8 swap 2.4, presented 2.2 ms late: 23.2 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.8 ms before the vsync, draw 2.9 swap 2.3, presented 0.5 ms late: 18.7 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 6.2 ms before the vsync, draw 2.6 swap 7.8, presented 4.2 ms late: 29.9 after the last present, validate 6.5, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.5 ms before the vsync, draw 2.9 swap 2.3, presented 0.7 ms late: 17.5 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.2 ms before the vsync, draw 3.2 swap 2.4, presented 5.5 ms late: 23.6 after the last present, validate 0.8, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.1 ms before the vsync, draw 2.8 swap 2.2, presented 3.0 ms late: 24.5 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 12  commits  44 (at once 41)  draw 2.8/3.6 (elements 1.1/1.6) swap 2.7/7.8 (present 2.6/7.7, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 12.9  touches 4  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 8.8 ms before the vsync, draw 6.6 swap 2.6, presented 0.5 ms late: 28.4 after the last present, validate 1.2, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.5 ms before the vsync, draw 3.6 swap 2.7, presented 0.8 ms late: 39.8 after the last present, validate 1.3, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.7 ms before the vsync, draw 3.6 swap 2.6, presented 2.6 ms late: 25.7 after the last present, validate 1.1, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.7 ms before the vsync, draw 4.0 swap 2.4, presented 2.8 ms late: 23.3 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 2.5 swap 1.8, presented 1.6 ms late: 22.4 after the last present, validate 0.6, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.9 ms before the vsync, draw 2.7 swap 7.5, presented 9.4 ms late: 27.7 after the last present, validate 6.1, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.1 ms before the vsync, draw 2.8 swap 2.3, presented 3.1 ms late: 21.1 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 12.9 ms before the vsync, draw 2.2 swap 11.8, presented 1.2 ms late: 23.2 after the last present, validate 0.7, present 10.9, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.0 ms before the vsync, draw 8.3 swap 2.3, presented 9.6 ms late: 27.8 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.4 ms before the vsync, draw 2.1 swap 12.5, presented 1.2 ms late: 24.9 after the last present, validate 0.7, present 11.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.2 ms before the vsync, draw 2.6 swap 3.2, presented 1.7 ms late: 23.0 after the last present, validate 1.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.3 ms before the vsync, draw 3.2 swap 1.6, presented 3.5 ms late: 29.7 after the last present, validate 0.6, present 0.8, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.6 ms before the vsync, draw 2.4 swap 9.1, presented 1.8 ms late: 25.4 after the last present, validate 7.5, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  45 of  61  missed 13  commits  45 (at once 38)  draw 3.2/8.3 (elements 1.4/7.1) swap 3.0/12.5 (present 2.9/12.2, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 18.4  touches 5  touch->screen 1 mean 24.2 max 24.2 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 8.3 ms before the vsync, draw 2.2 swap 7.4, presented 1.4 ms late: 21.1 after the last present, validate 6.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.6 ms before the vsync, draw 3.3 swap 2.7, presented 0.5 ms late: 24.1 after the last present, validate 1.1, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.2 ms before the vsync, draw 3.2 swap 2.4, presented 3.5 ms late: 22.3 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.4 ms before the vsync, draw 2.9 swap 2.2, presented 2.7 ms late: 22.0 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 4.8 swap 2.2, presented 4.8 ms late: 25.7 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.0 ms before the vsync, draw 3.4 swap 2.7, presented 4.2 ms late: 25.3 after the last present, validate 1.1, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.9 ms before the vsync, draw 2.7 swap 2.1, presented 1.0 ms late: 21.9 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.7 ms before the vsync, draw 7.6 swap 2.6, presented 0.6 ms late: 27.6 after the last present, validate 1.1, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 6.3 ms before the vsync, draw 7.5 swap 2.4, presented 3.6 ms late: 25.5 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 9.2 swap 1.9, presented 6.3 ms late: 27.4 after the last present, validate 0.8, present 1.0, GPU done; redrawn 100%, shade 0 still / 0 still
+missed: drawn 12.3 ms before the vsync, draw 2.5 swap 10.8, presented 1.0 ms late: 23.4 after the last present, validate 0.8, present 9.8, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 2.5 swap 2.2, presented 2.3 ms late: 23.0 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.9 ms before the vsync, draw 3.5 swap 2.2, presented 4.8 ms late: 24.7 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 13  commits  44 (at once 39)  draw 3.3/9.2 (elements 1.2/6.1) swap 2.7/10.8 (present 2.6/10.7, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 14.5  touches 6  touch->screen 1 mean 35.1 max 35.1 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 3.0 ms before the vsync, draw 2.7 swap 2.4, presented 2.1 ms late: 19.7 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.6 ms before the vsync, draw 4.9 swap 2.8, presented 6.1 ms late: 37.4 after the last present, validate 1.1, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.4 ms before the vsync, draw 2.9 swap 2.3, presented 4.8 ms late: 24.7 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.8 ms before the vsync, draw 3.1 swap 2.4, presented 3.7 ms late: 24.8 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.8 ms before the vsync, draw 2.8 swap 2.1, presented 1.2 ms late: 22.9 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.6 ms before the vsync, draw 2.8 swap 2.0, presented 1.3 ms late: 22.4 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.6 ms before the vsync, draw 2.6 swap 2.0, presented 3.1 ms late: 20.4 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.1 ms before the vsync, draw 9.4 swap 2.0, presented 10.4 ms late: 29.4 after the last present, validate 0.8, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.5 ms before the vsync, draw 2.6 swap 12.3, presented 1.4 ms late: 24.3 after the last present, validate 0.7, present 11.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.7 ms before the vsync, draw 3.3 swap 2.4, presented 5.1 ms late: 25.3 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 4.5 swap 2.5, presented 4.2 ms late: 25.3 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 2.7 swap 2.1, presented 2.2 ms late: 21.6 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 8.7 swap 2.2, presented 8.2 ms late: 27.1 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.9 ms before the vsync, draw 2.8 swap 12.0, presented 1.0 ms late: 28.3 after the last present, validate 0.8, present 11.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.4 ms before the vsync, draw 2.9 swap 2.4, presented 3.9 ms late: 21.8 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.0 ms before the vsync, draw 3.2 swap 2.4, presented 3.7 ms late: 22.9 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 16  commits  44 (at once 42)  draw 3.2/9.4 (elements 1.1/3.3) swap 2.8/12.3 (present 2.7/12.2, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 16.7  touches 7  touch->screen 1 mean 24.7 max 24.7 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 2.4 ms before the vsync, draw 2.8 swap 2.1, presented 2.6 ms late: 20.0 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.9 ms before the vsync, draw 8.1 swap 2.2, presented 2.5 ms late: 27.4 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.1 ms before the vsync, draw 3.3 swap 2.8, presented 3.0 ms late: 24.1 after the last present, validate 0.9, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 2.7 swap 2.3, presented 2.5 ms late: 23.9 after the last present, validate 0.8, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.1 ms before the vsync, draw 9.3 swap 1.9, presented 2.2 ms late: 25.0 after the last present, validate 0.7, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.2 ms before the vsync, draw 2.7 swap 2.3, presented 1.9 ms late: 21.8 after the last present, validate 0.8, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.7 ms before the vsync, draw 3.3 swap 3.1, presented 5.6 ms late: 37.0 after the last present, validate 1.1, present 1.7, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.1 ms before the vsync, draw 3.0 swap 2.1, presented 4.1 ms late: 23.2 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.4 ms before the vsync, draw 2.8 swap 2.7, presented 2.2 ms late: 23.3 after the last present, validate 1.1, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.0 ms before the vsync, draw 7.4 swap 2.3, presented 7.8 ms late: 28.1 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 14.0 ms before the vsync, draw 2.5 swap 12.6, presented 1.2 ms late: 26.6 after the last present, validate 0.8, present 11.7, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.5 ms before the vsync, draw 3.3 swap 2.6, presented 2.6 ms late: 24.8 after the last present, validate 0.9, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.1 ms before the vsync, draw 3.2 swap 2.5, presented 5.7 ms late: 23.3 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.6 ms before the vsync, draw 3.7 swap 3.9, presented 2.1 ms late: 22.9 after the last present, validate 1.8, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 14  commits  44 (at once 40)  draw 3.2/9.3 (elements 1.3/8.2) swap 2.6/12.6 (present 2.5/12.5, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 15.2  touches 8  touch->screen 1 mean 24.4 max 24.4 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 3.5 ms before the vsync, draw 2.8 swap 3.5, presented 2.9 ms late: 23.3 after the last present, validate 0.9, present 2.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 3.0 swap 2.3, presented 0.6 ms late: 21.3 after the last present, validate 0.8, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.4 ms before the vsync, draw 6.4 swap 2.1, presented 6.1 ms late: 22.9 after the last present, validate 0.9, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.3 ms before the vsync, draw 3.0 swap 2.5, presented 4.3 ms late: 23.6 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.5 swap 2.1, presented 1.8 ms late: 19.9 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 2.9 swap 2.2, presented 0.3 ms late: 23.6 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.5 ms before the vsync, draw 3.2 swap 2.1, presented 3.8 ms late: 20.7 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.4 ms before the vsync, draw 3.4 swap 2.3, presented 3.6 ms late: 21.0 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.2 ms before the vsync, draw 4.4 swap 2.6, presented 5.9 ms late: 27.3 after the last present, validate 1.0, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 3.8 swap 2.1, presented 3.2 ms late: 21.8 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 15.8 ms before the vsync, draw 1.6 swap 16.1, presented 1.8 ms late: 24.4 after the last present, validate 0.5, present 15.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.0 ms before the vsync, draw 3.5 swap 4.8, presented 7.3 ms late: 25.4 after the last present, validate 3.6, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.7 ms before the vsync, draw 8.7 swap 2.2, presented 5.2 ms late: 27.0 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.8 ms before the vsync, draw 2.8 swap 3.5, presented 2.5 ms late: 23.7 after the last present, validate 1.5, present 1.8, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 14  commits  44 (at once 40)  draw 3.3/8.7 (elements 1.5/6.9) swap 2.8/16.1 (present 2.7/16.0, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 17.7  touches 9  touch->screen 1 mean 26.0 max 26.0 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 3.1 ms before the vsync, draw 2.3 swap 2.6, presented 1.7 ms late: 18.9 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.0 ms before the vsync, draw 2.4 swap 2.1, presented 0.4 ms late: 19.7 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.4 ms before the vsync, draw 3.3 swap 2.5, presented 2.5 ms late: 24.2 after the last present, validate 1.1, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 3.6 swap 2.7, presented 3.6 ms late: 23.2 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.3 ms before the vsync, draw 3.1 swap 2.8, presented 1.7 ms late: 35.5 after the last present, validate 1.1, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 2.6 swap 2.2, presented 2.4 ms late: 22.7 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 6.3 ms before the vsync, draw 4.1 swap 2.3, presented 0.1 ms late: 23.3 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.5 ms before the vsync, draw 2.5 swap 8.1, presented 1.0 ms late: 19.7 after the last present, validate 0.7, present 7.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 2.9 swap 2.6, presented 3.0 ms late: 22.2 after the last present, validate 1.1, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 3.4 swap 2.6, presented 3.6 ms late: 21.5 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.0 ms before the vsync, draw 2.7 swap 3.1, presented 1.8 ms late: 22.1 after the last present, validate 1.5, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 11  commits  44 (at once 38)  draw 2.9/9.5 (elements 1.2/8.0) swap 2.8/8.1 (present 2.7/7.9, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 13.9  touches 10  touch->screen 1 mean 35.5 max 35.5 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 0.5 ms before the vsync, draw 3.4 swap 2.1, presented 5.0 ms late: 22.8 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 10.2 ms before the vsync, draw 2.4 swap 8.9, presented 1.2 ms late: 22.4 after the last present, validate 0.7, present 8.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 12.7 ms before the vsync, draw 2.5 swap 11.4, presented 1.1 ms late: 24.1 after the last present, validate 0.8, present 10.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.2 ms before the vsync, draw 8.9 swap 2.2, presented 2.1 ms late: 27.3 after the last present, validate 0.9, present 1.2, GPU done; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.2 ms before the vsync, draw 7.6 swap 2.4, presented 5.8 ms late: 25.4 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.3 ms before the vsync, draw 2.5 swap 1.9, presented 0.1 ms late: 18.5 after the last present, validate 0.7, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.5 ms before the vsync, draw 3.1 swap 2.4, presented 1.0 ms late: 23.0 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.6 ms before the vsync, draw 3.0 swap 2.9, presented 3.4 ms late: 23.1 after the last present, validate 1.4, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.9 ms before the vsync, draw 3.7 swap 2.0, presented 3.9 ms late: 22.8 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.7 ms before the vsync, draw 3.5 swap 2.6, presented 0.4 ms late: 25.6 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.5 ms before the vsync, draw 3.9 swap 2.3, presented 5.8 ms late: 25.7 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.1 ms before the vsync, draw 3.4 swap 2.3, presented 3.7 ms late: 23.5 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.8 ms before the vsync, draw 3.7 swap 2.9, presented 0.9 ms late: 38.3 after the last present, validate 1.1, present 1.6, GPU done; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.0 ms before the vsync, draw 3.1 swap 4.5, presented 5.7 ms late: 25.8 after the last present, validate 2.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  45 of  60  missed 14  commits  45 (at once 40)  draw 3.3/8.9 (elements 1.2/6.5) swap 2.7/11.4 (present 2.6/11.3, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 14.0  touches 11  touch->screen 1 mean 23.8 max 23.8 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 2.8 ms before the vsync, draw 3.2 swap 3.3, presented 3.7 ms late: 26.2 after the last present, validate 1.0, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.3 ms before the vsync, draw 2.7 swap 2.3, presented 1.7 ms late: 21.2 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 9.4 swap 1.9, presented 8.8 ms late: 26.8 after the last present, validate 0.8, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.4 ms before the vsync, draw 2.4 swap 12.1, presented 1.2 ms late: 25.9 after the last present, validate 0.8, present 11.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.2 ms before the vsync, draw 2.5 swap 1.9, presented 3.3 ms late: 20.2 after the last present, validate 0.8, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.6 ms before the vsync, draw 3.0 swap 2.5, presented 4.9 ms late: 21.8 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.2 ms before the vsync, draw 2.8 swap 2.7, presented 0.3 ms late: 21.1 after the last present, validate 0.9, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.7 ms before the vsync, draw 3.1 swap 2.4, presented 1.9 ms late: 19.9 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.3 ms before the vsync, draw 2.6 swap 2.2, presented 1.5 ms late: 21.0 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.4 ms before the vsync, draw 3.0 swap 2.3, presented 1.9 ms late: 21.8 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.5 ms before the vsync, draw 3.0 swap 3.2, presented 1.7 ms late: 23.5 after the last present, validate 1.5, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  45 of  60  missed 11  commits  45 (at once 43)  draw 2.9/9.4 (elements 1.1/1.4) swap 2.8/12.1 (present 2.7/11.9, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 12.5  touches 12  touch->screen 1 mean 9.9 max 9.9 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 2.2 ms before the vsync, draw 3.2 swap 2.6, presented 3.7 ms late: 39.1 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 3.1 swap 2.4, presented 2.6 ms late: 21.8 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.8 ms before the vsync, draw 2.9 swap 2.4, presented 4.5 ms late: 21.7 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.8 ms before the vsync, draw 2.4 swap 2.3, presented 0.9 ms late: 22.2 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.3 ms before the vsync, draw 2.7 swap 2.3, presented 3.7 ms late: 22.4 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.6 ms before the vsync, draw 2.7 swap 2.3, presented 1.4 ms late: 19.2 after the last present, validate 0.8, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.3 ms before the vsync, draw 2.8 swap 2.4, presented 5.0 ms late: 23.0 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.7 ms before the vsync, draw 2.6 swap 2.2, presented 0.1 ms late: 21.2 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.6 ms before the vsync, draw 3.4 swap 2.7, presented 5.5 ms late: 24.8 after the last present, validate 1.2, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.2 ms before the vsync, draw 2.8 swap 2.3, presented 2.9 ms late: 23.6 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.7 ms before the vsync, draw 3.1 swap 4.0, presented 5.5 ms late: 26.7 after the last present, validate 2.7, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 3.4 swap 2.6, presented 1.1 ms late: 19.1 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.3 ms before the vsync, draw 3.3 swap 2.4, presented 0.5 ms late: 32.6 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.8 swap 5.7, presented 5.6 ms late: 22.8 after the last present, validate 4.2, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 9.3 swap 2.4, presented 6.8 ms late: 30.5 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 15  commits  44 (at once 41)  draw 3.1/9.3 (elements 1.1/1.7) swap 2.6/6.8 (present 2.5/6.6, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 17.9  touches 12  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 4.6 ms before the vsync, draw 2.8 swap 2.3, presented 0.5 ms late: 19.2 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.2 ms before the vsync, draw 3.2 swap 2.3, presented 0.3 ms late: 24.5 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 10.1 ms before the vsync, draw 10.3 swap 2.4, presented 2.7 ms late: 29.4 after the last present, validate 1.1, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.7 ms before the vsync, draw 2.8 swap 2.2, presented 4.2 ms late: 23.1 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.8 ms before the vsync, draw 3.3 swap 2.9, presented 5.5 ms late: 23.2 after the last present, validate 1.0, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 3.1 swap 3.7, presented 1.9 ms late: 19.5 after the last present, validate 1.5, present 2.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.0 ms before the vsync, draw 2.7 swap 5.5, presented 1.2 ms late: 20.1 after the last present, validate 0.8, present 4.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.7 ms before the vsync, draw 3.4 swap 2.4, presented 5.1 ms late: 22.5 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.4 ms before the vsync, draw 2.8 swap 2.2, presented 2.8 ms late: 21.9 after the last present, validate 1.0, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.3 ms before the vsync, draw 2.2 swap 12.3, presented 1.3 ms late: 24.0 after the last present, validate 0.8, present 11.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 2.7 swap 5.1, presented 5.6 ms late: 24.9 after the last present, validate 3.6, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  45 of  60  missed 11  commits  45 (at once 40)  draw 3.5/10.3 (elements 1.5/8.6) swap 2.8/12.3 (present 2.7/12.2, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 16.6  touches 13  touch->screen 1 mean 26.5 max 26.5 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 4.8 ms before the vsync, draw 3.5 swap 2.7, presented 1.5 ms late: 20.1 after the last present, validate 0.9, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.4 swap 2.4, presented 1.9 ms late: 22.5 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 6.0 ms before the vsync, draw 3.2 swap 3.2, presented 0.4 ms late: 20.8 after the last present, validate 1.3, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 2.8 swap 2.2, presented 0.2 ms late: 21.7 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.1 ms before the vsync, draw 3.9 swap 3.0, presented 1.9 ms late: 39.3 after the last present, validate 1.2, present 1.6, GPU done; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.2 ms before the vsync, draw 3.5 swap 2.6, presented 4.7 ms late: 25.2 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 2.7 swap 2.2, presented 2.4 ms late: 20.9 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.4 ms before the vsync, draw 2.4 swap 2.3, presented 1.4 ms late: 23.4 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.9 ms before the vsync, draw 2.8 swap 2.0, presented 0.9 ms late: 18.3 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 8.2 swap 2.2, presented 8.2 ms late: 27.9 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.2 ms before the vsync, draw 2.8 swap 11.4, presented 1.0 ms late: 26.2 after the last present, validate 0.8, present 10.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.7 ms before the vsync, draw 2.5 swap 2.2, presented 1.0 ms late: 21.7 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.5 ms before the vsync, draw 3.1 swap 2.4, presented 1.0 ms late: 17.8 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.2 ms before the vsync, draw 2.5 swap 3.0, presented 0.0 ms late: 22.4 after the last present, validate 1.3, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 3.2 swap 2.2, presented 2.9 ms late: 23.2 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.4 ms before the vsync, draw 3.1 swap 2.1, presented 2.9 ms late: 21.0 after the last present, validate 1.0, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  61  missed 16  commits  44 (at once 37)  draw 3.1/8.2 (elements 1.2/2.4) swap 2.7/11.4 (present 2.6/11.3, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 14.1  touches 14  touch->screen 1 mean 24.9 max 24.9 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 4.4 ms before the vsync, draw 3.1 swap 2.4, presented 1.1 ms late: 24.1 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.8 ms before the vsync, draw 2.4 swap 2.2, presented 2.9 ms late: 20.2 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.7 ms before the vsync, draw 3.3 swap 2.4, presented 4.0 ms late: 23.9 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 3.2 swap 2.5, presented 3.5 ms late: 39.7 after the last present, validate 1.2, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.0 ms before the vsync, draw 3.5 swap 2.7, presented 5.2 ms late: 25.9 after the last present, validate 0.9, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.6 ms before the vsync, draw 2.9 swap 2.2, presented 2.5 ms late: 22.0 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.1 ms before the vsync, draw 3.1 swap 5.1, presented 1.2 ms late: 24.8 after the last present, validate 3.9, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 2.9 swap 2.2, presented 0.1 ms late: 20.4 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.5 ms before the vsync, draw 3.0 swap 1.9, presented 0.5 ms late: 20.7 after the last present, validate 0.8, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.5 ms before the vsync, draw 5.9 swap 1.8, presented 3.2 ms late: 20.4 after the last present, validate 0.7, present 0.9, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 3.2 swap 2.1, presented 2.3 ms late: 22.1 after the last present, validate 0.7, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 8.5 ms before the vsync, draw 2.9 swap 5.8, presented 0.3 ms late: 25.6 after the last present, validate 0.9, present 0.9, GPU done; redrawn 100%, shade 0 still / 0 still
+drawn  43 of  60  missed 12  commits  43 (at once 37)  draw 3.0/5.9 (elements 1.1/2.4) swap 2.4/5.8 (present 2.2/5.0, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 14.8  touches 15  touch->screen 1 mean 24.3 max 24.3 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 3.4 ms before the vsync, draw 2.6 swap 2.2, presented 1.4 ms late: 18.5 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.9 ms before the vsync, draw 2.8 swap 2.8, presented 3.8 ms late: 22.5 after the last present, validate 1.4, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.2 ms before the vsync, draw 4.0 swap 3.2, presented 2.0 ms late: 36.3 after the last present, validate 1.2, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 3.2 swap 5.2, presented 5.8 ms late: 26.7 after the last present, validate 3.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 2.6 swap 2.3, presented 2.2 ms late: 21.7 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.3 ms before the vsync, draw 5.6 swap 2.1, presented 4.5 ms late: 24.5 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 2.6 swap 2.5, presented 0.2 ms late: 22.6 after the last present, validate 1.0, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.8 swap 2.4, presented 2.3 ms late: 20.8 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.6 ms before the vsync, draw 2.9 swap 2.7, presented 3.0 ms late: 20.7 after the last present, validate 1.2, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 2.7 swap 2.6, presented 2.4 ms late: 22.8 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 8.0 swap 2.0, presented 7.2 ms late: 27.0 after the last present, validate 0.8, present 1.0, GPU done; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.8 ms before the vsync, draw 2.7 swap 8.4, presented 9.3 ms late: 27.3 after the last present, validate 6.7, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 12  commits  44 (at once 38)  draw 3.0/8.0 (elements 1.1/1.7) swap 3.0/8.4 (present 2.8/8.3, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 17.5  touches 16  touch->screen 1 mean 38.7 max 38.7 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 1.5 ms before the vsync, draw 3.3 swap 2.5, presented 4.3 ms late: 21.2 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.3 ms before the vsync, draw 6.0 swap 1.5, presented 4.2 ms late: 23.7 after the last present, validate 0.6, present 0.8, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 8.1 swap 2.5, presented 8.4 ms late: 26.2 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.1 ms before the vsync, draw 7.9 swap 1.8, presented 2.6 ms late: 25.4 after the last present, validate 0.7, present 0.9, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.7 ms before the vsync, draw 2.5 swap 6.6, presented 1.4 ms late: 18.5 after the last present, validate 0.7, present 5.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.0 ms before the vsync, draw 3.1 swap 6.2, presented 6.4 ms late: 28.4 after the last present, validate 4.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.6 ms before the vsync, draw 2.6 swap 2.1, presented 2.0 ms late: 21.4 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.6 ms before the vsync, draw 3.4 swap 2.4, presented 2.3 ms late: 24.1 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.7 ms before the vsync, draw 3.3 swap 2.4, presented 2.0 ms late: 22.5 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  43 of  60  missed  9  commits  43 (at once 41)  draw 3.4/9.0 (elements 1.3/7.4) swap 2.6/8.1 (present 2.5/7.9, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 12.8  touches 17  touch->screen 1 mean 21.0 max 21.0 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 2.1 ms before the vsync, draw 2.6 swap 2.7, presented 3.2 ms late: 22.2 after the last present, validate 1.4, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.8 ms before the vsync, draw 8.9 swap 1.9, presented 1.0 ms late: 24.6 after the last present, validate 0.8, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.0 ms before the vsync, draw 2.8 swap 2.2, presented 3.0 ms late: 19.9 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.9 ms before the vsync, draw 3.0 swap 3.0, presented 0.2 ms late: 24.9 after the last present, validate 1.3, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.5 ms before the vsync, draw 3.2 swap 2.4, presented 5.1 ms late: 23.0 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.7 ms before the vsync, draw 3.1 swap 4.1, presented 1.5 ms late: 23.4 after the last present, validate 2.3, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.6 ms before the vsync, draw 3.5 swap 2.1, presented 4.1 ms late: 22.4 after the last present, validate 0.9, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.6 ms before the vsync, draw 2.6 swap 2.2, presented 0.3 ms late: 20.9 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 6.8 ms before the vsync, draw 2.7 swap 4.1, presented 0.1 ms late: 38.2 after the last present, validate 2.5, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 3.0 swap 2.4, presented 0.6 ms late: 19.9 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.9 ms before the vsync, draw 4.0 swap 2.7, presented 3.8 ms late: 21.9 after the last present, validate 1.0, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 11  commits  44 (at once 39)  draw 3.0/8.9 (elements 1.1/1.6) swap 2.6/6.2 (present 2.4/6.1, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 13.4  touches 18  touch->screen 1 mean 23.7 max 23.7 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 0.2 ms before the vsync, draw 3.0 swap 2.5, presented 5.3 ms late: 24.3 after the last present, validate 1.0, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.9 ms before the vsync, draw 2.8 swap 2.3, presented 0.3 ms late: 22.5 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.5 ms before the vsync, draw 3.7 swap 2.5, presented 3.7 ms late: 25.4 after the last present, validate 1.1, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 8.5 ms before the vsync, draw 2.6 swap 7.0, presented 1.1 ms late: 21.6 after the last present, validate 0.9, present 5.9, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.1 ms before the vsync, draw 3.5 swap 7.7, presented 9.2 ms late: 29.4 after the last present, validate 6.2, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.0 ms before the vsync, draw 2.7 swap 2.3, presented 4.1 ms late: 21.6 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.2 ms before the vsync, draw 3.0 swap 2.2, presented 3.1 ms late: 21.6 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.3 ms before the vsync, draw 2.7 swap 2.0, presented 4.5 ms late: 23.3 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.3 ms before the vsync, draw 3.7 swap 2.9, presented 6.4 ms late: 27.6 after the last present, validate 1.1, present 1.6, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.8 ms before the vsync, draw 2.4 swap 2.3, presented 1.9 ms late: 21.0 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.5 ms before the vsync, draw 4.5 swap 3.2, presented 6.6 ms late: 37.9 after the last present, validate 1.1, present 1.9, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.2 ms before the vsync, draw 2.7 swap 2.2, presented 2.8 ms late: 21.1 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.9 ms before the vsync, draw 3.9 swap 2.2, presented 4.3 ms late: 24.4 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 3.3 ms before the vsync, draw 9.4 swap 2.1, presented 8.2 ms late: 28.6 after the last present, validate 0.9, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 14.4 ms before the vsync, draw 2.5 swap 12.9, presented 1.1 ms late: 26.2 after the last present, validate 1.1, present 11.7, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.1 ms before the vsync, draw 3.0 swap 2.8, presented 3.7 ms late: 31.9 after the last present, validate 1.4, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 16  commits  44 (at once 42)  draw 3.2/9.4 (elements 1.1/2.4) swap 2.8/12.9 (present 2.7/12.8, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 18.6  touches 19  touch->screen 1 mean 58.5 max 58.5 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 4.8 ms before the vsync, draw 2.8 swap 2.3, presented 0.2 ms late: 20.3 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.7 ms before the vsync, draw 3.1 swap 2.5, presented 3.0 ms late: 21.1 after the last present, validate 0.9, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.7 ms before the vsync, draw 3.8 swap 2.2, presented 4.4 ms late: 23.3 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 7.1 ms before the vsync, draw 2.9 swap 5.4, presented 1.4 ms late: 27.5 after the last present, validate 4.2, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.5 ms before the vsync, draw 3.2 swap 2.6, presented 0.4 ms late: 23.9 after the last present, validate 1.1, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.9 ms before the vsync, draw 4.1 swap 2.3, presented 4.7 ms late: 23.6 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 3.8 swap 2.1, presented 3.7 ms late: 24.5 after the last present, validate 0.9, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 6.8 ms before the vsync, draw 2.6 swap 6.0, presented 1.9 ms late: 24.2 after the last present, validate 4.2, present 1.7, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.6 ms before the vsync, draw 3.5 swap 2.3, presented 1.3 ms late: 36.6 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.0 ms before the vsync, draw 2.6 swap 2.3, presented 3.1 ms late: 23.2 after the last present, validate 1.0, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.4 ms before the vsync, draw 3.3 swap 2.7, presented 0.7 ms late: 22.8 after the last present, validate 1.1, present 1.4, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  45 of  60  missed 11  commits  45 (at once 41)  draw 2.8/4.1 (elements 1.1/2.4) swap 2.8/8.4 (present 2.6/8.2, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 13.5  touches 19  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 3.4 ms before the vsync, draw 2.8 swap 8.1, presented 7.5 ms late: 29.0 after the last present, validate 6.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.8 ms before the vsync, draw 2.5 swap 2.2, presented 2.9 ms late: 22.8 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.2 ms before the vsync, draw 3.2 swap 2.3, presented 0.2 ms late: 19.4 after the last present, validate 0.9, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.7 ms before the vsync, draw 2.9 swap 7.7, presented 1.0 ms late: 20.4 after the last present, validate 0.8, present 6.7, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 9.4 ms before the vsync, draw 7.4 swap 2.5, presented 0.5 ms late: 26.1 after the last present, validate 1.1, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.4 ms before the vsync, draw 3.0 swap 3.1, presented 0.7 ms late: 21.1 after the last present, validate 1.0, present 1.8, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.2 ms before the vsync, draw 8.5 swap 2.4, presented 8.7 ms late: 27.9 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 12.9 ms before the vsync, draw 3.2 swap 10.8, presented 1.1 ms late: 25.9 after the last present, validate 0.9, present 9.7, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.1 ms before the vsync, draw 2.5 swap 12.0, presented 1.4 ms late: 23.6 after the last present, validate 0.7, present 11.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.4 ms before the vsync, draw 2.7 swap 2.2, presented 3.6 ms late: 20.7 after the last present, validate 1.0, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.4 ms before the vsync, draw 2.7 swap 2.1, presented 4.5 ms late: 23.7 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.2 ms before the vsync, draw 2.6 swap 2.8, presented 0.2 ms late: 23.7 after the last present, validate 1.4, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  44 of  60  missed 12  commits  44 (at once 38)  draw 3.4/8.7 (elements 1.2/7.1) swap 3.0/12.0 (present 2.9/11.9, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 14.6  touches 20  touch->screen 1 mean 25.4 max 25.4 ms  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 3.7 ms before the vsync, draw 3.2 swap 7.0, presented 6.5 ms late: 28.0 after the last present, validate 5.6, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.4 ms before the vsync, draw 2.8 swap 2.1, presented 4.6 ms late: 23.2 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 3.0 swap 2.6, presented 3.4 ms late: 23.6 after the last present, validate 1.0, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.6 ms before the vsync, draw 2.6 swap 2.6, presented 6.8 ms late: 59.9 after the last present, validate 1.4, present 1.0, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 14.6 ms before the vsync, draw 2.5 swap 13.2, presented 1.2 ms late: 27.7 after the last present, validate 0.8, present 12.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.8 ms before the vsync, draw 3.4 swap 3.1, presented 3.7 ms late: 41.5 after the last present, validate 1.5, present 1.5, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 1.8 ms before the vsync, draw 3.1 swap 2.4, presented 3.7 ms late: 44.4 after the last present, validate 1.0, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.3 ms before the vsync, draw 2.6 swap 2.4, presented 2.7 ms late: 90.7 after the last present, validate 0.9, present 1.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn 236 of  60  missed  8  commits 236 (at once 229)  draw 0.3/3.4 (elements 0.1/1.3) swap 0.3/13.2 (present 3.1/13.1, fast 0) ms  redrawn 8.5/100.0%  no damage 216  budget 16.1  touches 20  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+drawn   0 of  60  missed  0  commits   0 (at once 0)  draw - (elements -) swap - (present -, fast 0) ms  redrawn -%  no damage 0  budget 16.1  touches 20  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 1.0 ms before the vsync, draw 2.9 swap 3.9, presented 5.9 ms late: 23.2 after the last present, validate 2.6, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 2.2 ms before the vsync, draw 3.1 swap 2.2, presented 3.3 ms late: 21.7 after the last present, validate 0.9, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 13.5 ms before the vsync, draw 1.9 swap 12.8, presented 1.2 ms late: 24.0 after the last present, validate 0.6, present 12.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.3 ms before the vsync, draw 2.7 swap 2.2, presented 0.6 ms late: 20.7 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 4.1 ms before the vsync, draw 2.9 swap 2.2, presented 1.0 ms late: 21.1 after the last present, validate 0.8, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  20 of  60  missed  5  commits  20 (at once 17)  draw 2.9/7.8 (elements 1.3/6.7) swap 2.9/12.8 (present 2.8/12.7, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 14.6  touches 20  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+missed: drawn 4.1 ms before the vsync, draw 2.4 swap 2.1, presented 0.5 ms late: 20.8 after the last present, validate 0.8, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 8.3 ms before the vsync, draw 2.4 swap 7.1, presented 1.3 ms late: 20.0 after the last present, validate 0.7, present 6.3, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 0.0 ms before the vsync, draw 2.5 swap 2.1, presented 4.7 ms late: 22.0 after the last present, validate 0.7, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.1 ms before the vsync, draw 2.7 swap 5.1, presented 2.7 ms late: 25.1 after the last present, validate 1.0, present 1.1, GPU busy; redrawn 100%, shade 0 still / 0 still
+missed: drawn 5.1 ms before the vsync, draw 2.6 swap 2.7, presented 0.3 ms late: 51.7 after the last present, validate 1.2, present 1.2, GPU busy; redrawn 100%, shade 0 still / 0 still
+drawn  19 of  60  missed  5  commits  19 (at once 16)  draw 3.1/6.7 (elements 1.0/1.3) swap 2.7/7.1 (present 2.6/7.0, fast 0) ms  redrawn 100.0/100.0%  no damage 0  budget 13.6  touches 20  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+drawn   0 of  60  missed  0  commits   0 (at once 0)  draw - (elements -) swap - (present -, fast 0) ms  redrawn -%  no damage 0  budget 13.6  touches 20  touch->screen -  shade->screen - (from the loop -) ms  errors 0
+drawn   0 of  60  missed  0  commits   0 (at once 0)  draw - (elements -) swap - (present -, fast 0) ms  redrawn -%  no damage 0  budget 13.6  touches 20  touch->screen -  shade->screen - (from the loop -) ms  errors 0

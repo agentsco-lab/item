@@ -1,0 +1,11 @@
+[package]
+name = "smithay-frame"
+version = "0.1.0"
+edition = "2021"
+description = "Probe C, stage 1: smithay's GLES renderer drawing into hwcomposer's window on the Surface Duo"
+
+[dependencies]
+hybris-hwc = { path = "../../crates/hybris-hwc" }
+smithay = { version = "0.7", default-features = false, features = ["renderer_gl"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+smithay-hybris = { path = "../../crates/smithay-hybris" }

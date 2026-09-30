@@ -1,0 +1,58 @@
+hotplug: display 0 connected primary
+2026-09-30T13:06:48.381288Z  INFO item_compositor::output: hwcomposer display 0: 2784x1800, vsync 16.667 ms
+2026-09-30T13:06:48.403229Z  WARN smithay::backend::egl::ffi: [EGL] 0x3000 (SUCCESS) eglDebugMessageControlKHR: eglDebugMessageControlKHR is not supported by vendor library. Error reporting may not work correctly.
+2026-09-30T13:06:48.419041Z  WARN smithay::backend::egl::display: Dmabuf import extension not available
+2026-09-30T13:06:48.579926Z  INFO item_compositor::output: EGL bound to the Wayland display
+2026-09-30T13:06:48.582808Z  INFO item_compositor::input: touch: sfduo touchscreen (/dev/input/event6)
+2026-09-30T13:06:48.586292Z  INFO item_compositor: listening on "wayland-item"
+2026-09-30T13:06:48.588327Z  INFO item_compositor: spawned: gnome-calculator
+2026-09-30T13:06:48.589874Z  INFO item_compositor: spawned: GSK_RENDERER=cairo gnome-clocks
+2026-09-30T13:06:48.589895Z  INFO item_compositor: pacing: at the vsync, margin 4.0 ms
+2026-09-30T13:06:49.582978Z  INFO item_compositor: drawn   1 of  26  missed  1  commits   0  draw 7.7/7.7 swap 562.7/562.7 (present 562.7/562.7) ms  redrawn 100.0/100.0%  ages {0: 1}  no damage 0  budget  7.0  touches 0  touch->screen -  errors 0
+
+(gnome-calculator:98487): Gdk-WARNING **: 16:06:49.750: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/98487/root
+
+(org.gnome.clocks:98488): Gdk-WARNING **: 16:06:49.762: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/98488/root
+
+** (org.gnome.clocks:98488): WARNING **: 16:06:49.958: utils.vala:147: Failed to get clock format from portal, fallback to GSettings.
+
+(org.gnome.clocks:98488): Gtk-WARNING **: 16:06:50.010: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/98488/root
+2026-09-30T13:06:50.010457Z  INFO item_compositor::state: window mapped on the left panel, 1.4 s after start
+2026-09-30T13:06:50.174673Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+
+(gnome-calculator:98487): Gtk-WARNING **: 16:06:50.222: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/98487/root
+2026-09-30T13:06:50.223932Z  INFO item_compositor::state: window mapped on the right panel, 1.6 s after start
+2026-09-30T13:06:50.583378Z  INFO item_compositor: drawn   3 of  60  missed  1  commits   3  draw 5.8/14.4 swap 3.8/4.8 (present 3.7/4.6) ms  redrawn 65.7/100.0%  ages {2: 3}  no damage 0  budget 10.1  touches 0  touch->screen -  errors 0
+2026-09-30T13:06:51.261137Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Egl)
+2026-09-30T13:06:51.583648Z  INFO item_compositor: drawn   2 of  60  missed  0  commits   2  draw 4.2/4.2 swap 4.0/4.2 (present 3.8/4.0) ms  redrawn 97.0/97.0%  ages {2: 2}  no damage 0  budget 11.3  touches 0  touch->screen -  errors 0
+2026-09-30T13:06:52.583990Z  INFO item_compositor: drawn   0 of  60  missed  0  commits   0  draw - swap - (present -) ms  redrawn -%  ages {}  no damage 0  budget 11.3  touches 0  touch->screen -  errors 0
+2026-09-30T13:06:53.584282Z  INFO item_compositor: drawn  13 of  60  missed  0  commits  14  draw 1.8/2.6 swap 2.4/3.5 (present 2.3/3.3) ms  redrawn 48.5/48.5%  ages {2: 13}  no damage 0  budget 10.6  touches 3  touch->screen 2 mean 44.5 max 62.5 ms  errors 0
+2026-09-30T13:06:54.584545Z  INFO item_compositor: drawn  40 of  60  missed  0  commits  39  draw 1.8/2.4 swap 2.5/4.3 (present 2.4/4.1) ms  redrawn 48.5/48.5%  ages {2: 40}  no damage 0  budget 10.6  touches 8  touch->screen 6 mean 33.5 max 46.0 ms  errors 0
+2026-09-30T13:06:55.584875Z  INFO item_compositor: drawn  42 of  60  missed  0  commits  43  draw 1.9/3.7 swap 2.5/4.4 (present 2.4/4.2) ms  redrawn 48.5/48.5%  ages {2: 42}  no damage 0  budget 11.0  touches 12  touch->screen 4 mean 27.2 max 35.2 ms  errors 0
+2026-09-30T13:06:56.585132Z  INFO item_compositor: drawn  27 of  60  missed  0  commits  27  draw 2.2/4.0 swap 3.1/5.4 (present 3.0/4.9) ms  redrawn 48.5/48.5%  ages {2: 27}  no damage 0  budget 11.5  touches 18  touch->screen 6 mean 37.8 max 71.0 ms  errors 0
+2026-09-30T13:06:57.585373Z  INFO item_compositor: drawn  43 of  60  missed  0  commits  42  draw 1.9/4.5 swap 2.7/5.3 (present 2.6/5.1) ms  redrawn 48.5/48.5%  ages {2: 43}  no damage 0  budget 10.4  touches 22  touch->screen 4 mean 47.3 max 58.2 ms  errors 0
+2026-09-30T13:06:58.383783Z  INFO item_compositor::state: surface ObjectId(wl_surface@26): buffer Some(Egl)
+2026-09-30T13:06:58.585581Z  INFO item_compositor: drawn  28 of  60  missed  0  commits  28  draw 2.2/4.6 swap 2.7/4.9 (present 3.1/4.6) ms  redrawn 43.3/97.0%  ages {2: 28}  no damage 5  budget 12.1  touches 26  touch->screen 3 mean 108.3 max 261.5 ms  errors 0
+2026-09-30T13:06:58.609299Z  INFO item_compositor::state: surface ObjectId(wl_surface@33): buffer Some(Egl)
+2026-09-30T13:06:59.585878Z  INFO item_compositor: drawn  14 of  60  missed  0  commits  16  draw 3.2/4.7 swap 3.2/5.2 (present 3.3/4.9) ms  redrawn 59.0/97.4%  ages {2: 14}  no damage 1  budget 14.0  touches 26  touch->screen -  errors 0
+2026-09-30T13:07:00.537578Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+2026-09-30T13:07:00.586184Z  INFO item_compositor: drawn  17 of  60  missed  0  commits  18  draw 3.9/6.9 swap 3.8/4.4 (present 3.6/4.2) ms  redrawn 57.0/97.0%  ages {2: 17}  no damage 0  budget 15.2  touches 27  touch->screen 1 mean 25.7 max 25.7 ms  errors 0
+2026-09-30T13:07:01.586692Z  INFO item_compositor: drawn   5 of  60  missed  0  commits   5  draw 11.1/12.2 swap 3.3/3.8 (present 3.1/3.6) ms  redrawn 48.5/48.5%  ages {2: 5}  no damage 0  budget 19.5  touches 27  touch->screen -  errors 0
+2026-09-30T13:07:02.587780Z  INFO item_compositor: drawn   0 of  60  missed  0  commits   0  draw - swap - (present -) ms  redrawn -%  ages {}  no damage 0  budget 19.5  touches 28  touch->screen -  errors 0
+2026-09-30T13:07:03.588317Z  INFO item_compositor: drawn   0 of  60  missed  0  commits   0  draw - swap - (present -) ms  redrawn -%  ages {}  no damage 0  budget 19.5  touches 28  touch->screen -  errors 0
+2026-09-30T13:07:04.588742Z  INFO item_compositor: drawn   8 of  60  missed  1  commits   8  draw 10.7/12.6 swap 3.6/4.9 (present 3.4/4.7) ms  redrawn 48.5/48.5%  ages {2: 8}  no damage 0  budget 23.2  touches 29  touch->screen 1 mean 51.9 max 51.9 ms  errors 0
+2026-09-30T13:07:05.591260Z  INFO item_compositor: drawn  16 of  60  missed  6  commits  16  draw 11.3/14.1 swap 3.9/5.7 (present 3.7/5.5) ms  redrawn 48.5/48.5%  ages {2: 16}  no damage 0  budget 25.9  touches 31  touch->screen 2 mean 53.2 max 53.6 ms  errors 0
+2026-09-30T13:07:06.591478Z  INFO item_compositor: drawn  27 of  60  missed  2  commits  27  draw 10.1/13.9 swap 2.9/5.1 (present 2.8/5.0) ms  redrawn 48.5/48.5%  ages {2: 27}  no damage 0  budget 23.5  touches 35  touch->screen 4 mean 46.1 max 63.4 ms  errors 0
+2026-09-30T13:07:07.591683Z  INFO item_compositor: drawn  20 of  60  missed  1  commits  21  draw 9.4/12.0 swap 2.6/3.8 (present 2.4/3.6) ms  redrawn 48.5/48.5%  ages {2: 20}  no damage 0  budget 22.5  touches 40  touch->screen 4 mean 104.4 max 289.9 ms  errors 0
+2026-09-30T13:07:08.591933Z  INFO item_compositor: drawn  19 of  60  missed  3  commits  18  draw 10.7/16.6 swap 3.1/4.5 (present 2.9/4.2) ms  redrawn 48.5/48.5%  ages {2: 19}  no damage 0  budget 25.0  touches 42  touch->screen 2 mean 47.0 max 59.7 ms  errors 0
+2026-09-30T13:07:09.284608Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Egl)
+2026-09-30T13:07:09.592283Z  INFO item_compositor: drawn  15 of  60  missed  1  commits  16  draw 4.7/12.9 swap 3.3/5.4 (present 3.2/5.2) ms  redrawn 55.0/97.0%  ages {2: 15}  no damage 0  budget 16.6  touches 43  touch->screen 1 mean 61.2 max 61.2 ms  errors 0
+2026-09-30T13:07:10.592664Z  INFO item_compositor: drawn  37 of  60  missed  0  commits  36  draw 2.1/4.2 swap 2.9/4.5 (present 2.9/4.3) ms  redrawn 45.9/48.5%  ages {2: 37}  no damage 2  budget 12.0  touches 47  touch->screen 3 mean 48.9 max 65.4 ms  errors 0
+2026-09-30T13:07:11.593043Z  INFO item_compositor: drawn  29 of  60  missed  0  commits  29  draw 2.2/3.9 swap 3.1/5.4 (present 2.9/5.1) ms  redrawn 48.5/48.5%  ages {2: 29}  no damage 0  budget 12.0  touches 52  touch->screen 6 mean 58.6 max 144.1 ms  errors 0
+2026-09-30T13:07:12.409014Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+2026-09-30T13:07:12.593587Z  INFO item_compositor: drawn  27 of  60  missed  2  commits  28  draw 4.2/13.8 swap 3.5/7.0 (present 3.4/6.2) ms  redrawn 52.1/97.0%  ages {2: 27}  no damage 0  budget 18.9  touches 56  touch->screen 4 mean 45.5 max 61.2 ms  errors 0
+2026-09-30T13:07:13.593916Z  INFO item_compositor: drawn  11 of  60  missed  3  commits  11  draw 11.2/15.1 swap 3.6/4.3 (present 3.4/4.0) ms  redrawn 48.5/48.5%  ages {2: 11}  no damage 0  budget 23.8  touches 57  touch->screen 1 mean 65.3 max 65.3 ms  errors 0
+2026-09-30T13:07:14.594318Z  INFO item_compositor: drawn  15 of  61  missed  3  commits  15  draw 11.0/13.2 swap 3.4/4.7 (present 3.2/4.5) ms  redrawn 48.5/48.5%  ages {2: 15}  no damage 0  budget 25.0  touches 60  touch->screen 3 mean 28.7 max 32.1 ms  errors 0
+2026-09-30T13:07:15.594486Z  INFO item_compositor: drawn  19 of  60  missed  0  commits  19  draw 9.8/11.5 swap 2.5/3.5 (present 2.4/3.3) ms  redrawn 48.5/48.5%  ages {2: 19}  no damage 0  budget 23.2  touches 65  touch->screen 5 mean 41.6 max 84.7 ms  errors 0
+2026-09-30T13:07:16.594729Z  INFO item_compositor: drawn  18 of  60  missed  0  commits  18  draw 9.1/11.3 swap 2.3/4.0 (present 2.2/3.7) ms  redrawn 48.5/48.5%  ages {2: 18}  no damage 0  budget 21.4  touches 69  touch->screen 4 mean 50.5 max 69.5 ms  errors 0
+2026-09-30T13:07:17.595007Z  INFO item_compositor: drawn  16 of  60  missed  2  commits  17  draw 9.9/16.2 swap 2.7/3.9 (present 2.6/3.7) ms  redrawn 48.5/48.5%  ages {2: 16}  no damage 0  budget 22.7  touches 74  touch->screen 5 mean 50.8 max 69.7 ms  errors 0

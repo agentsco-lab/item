@@ -1,0 +1,6 @@
+[workspace]
+members = ["compositor", "crates/hybris-hwc", "crates/smithay-hybris", "probes/hwc-frame", "probes/smithay-frame", "probes/wl-panels", "probes/latency"]
+resolver = "2"
+
+[profile.release]
+debug = 1

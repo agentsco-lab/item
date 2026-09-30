@@ -1,0 +1,7 @@
+[package]
+name = "hybris-hwc"
+version = "0.1.0"
+edition = "2021"
+description = "hwcomposer through libhybris for the Surface Duo: display 0, a client layer, a native window presenting with fences"
+
+[dependencies]
