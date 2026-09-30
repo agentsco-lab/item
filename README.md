@@ -69,8 +69,8 @@ with item as a Rust daemon over sway's IPC and layer-shell clients
 
 `compositor/`, the `item-compositor` binary: the probes' parts as modules,
 run in the user's session on tty7 (`tools/session-run.sh 60 --spawn
-gnome-calculator`). Step 1 (`log/2026-09-30-step-1-compositor.md`); next:
-the session's portals, then frame scheduling.
+gnome-calculator`). Step 1 and its session (`log/2026-09-30-step-1-compositor.md`): apps map in
+under 2 s. Next: frame scheduling.
 
 ## Layout
 

@@ -60,7 +60,8 @@ fn main() {
     let mut screen = Screen::new(&dh);
     let _output_global = screen.output.create_global::<State>(&dh);
 
-    let listening = ListeningSocketSource::new_auto().expect("wayland socket");
+    // A fixed name, so the session can hand it to the portals before we run.
+    let listening = ListeningSocketSource::with_name("wayland-item").expect("wayland socket");
     let socket_name = listening.socket_name().to_os_string();
     let handle = event_loop.handle();
     handle
@@ -84,18 +85,14 @@ fn main() {
 
     for command in &args.spawn {
         // Clients take libhybris' Wayland EGL platform, not the compositor's
-        // hwcomposer one. For now, in this session the portals and the
-        // accessibility bus each hold a GTK app 25 s at start (a D-Bus
-        // timeout); the clients are told to do without them until the session
-        // provides both. CLIENT_ENV adds "KEY=VALUE ..." for tests.
+        // hwcomposer one, and our desktop name. CLIENT_ENV adds "KEY=VALUE ..."
+        // for tests.
         let child = std::process::Command::new("sh")
             .arg("-c")
             .arg(command)
             .env("WAYLAND_DISPLAY", &socket_name)
             .env("EGL_PLATFORM", "wayland")
-            .env("GDK_DEBUG", "no-portals")
-            .env("GTK_A11Y", "none")
-            .env("NO_AT_BRIDGE", "1")
+            .env("XDG_CURRENT_DESKTOP", "item")
             .envs(std::env::var("CLIENT_ENV").ok().iter().flat_map(|e| {
                 e.split_whitespace().filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_owned(), v.to_owned())).collect::<Vec<_>>()
             }))

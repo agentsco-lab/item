@@ -1,0 +1,62 @@
+hotplug: display 0 connected primary
+2026-09-30T12:43:51.410302Z  INFO item_compositor::output: hwcomposer display 0: 2784x1800, vsync 16.667 ms
+2026-09-30T12:43:51.429781Z  WARN smithay::backend::egl::ffi: [EGL] 0x3000 (SUCCESS) eglDebugMessageControlKHR: eglDebugMessageControlKHR is not supported by vendor library. Error reporting may not work correctly.
+2026-09-30T12:43:51.448785Z  WARN smithay::backend::egl::display: Dmabuf import extension not available
+2026-09-30T12:43:51.607828Z  INFO item_compositor::output: EGL bound to the Wayland display
+2026-09-30T12:43:51.610679Z  INFO item_compositor::input: touch: sfduo touchscreen (/dev/input/event6)
+2026-09-30T12:43:51.614183Z  INFO item_compositor: listening on "wayland-item"
+2026-09-30T12:43:51.615296Z  INFO item_compositor: spawned: gnome-calculator
+2026-09-30T12:43:51.616412Z  INFO item_compositor: spawned: GSK_RENDERER=cairo gnome-clocks
+2026-09-30T12:43:52.624265Z  INFO item_compositor:  27 fps  mean 16.28 ms  max  23.43 ms  over 20 ms  2  windows 0  touches 0  errors 0
+
+(gnome-calculator:73709): Gdk-WARNING **: 15:43:52.754: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/73709/root
+
+(org.gnome.clocks:73710): Gdk-WARNING **: 15:43:52.762: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/73710/root
+
+** (org.gnome.clocks:73710): WARNING **: 15:43:53.141: utils.vala:147: Failed to get clock format from portal, fallback to GSettings.
+
+(org.gnome.clocks:73710): Gtk-WARNING **: 15:43:53.198: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/73710/root
+2026-09-30T12:43:53.209087Z  INFO item_compositor::state: window mapped on the left panel, 1.6 s after start
+
+(gnome-calculator:73709): Gtk-WARNING **: 15:43:53.457: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/73709/root
+2026-09-30T12:43:53.461152Z  INFO item_compositor::state: window mapped on the right panel, 1.8 s after start
+2026-09-30T12:43:53.542967Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+2026-09-30T12:43:53.617086Z  INFO item_compositor:  59 fps  mean 16.83 ms  max  29.45 ms  over 20 ms  1  windows 2  touches 0  errors 0
+2026-09-30T12:43:54.618632Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  18.87 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:43:54.693754Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Egl)
+2026-09-30T12:43:55.618708Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  19.72 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:43:56.618191Z  INFO item_compositor:  60 fps  mean 16.66 ms  max  17.97 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:43:57.618050Z  INFO item_compositor:  60 fps  mean 16.66 ms  max  23.42 ms  over 20 ms  1  windows 2  touches 0  errors 0
+2026-09-30T12:43:58.618412Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  17.37 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:43:59.618766Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  19.07 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:00.619475Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.42 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:01.621233Z  INFO item_compositor:  60 fps  mean 16.70 ms  max  17.25 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:02.622701Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.46 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:03.623415Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.59 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:04.625247Z  INFO item_compositor:  60 fps  mean 16.70 ms  max  17.83 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:05.626036Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  19.53 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:06.628019Z  INFO item_compositor:  60 fps  mean 16.70 ms  max  17.84 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:07.629487Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.59 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:08.629777Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  17.56 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:09.631336Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.41 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:10.617929Z  INFO item_compositor:  59 fps  mean 16.72 ms  max  18.99 ms  over 20 ms  0  windows 2  touches 0  errors 0
+2026-09-30T12:44:11.618749Z  INFO item_compositor:  60 fps  mean 16.67 ms  max  18.92 ms  over 20 ms  0  windows 2  touches 2  errors 0
+2026-09-30T12:44:12.618925Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.50 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:13.623139Z  INFO item_compositor:  60 fps  mean 16.74 ms  max  20.73 ms  over 20 ms  1  windows 2  touches 4  errors 0
+2026-09-30T12:44:14.619170Z  INFO item_compositor:  60 fps  mean 16.60 ms  max  17.37 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:15.620315Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.48 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:16.621055Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.55 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:17.621692Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.34 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:18.623210Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.65 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:19.624539Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  17.61 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:20.625573Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.44 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:21.626244Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  18.18 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:22.627427Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.58 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:23.628320Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  19.56 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:24.629246Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.24 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:25.631861Z  INFO item_compositor:  60 fps  mean 16.71 ms  max  19.42 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:26.632567Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.69 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:27.632319Z  INFO item_compositor:  60 fps  mean 16.66 ms  max  18.05 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:28.617719Z  INFO item_compositor:  59 fps  mean 16.70 ms  max  17.34 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:29.618351Z  INFO item_compositor:  60 fps  mean 16.68 ms  max  17.34 ms  over 20 ms  0  windows 2  touches 4  errors 0
+2026-09-30T12:44:30.619696Z  INFO item_compositor:  60 fps  mean 16.69 ms  max  20.42 ms  over 20 ms  1  windows 2  touches 4  errors 0

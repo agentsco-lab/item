@@ -50,6 +50,7 @@ pub struct State {
     /// Each surface's kind of buffer (shm or EGL), logged when it changes.
     buffer_kinds: HashMap<String, String>,
     pub touches: u32,
+    started: std::time::Instant,
 }
 
 impl State {
@@ -74,6 +75,7 @@ impl State {
             next_panel: 0,
             buffer_kinds: HashMap::new(),
             touches: 0,
+            started: std::time::Instant::now(),
         }
     }
 
@@ -173,7 +175,11 @@ impl XdgShellHandler for State {
         });
         let window = Window::new_wayland_window(surface);
         self.space.map_element(window, panel.loc, true);
-        tracing::info!("window mapped on the {} panel", if panel.loc.x == 0 { "left" } else { "right" });
+        tracing::info!(
+            "window mapped on the {} panel, {:.1} s after start",
+            if panel.loc.x == 0 { "left" } else { "right" },
+            self.started.elapsed().as_secs_f64()
+        );
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _: PositionerState) {
