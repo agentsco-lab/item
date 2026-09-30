@@ -56,6 +56,7 @@ Settings interface.
 | 5c | a shade benchmark (a virtual finger), each missed frame logged | chains of missed frames behind hwcomposer's blocking present: now a vsync skipped after a miss, the first frame after a pause drawn at once, the budget from swapped frames only; the run leaves at the finger's speed (`log/2026-09-30-step-5c-shade-bench.md`) |
 | 6 | the dock; screenshots and frame runs | first frame not shown by hwcomposer; clients need the port's profile.d environment; partial redraws leave garbage in Adreno's tiles: frames drawn whole; Settings scrolls at 30 fps on its own side (`log/2026-09-30-step-6-dock.md`) |
 | 6b | the dock's modes and moves; clients' frames drawn at once | Settings scrolls at 40-43 fps (phosh 38-43, before 28-30), tap to screen 32 ms (before 45-48) (`log/2026-09-30-step-6b-dock-moves-and-pacing.md`) |
+| 7 | where a frame's time goes; the minimum clocks raised by hand | the GPU sits at 257 of 585 MHz half busy; at 585 Settings scrolls at 60 fps (43), the shade 23 ms; the CPUs change nothing (`log/2026-09-30-step-7-clocks.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -122,6 +123,8 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 - `probes/` - the probes: `hwc-frame` (B), `smithay-frame` (C1), `wl-panels` (C2, C3)
 - `tools/session-run.sh` - item-compositor in the user's session on the phone
 - `tools/probe-run.sh` - a probe on the phone with the shell stopped
+- `tools/boost-bench.sh`, `tools/boost-one.sh` - the benchmarks with minimum
+  clocks raised, restored after (root on the phone)
 - `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against
   (into `sysroot/`, not tracked)
 - `tools/bench.sh`, `tools/tap.py`, `tools/swipe.py` - benchmarks through a
