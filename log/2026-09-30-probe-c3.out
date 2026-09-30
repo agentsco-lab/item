@@ -1,0 +1,192 @@
+Created symlink '/run/systemd/system/phosh.service' → '/dev/null'.
+[15:29:21.793] composer up: 1
+hotplug: display 0 connected primary
+2026-09-30T12:29:21.962553Z  WARN smithay::backend::egl::ffi: [EGL] 0x3000 (SUCCESS) eglDebugMessageControlKHR: eglDebugMessageControlKHR is not supported by vendor library. Error reporting may not work correctly.
+2026-09-30T12:29:21.987564Z  WARN smithay::backend::egl::display: Dmabuf import extension not available
+EGL bound to the Wayland display: GL clients' buffers can import
+touch: sfduo touchscreen (/dev/input/event6)
+listening on "wayland-1"
+spawned: dbus-run-session -- env GDK_DEBUG=no-portals GSK_RENDERER=cairo gnome-calculator
+spawned: sleep 4; dbus-run-session -- env GDK_DEBUG=no-portals EGL_PLATFORM=wayland gnome-calculator
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Activating service name='org.gtk.vfs.Daemon' requested by ':1.0' (uid=0 pid=53810 comm="gnome-calculator" label="kernel")
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Successfully activated service 'org.gtk.vfs.Daemon'
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.0' (uid=0 pid=53810 comm="gnome-calculator" label="kernel")
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.3' (uid=0 pid=53832 comm="/usr/libexec/xdg-desktop-portal" label="kernel")
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.3' (uid=0 pid=53832 comm="/usr/libexec/xdg-desktop-portal" label="kernel")
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.124: Choosing gtk.portal for org.freedesktop.impl.portal.Lockdown as a last-resort fallback
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.3' (uid=0 pid=53832 comm="/usr/libexec/xdg-desktop-portal" label="kernel")
+  1.0 s:  27 fps  mean 16.07 ms  max  32.86 ms  over 20 ms  1  windows 0  touches 0  errors 0
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Activating service name='org.a11y.Bus' requested by ':1.7' (uid=0 pid=53854 comm="/usr/libexec/xdg-desktop-portal-gtk" label="kernel")
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Successfully activated service 'org.a11y.Bus'
+dbus-daemon[53867]: Activating service name='org.a11y.atspi.Registry' requested by ':1.1' (uid=0 pid=53854 comm="/usr/libexec/xdg-desktop-portal-gtk" label="kernel")
+dbus-daemon[53867]: Successfully activated service 'org.a11y.atspi.Registry'
+SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.479: Choosing gtk.portal for org.freedesktop.impl.portal.Access as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.574: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.575: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.576: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.576: Choosing gtk.portal for org.freedesktop.impl.portal.Settings as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.579: Choosing gtk.portal for org.freedesktop.impl.portal.FileChooser as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.582: Choosing gtk.portal for org.freedesktop.impl.portal.AppChooser as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.586: Choosing gtk.portal for org.freedesktop.impl.portal.Print as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.589: Choosing gtk.portal for org.freedesktop.impl.portal.Notification as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.593: Choosing gtk.portal for org.freedesktop.impl.portal.Inhibit as a last-resort fallback
+[W][15:29:23.600223] pw.conf      | [          conf.c: 1187 try_load_conf()] can't load config client.conf: No such file or directory
+[E][15:29:23.600622] pw.conf      | [          conf.c: 1220 pw_conf_load_conf_for_context()] can't load config client.conf: No such file or directory
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.600: Failed to connect to PipeWire: Couldn't create PipeWire context
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.600: Choosing gtk.portal for org.freedesktop.impl.portal.Account as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.608: Choosing gtk.portal for org.freedesktop.impl.portal.Email as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53832): xdg-desktop-portal-WARNING **: 15:29:23.611: Choosing gtk.portal for org.freedesktop.impl.portal.DynamicLauncher as a last-resort fallback
+dbus-daemon[53804]: [session uid=0 pid=53804 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'
+window mapped on the left panel
+surface ObjectId(wl_surface@16): buffer Some(Shm)
+  2.0 s:  60 fps  mean 16.67 ms  max  24.62 ms  over 20 ms  2  windows 1  touches 0  errors 0
+  3.0 s:  60 fps  mean 16.67 ms  max  20.08 ms  over 20 ms  1  windows 1  touches 0  errors 0
+  4.0 s:  60 fps  mean 16.70 ms  max  19.20 ms  over 20 ms  0  windows 1  touches 0  errors 0
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Activating service name='org.gtk.vfs.Daemon' requested by ':1.0' (uid=0 pid=53902 comm="gnome-calculator" label="kernel")
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Successfully activated service 'org.gtk.vfs.Daemon'
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.0' (uid=0 pid=53902 comm="gnome-calculator" label="kernel")
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.3' (uid=0 pid=53923 comm="/usr/libexec/xdg-desktop-portal" label="kernel")
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Activating service name='org.freedesktop.portal.Documents' requested by ':1.3' (uid=0 pid=53923 comm="/usr/libexec/xdg-desktop-portal" label="kernel")
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Successfully activated service 'org.freedesktop.portal.Documents'
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:26.877: Choosing gtk.portal for org.freedesktop.impl.portal.Lockdown as a last-resort fallback
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.3' (uid=0 pid=53923 comm="/usr/libexec/xdg-desktop-portal" label="kernel")
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Activating service name='org.a11y.Bus' requested by ':1.7' (uid=0 pid=53947 comm="/usr/libexec/xdg-desktop-portal-gtk" label="kernel")
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Successfully activated service 'org.a11y.Bus'
+dbus-daemon[53960]: Activating service name='org.a11y.atspi.Registry' requested by ':1.1' (uid=0 pid=53947 comm="/usr/libexec/xdg-desktop-portal-gtk" label="kernel")
+dbus-daemon[53960]: Successfully activated service 'org.a11y.atspi.Registry'
+SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
+  5.0 s:  60 fps  mean 16.64 ms  max  22.53 ms  over 20 ms  1  windows 1  touches 0  errors 0
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.217: Choosing gtk.portal for org.freedesktop.impl.portal.Access as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.292: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.293: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.294: Failed to load RealtimeKit property: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.RealtimeKit1 was not provided by any .service files
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.295: Choosing gtk.portal for org.freedesktop.impl.portal.Settings as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.298: Choosing gtk.portal for org.freedesktop.impl.portal.FileChooser as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.301: Choosing gtk.portal for org.freedesktop.impl.portal.AppChooser as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.304: Choosing gtk.portal for org.freedesktop.impl.portal.Print as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.310: Choosing gtk.portal for org.freedesktop.impl.portal.Notification as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.314: Choosing gtk.portal for org.freedesktop.impl.portal.Inhibit as a last-resort fallback
+[W][15:29:27.319830] pw.conf      | [          conf.c: 1187 try_load_conf()] can't load config client.conf: No such file or directory
+[E][15:29:27.320256] pw.conf      | [          conf.c: 1220 pw_conf_load_conf_for_context()] can't load config client.conf: No such file or directory
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.320: Failed to connect to PipeWire: Couldn't create PipeWire context
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.320: Choosing gtk.portal for org.freedesktop.impl.portal.Account as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.326: Choosing gtk.portal for org.freedesktop.impl.portal.Email as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:53923): xdg-desktop-portal-WARNING **: 15:29:27.330: Choosing gtk.portal for org.freedesktop.impl.portal.DynamicLauncher as a last-resort fallback
+dbus-daemon[53901]: [session uid=0 pid=53901 pidfd=5] Successfully activated service 'org.freedesktop.portal.Desktop'
+window mapped on the right panel
+  6.0 s:  60 fps  mean 16.68 ms  max  18.84 ms  over 20 ms  0  windows 2  touches 0  errors 0
+surface ObjectId(wl_surface@16): buffer Some(Egl)
+  7.0 s:  60 fps  mean 16.70 ms  max  21.30 ms  over 20 ms  1  windows 2  touches 0  errors 0
+  8.0 s:  60 fps  mean 16.70 ms  max  17.52 ms  over 20 ms  0  windows 2  touches 0  errors 0
+input event: DeviceAdded
+input event: TouchDown
+touch down TouchSlot { id: Some(0) } at 941,742 -> a window
+input event: TouchFrame
+input event: TouchUp
+input event: TouchFrame
+input event: TouchDown
+touch down TouchSlot { id: Some(0) } at 947,709 -> a window
+input event: TouchFrame
+input event: TouchUp
+input event: TouchFrame
+  9.0 s:  59 fps  mean 16.69 ms  max  18.59 ms  over 20 ms  0  windows 2  touches 2  errors 0
+input event: TouchDown
+touch down TouchSlot { id: Some(0) } at 341,757 -> a window
+input event: TouchFrame
+surface ObjectId(wl_surface@16): buffer Some(Shm)
+surface ObjectId(wl_surface@16): buffer Some(Egl)
+input event: TouchUp
+input event: TouchFrame
+surface ObjectId(wl_surface@16): buffer Some(Shm)
+input event: TouchDown
+touch down TouchSlot { id: Some(0) } at 321,759 -> a window
+input event: TouchFrame
+input event: TouchUp
+input event: TouchFrame
+input event: TouchDown
+touch down TouchSlot { id: Some(0) } at 278,769 -> a window
+input event: TouchFrame
+input event: TouchUp
+ 10.0 s:  58 fps  mean 17.25 ms  max  43.42 ms  over 20 ms  3  windows 2  touches 5  errors 0
+touch down TouchSlot { id: Some(0) } at 246,772 -> a window
+ 11.0 s:  60 fps  mean 16.70 ms  max  18.36 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 12.0 s:  60 fps  mean 16.69 ms  max  17.88 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 13.0 s:  60 fps  mean 16.68 ms  max  18.04 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 14.0 s:  60 fps  mean 16.77 ms  max  22.23 ms  over 20 ms  1  windows 2  touches 6  errors 0
+ 15.0 s:  60 fps  mean 16.69 ms  max  19.23 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 16.0 s:  60 fps  mean 16.67 ms  max  18.46 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 17.0 s:  60 fps  mean 16.66 ms  max  17.67 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 18.0 s:  60 fps  mean 16.68 ms  max  18.63 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 19.0 s:  60 fps  mean 16.67 ms  max  19.75 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 20.0 s:  60 fps  mean 16.69 ms  max  19.62 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 21.0 s:  59 fps  mean 16.69 ms  max  17.66 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 22.0 s:  60 fps  mean 16.68 ms  max  17.24 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 23.0 s:  60 fps  mean 16.71 ms  max  17.96 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 24.0 s:  60 fps  mean 16.69 ms  max  17.57 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 25.0 s:  60 fps  mean 16.69 ms  max  17.29 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 26.0 s:  60 fps  mean 16.79 ms  max  41.00 ms  over 20 ms  1  windows 2  touches 6  errors 0
+ 27.0 s:  60 fps  mean 16.67 ms  max  17.34 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 28.0 s:  60 fps  mean 16.67 ms  max  22.75 ms  over 20 ms  1  windows 2  touches 6  errors 0
+ 29.0 s:  60 fps  mean 16.67 ms  max  17.69 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 30.0 s:  60 fps  mean 16.67 ms  max  17.41 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 31.0 s:  60 fps  mean 16.67 ms  max  17.19 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 32.0 s:  60 fps  mean 16.66 ms  max  17.26 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 33.0 s:  60 fps  mean 16.68 ms  max  17.25 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 34.0 s:  60 fps  mean 16.69 ms  max  17.66 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 35.0 s:  59 fps  mean 16.69 ms  max  17.38 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 36.0 s:  60 fps  mean 16.71 ms  max  20.10 ms  over 20 ms  1  windows 2  touches 6  errors 0
+ 37.0 s:  60 fps  mean 16.68 ms  max  17.79 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 38.0 s:  60 fps  mean 16.70 ms  max  17.47 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 39.0 s:  60 fps  mean 16.69 ms  max  17.91 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 40.0 s:  60 fps  mean 16.68 ms  max  17.36 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 41.0 s:  60 fps  mean 16.67 ms  max  17.94 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 42.0 s:  60 fps  mean 16.70 ms  max  17.69 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 43.0 s:  60 fps  mean 16.72 ms  max  19.16 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 44.0 s:  60 fps  mean 16.66 ms  max  17.24 ms  over 20 ms  0  windows 2  touches 6  errors 0
+ 45.0 s:  60 fps  mean 16.69 ms  max  17.22 ms  over 20 ms  0  windows 2  touches 6  errors 0
+done
+Gdk-Message: 15:30:07.194: Lost connection to Wayland compositor.
+Gdk-Message: 15:30:07.197: Error reading events from display: Broken pipe
+Gdk-Message: 15:30:07.198: Error reading events from display: Broken pipe
+Gdk-Message: 15:30:07.199: Lost connection to Wayland compositor.
+A connection to the bus can't be made
+[15:30:07.278] exit 0
+[15:30:07.286] rollback
+A connection to the bus can't be made
+[15:30:20.999] phosh active

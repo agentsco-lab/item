@@ -28,6 +28,7 @@ item, which keep running the phone day to day.
 | A | smithay's anvil on the Lindroid chain (duo-lindroid's test image): do smithay's EGL and GLES run on libhybris? | |
 | C1 | smithay's `GlesRenderer` on our EGL over hwcomposer (no GBM: the Android platform and the hwcomposer window) | done 2026-09-30: 60 fps, 1-1.5 ms to render a frame (`log/2026-09-30-probe-c1.md`) |
 | C2 | Wayland clients in it: shm, and GTK4 over `android_wlegl` | done 2026-09-30: both, one per panel, at 60 fps (`log/2026-09-30-probe-c2.md`) |
+| C3 | touch: libinput to `wl_touch`, the window under the finger | done 2026-09-30: both panels, one to one, the port's `sfduo touchscreen` (`log/2026-09-30-probe-c3.md`) |
 | B | a minimal Rust program that puts a GL frame on the Duo's panels through libhybris' hwc2, at vsync: the core of the backend | done 2026-09-30: 60 fps across both panels, 16.7 ms between frames, no copy (`log/2026-09-30-probe-b.md`) |
 
 What each must answer - the seams between smithay and libhybris, not the
@@ -57,7 +58,9 @@ with item as a Rust daemon over sway's IPC and layer-shell clients
 - One hwcomposer display, 2784x1800: two 1350x1800 panels and 84 columns
   under the hinge between them. The composer takes only a client target
   (device layers came back changed to client composition).
-- One touchscreen over both panels and the hinge: X 0-17709, Y 0-11411.
+- One touchscreen over both panels and the hinge: X 0-17709, Y 0-11411. The
+  port's `sfduo-pen-split` grabs it and gives the fingers `sfduo touchscreen`
+  and the pen `sfduo pen`.
 - Adreno 640 through libhybris: GLES 3.2, EGL 1.5. Its GLSL ES compiler is
   strict (an undefined name in `#if` is an error).
 - The port's scale is 2.

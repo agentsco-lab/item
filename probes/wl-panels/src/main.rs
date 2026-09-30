@@ -24,10 +24,12 @@ use smithay::backend::egl::context::{GlAttributes, PixelFormatRequirements};
 use smithay::backend::egl::{EGLContext, EGLDisplay, EGLSurface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::input::{AbsolutePositionEvent, Event, InputEvent, TouchEvent};
+use smithay::backend::libinput::LibinputInputBackend;
 use smithay::backend::renderer::buffer_type;
 use smithay::backend::renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state};
 use smithay::backend::renderer::{Bind, ImportEgl};
-use smithay::desktop::{PopupKind, PopupManager, Space, Window};
+use smithay::desktop::{PopupKind, PopupManager, Space, Window, WindowSurfaceType};
 use smithay::input::{Seat, SeatHandler, SeatState};
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::calloop::generic::Generic;
@@ -36,7 +38,9 @@ use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
-use smithay::utils::{Serial, Transform};
+use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
+use smithay::reexports::input::{Libinput, LibinputInterface};
+use smithay::utils::{Logical, Point, Serial, Transform, SERIAL_COUNTER};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     get_parent, is_sync_subsurface, with_states, CompositorClientState, CompositorHandler, CompositorState,
@@ -72,9 +76,11 @@ struct State {
     _output_manager_state: OutputManagerState,
     seat_state: SeatState<State>,
     data_device_state: DataDeviceState,
-    _seat: Seat<State>,
     next_panel: usize,
     buffer_kinds: std::collections::HashMap<String, String>,
+    seat: Seat<State>,
+    touches: u32,
+    input_events: u32,
 }
 
 #[derive(Default)]
@@ -217,6 +223,78 @@ delegate_seat!(State);
 delegate_data_device!(State);
 delegate_output!(State);
 
+/// libinput's path interface: the probe runs as root and opens the device itself.
+struct OpenDirect;
+
+impl LibinputInterface for OpenDirect {
+    fn open_restricted(&mut self, path: &std::path::Path, flags: i32) -> Result<std::os::fd::OwnedFd, i32> {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(flags & 3 != 0)
+            .custom_flags(flags)
+            .open(path)
+            .map(std::os::fd::OwnedFd::from)
+            .map_err(|e| e.raw_os_error().unwrap_or(-1))
+    }
+
+    fn close_restricted(&mut self, fd: std::os::fd::OwnedFd) {
+        drop(fd);
+    }
+}
+
+/// The layout the touchscreen covers: the whole output with the hinge, in
+/// logical px (2784x1800 at scale 2). The touchscreen spans both panels and
+/// the hinge, as the output does, so it maps one to one.
+const LAYOUT: (i32, i32) = (1392, 900);
+
+impl State {
+    fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        self.space.element_under(pos).and_then(|(window, location)| {
+            window
+                .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
+                .map(|(s, p)| (s, (p + location).to_f64()))
+        })
+    }
+
+    fn on_input(&mut self, event: InputEvent<LibinputInputBackend>) {
+        if self.input_events < 20 {
+            let name = format!("{event:?}");
+            println!("input event: {}", name.split(|c| c == ' ' || c == '{').next().unwrap_or(&name));
+        }
+        self.input_events += 1;
+        let Some(touch) = self.seat.get_touch() else { return };
+        match event {
+            InputEvent::TouchDown { event } => {
+                let pos = event.position_transformed(LAYOUT.into());
+                let serial = SERIAL_COUNTER.next_serial();
+                // The window under the finger comes up and takes the keyboard.
+                if let Some(window) = self.space.element_under(pos).map(|(w, _)| w.clone()) {
+                    self.space.raise_element(&window, true);
+                    let surface = window.toplevel().unwrap().wl_surface().clone();
+                    self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), serial);
+                }
+                let under = self.surface_under(pos);
+                self.touches += 1;
+                println!("touch down {:?} at {:.0},{:.0} -> {}", event.slot(), pos.x, pos.y,
+                         if under.is_some() { "a window" } else { "nothing" });
+                touch.down(self, under, &DownEvent { slot: event.slot(), location: pos, serial, time: event.time_msec() });
+            }
+            InputEvent::TouchMotion { event } => {
+                let pos = event.position_transformed(LAYOUT.into());
+                let under = self.surface_under(pos);
+                touch.motion(self, under, &MotionEvent { slot: event.slot(), location: pos, time: event.time_msec() });
+            }
+            InputEvent::TouchUp { event } => {
+                touch.up(self, &UpEvent { slot: event.slot(), serial: SERIAL_COUNTER.next_serial(), time: event.time_msec() });
+            }
+            InputEvent::TouchFrame { .. } => touch.frame(self),
+            InputEvent::TouchCancel { .. } => touch.cancel(self),
+            _ => {}
+        }
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -252,6 +330,7 @@ fn main() {
     let mut seat_state = SeatState::new();
     let mut seat = seat_state.new_wl_seat(&dh, "duo");
     seat.add_keyboard(Default::default(), 200, 25).expect("keyboard");
+    seat.add_touch();
 
     let output = Output::new(
         "duo".into(),
@@ -277,6 +356,27 @@ fn main() {
         })
         .expect("display source");
 
+    // Touch: the Duo's one touchscreen, through libinput's path interface.
+    let mut libinput = Libinput::new_from_path(OpenDirect);
+    // The port's sfduo-pen-split grabs the raw digitizer (surface_touchscreen)
+    // and gives the fingers their own device; take that when it is there.
+    let touchscreen = std::env::var("TOUCHSCREEN").ok().or_else(|| {
+        ["sfduo touchscreen", "surface_touchscreen"].iter().find_map(|want| {
+            std::fs::read_dir("/sys/class/input").ok()?.flatten().find_map(|d| {
+                let name = std::fs::read_to_string(d.path().join("device/name")).ok()?;
+                let node = d.file_name().to_string_lossy().into_owned();
+                (name.trim() == *want && node.starts_with("event")).then(|| format!("/dev/input/{node}"))
+            })
+        })
+    }).unwrap_or_else(|| "/dev/input/event5".into());
+    match libinput.path_add_device(&touchscreen) {
+        Some(d) => println!("touch: {} ({touchscreen})", d.name()),
+        None => println!("touch: could not add {touchscreen}"),
+    }
+    handle
+        .insert_source(LibinputInputBackend::new(libinput), |event, _, state: &mut State| state.on_input(event))
+        .expect("libinput source");
+
     let mut state = State {
         display_handle: dh.clone(),
         socket_name: socket_name.clone(),
@@ -289,9 +389,11 @@ fn main() {
         _output_manager_state: OutputManagerState::new_with_xdg_output::<State>(&dh),
         seat_state,
         data_device_state: DataDeviceState::new::<State>(&dh),
-        _seat: seat,
+        seat,
         next_panel: 0,
         buffer_kinds: Default::default(),
+        touches: 0,
+        input_events: 0,
     };
     state.space.map_output(&output, (0, 0));
     println!("listening on {:?}", state.socket_name);
@@ -335,9 +437,9 @@ fn main() {
         let now = now_ns();
         if now >= next_report {
             let st = take_stats();
-            println!("{:5.1} s: {:3} fps  mean {:5.2} ms  max {:6.2} ms  over 20 ms {:2}  windows {}  errors {}",
+            println!("{:5.1} s: {:3} fps  mean {:5.2} ms  max {:6.2} ms  over 20 ms {:2}  windows {}  touches {}  errors {}",
                      (now - start) as f64 / 1e9, st.frames, st.mean_ms, st.max_ms, st.over_20ms,
-                     state.space.elements().count(), st.errors);
+                     state.space.elements().count(), state.touches, st.errors);
             next_report += 1_000_000_000;
         }
     }
