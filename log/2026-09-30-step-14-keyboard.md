@@ -53,3 +53,10 @@ suggests completions.
 
 ![the keyboard](step-14/keyboard.png)
 ![typed](step-14/typed.png)
+
+## A session by hand, steps 10-14 together
+
+180 s, a finger. The log shows Settings launched from the dock
+under the curtain (2.03 s to its first frame), put away with the swipe,
+brought back onto the other panel from the grid, put away again. The
+keyboard went through its start-up slide. Smooth and quick throughout.
