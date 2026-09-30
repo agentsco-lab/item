@@ -247,6 +247,9 @@ impl Data {
     /// answers a commit in 3 ms. The shell's own motion still draws late, at
     /// the vsync, with the finger's latest place.
     fn on_client_frame(&mut self) {
+        if std::env::var_os("LOG_TIMES").is_some() && self.state.needs_redraw {
+            tracing::info!("times: client frame at {:.6}, pending {}", hybris_hwc::now_ns() as f64 / 1e9, Pacing::pending());
+        }
         if !self.pacing.asap || !self.state.needs_redraw || Pacing::pending() {
             return;
         }

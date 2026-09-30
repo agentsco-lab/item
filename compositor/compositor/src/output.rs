@@ -13,9 +13,9 @@ use smithay::backend::egl::{EGLContext, EGLDisplay, EGLSurface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::render_elements;
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::gles::{GlesRenderbuffer, GlesRenderer};
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::{Bind, ExportMem, ImportEgl, Renderer};
+use smithay::backend::renderer::{Bind, Blit, ExportMem, ImportEgl, Offscreen, Renderer};
 use smithay::reexports::wayland_server::Resource;
 use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement, RescaleRenderElement};
 use smithay::backend::renderer::element::AsRenderElements;
@@ -74,6 +74,20 @@ pub const CLOSE_NS: u64 = 200_000_000;
 /// The hwcomposer window's buffers.
 const BUFFERS: usize = 3;
 
+/// This thread's CPU time (ns), for LOG_TIMES: wall time less it is waiting.
+fn cpu_ns() -> u64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+/// Our own buffer, with its own damage tracker: it keeps every pixel between
+/// frames, so only what changed is drawn into it.
+struct Canvas {
+    buffer: GlesRenderbuffer,
+    tracker: OutputDamageTracker,
+}
+
 pub struct Screen {
     pub output: Output,
     /// Frames swapped so far (the buffer age follows from it).
@@ -96,6 +110,9 @@ pub struct Screen {
     surface: EGLSurface,
     renderer: GlesRenderer,
     damage_tracker: OutputDamageTracker,
+    /// Our own buffer the frame is drawn into (CANVAS=0: none).
+    canvas: Option<Canvas>,
+    canvas_ready: bool,
     _hwc: HwcOutput,
 }
 
@@ -144,8 +161,15 @@ impl Screen {
         output.set_preferred(mode);
 
         let damage_tracker = OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180);
+        let canvas = if std::env::var_os("CANVAS").is_some_and(|v| v == "0") {
+            None
+        } else {
+            let buffer: GlesRenderbuffer = renderer.create_buffer(Fourcc::Abgr8888, (width, height).into()).expect("the canvas");
+            Some(Canvas { buffer, tracker: OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180) })
+        };
+        tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -155,6 +179,7 @@ impl Screen {
     /// will be on screen: the shade's runs are drawn where they will be then.
     pub fn render(&mut self, state: &State, frame_ns: u64) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
+        let c0 = cpu_ns();
         // The shade over the launch curtain over the dock over the windows.
         // The lock screen over everything.
         // The volume bar over everything, the lock screen next.
@@ -243,77 +268,84 @@ impl Screen {
             }
         }
         let elements_ns = hybris_hwc::now_ns() - t0;
-        // Every frame is drawn whole (age 0). Drawing only the damage on top
-        // of the buffer's old contents (its age: BUFFERS, the window's strict
-        // turn) left garbage on Adreno through libhybris: the driver does not
-        // load a buffer's contents into its tiles, so around a partial redraw
-        // each tile drawn in kept whatever the GPU last had there - pieces of
-        // other icons, a neighbour icon gone (log/2026-09-30-step-6-dock.md).
-        // Asking EGL for the age, which makes some drivers load them, made it
-        // worse. The damage tracker still says whether anything changed:
-        // nothing, and there is no frame. PARTIAL=1 draws the damage only, for
-        // tests.
-        let partial = std::env::var_os("PARTIAL").is_some_and(|v| v == "1");
         let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
         self.reprime = self.reprime.saturating_sub(1);
-        if !partial && primed && self.shot.is_none() {
-            let changed = self.damage_tracker.damage_output(1, &elements).map(|(d, _)| d.is_some()).unwrap_or(true);
-            if !changed {
-                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age: 0, damaged_px: 0, swapped: false };
+        let (damaged_px, age, shot) = if let Some(canvas) = self.canvas.as_mut() {
+            // The frame is drawn into a buffer of our own, only where it
+            // changed, and copied whole into the window's buffer: the window's
+            // buffers keep nothing reliable between frames on Adreno through
+            // libhybris (a partial redraw into them left garbage, step 6), ours
+            // keeps everything. Drawing the whole scene cost about 4.5 ms of
+            // GPU from rest; the copy costs a fraction of it.
+            let age = if self.canvas_ready { 1 } else { 0 };
+            let tb = hybris_hwc::now_ns();
+            let cb = cpu_ns();
+            let mut target = self.renderer.bind(&mut canvas.buffer).expect("bind the canvas");
+            let tbound = hybris_hwc::now_ns();
+            let cbound = cpu_ns();
+            let result = canvas
+                .tracker
+                .render_output(&mut self.renderer, &mut target, age, &elements, [0.08, 0.1, 0.14, 1.0])
+                .expect("render_output");
+            self.canvas_ready = true;
+            let damaged: i64 = result.damage.map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum()).unwrap_or(0);
+            // hwcomposer's buffers still need a frame each after a start or a
+            // power-on, changed or not.
+            if damaged == 0 && primed && self.shot.is_none() {
+                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age, damaged_px: 0, swapped: false };
             }
-        }
-        let age = if partial && primed && self.shot.is_none() { BUFFERS } else { 0 };
-        let mut shot = None;
-        let damaged_px: i64 = {
+            // Screenshots come from our buffer, copied before the swap (a read
+            // makes the context current without the window's surface, and
+            // the swap would then fail).
+            let size = self.output.current_mode().unwrap().size;
+            let tr = hybris_hwc::now_ns();
+            let cr = cpu_ns();
+            let shot = Self::take_shot(&mut self.renderer, &mut self.shot, &mut self.frames_left, self.frames_drawn, size, &target, damaged);
+            drop(target);
+            let whole = smithay::utils::Rectangle::from_size((size.w, size.h).into());
+            let from = self.renderer.bind(&mut canvas.buffer).expect("bind the canvas");
+            let mut to = self.renderer.bind(&mut self.surface).expect("bind the window");
+            self.renderer
+                .blit(&from, &mut to, whole, whole, smithay::backend::renderer::TextureFilter::Nearest)
+                .expect("blit");
+            if std::env::var_os("LOG_TIMES").is_some() {
+                let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 / 1e6;
+                let now = hybris_hwc::now_ns();
+                let cnow = cpu_ns();
+                tracing::info!(
+                    "times: at {:.6} n {} elements {:.2} (cpu {:.2}) bind {:.2} ({:.2}) render {:.2} ({:.2}) blit {:.2} ({:.2}) ms, {} px",
+                    t0 as f64 / 1e9, elements.len(), ms(t0, tb), ms(c0, cb), ms(tb, tbound), ms(cb, cbound), ms(tbound, tr), ms(cbound, cr), ms(tr, now), ms(cr, cnow), damaged
+                );
+            }
+            (damaged.max(1), age, shot)
+        } else {
+            // CANVAS=0: every frame drawn whole into the window's buffer, as
+            // before step 22. The damage tracker only says whether anything
+            // changed.
+            if primed && self.shot.is_none() {
+                let changed = self.damage_tracker.damage_output(1, &elements).map(|(d, _)| d.is_some()).unwrap_or(true);
+                if !changed {
+                    return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age: 0, damaged_px: 0, swapped: false };
+                }
+            }
+            let size = self.output.current_mode().unwrap().size;
             let mut target = self.renderer.bind(&mut self.surface).expect("bind");
             let result = self
                 .damage_tracker
-                .render_output(&mut self.renderer, &mut target, age, &elements, [0.08, 0.1, 0.14, 1.0])
+                .render_output(&mut self.renderer, &mut target, 0, &elements, [0.08, 0.1, 0.14, 1.0])
                 .expect("render_output");
-            if std::env::var_os("LOG_DAMAGE").is_some() {
-                use smithay::backend::renderer::element::Element;
-                let geos: Vec<String> = elements
-                    .iter()
-                    .take(12)
-                    .map(|e| {
-                        let g = e.geometry(smithay::utils::Scale::from(SCALE as f64));
-                        format!("{},{} {}x{}", g.loc.x, g.loc.y, g.size.w, g.size.h)
-                    })
-                    .collect();
-                let rects: Vec<String> = result
-                    .damage
-                    .map(|r| r.iter().map(|r| format!("{},{} {}x{}", r.loc.x, r.loc.y, r.size.w, r.size.h)).collect())
-                    .unwrap_or_default();
-                tracing::info!("damage: frame {} age {age}: {} | elements: {}", self.frames_drawn, rects.join("; "), geos.join("; "));
-            }
-            let damaged = result
-                .damage
-                .map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum())
-                .unwrap_or(0);
-            // The frame as it goes to the screen, copied before the swap and
-            // read after it: reading makes the context current without the
-            // surface, and a swap then fails (BadSurface).
-            let run = damaged > 0 && self.frames_left > 0 && self.shot.is_none();
-            if run {
-                self.frames_left -= 1;
-                self.shot = Some(format!("/tmp/item-frame-{:03}-{}.rgba", self.frames_drawn, hybris_hwc::now_ns() / 1_000_000 % 100_000));
-            }
-            if let Some(path) = self.shot.take() {
-                let size = self.output.current_mode().unwrap().size;
-                // GL's rows are bottom-up: the first rows are the screen's bottom.
-                let size = if run { (size.w, FRAME_ROWS).into() } else { size };
-                let region = smithay::utils::Rectangle::from_size((size.w, size.h).into());
-                match self.renderer.copy_framebuffer(&target, region, Fourcc::Abgr8888) {
-                    Ok(mapping) => shot = Some((path, mapping, size)),
-                    Err(e) => tracing::warn!("screenshot: {e}"),
-                }
-            }
-            damaged
+            let damaged: i64 = result.damage.map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum()).unwrap_or(0);
+            let shot = Self::take_shot(&mut self.renderer, &mut self.shot, &mut self.frames_left, self.frames_drawn, size, &target, damaged);
+            (damaged, 0, shot)
         };
         let t1 = hybris_hwc::now_ns();
         let swapped = damaged_px > 0;
         if swapped {
+            let cs = cpu_ns();
             self.surface.swap_buffers(None).expect("swap_buffers");
+            if std::env::var_os("LOG_TIMES").is_some() {
+                tracing::info!("times: swap {:.2} (cpu {:.2}) ms", (hybris_hwc::now_ns() - t1) as f64 / 1e6, (cpu_ns() - cs) as f64 / 1e6);
+            }
             // Only a swapped frame uses up a buffer.
             self.frames_drawn += 1;
         }
@@ -344,6 +376,28 @@ impl Screen {
             age,
             damaged_px,
             swapped,
+        }
+    }
+
+    /// The screenshot or frame run asked for, copied out of `target`; read
+    /// after the swap.
+    #[allow(clippy::too_many_arguments)]
+    fn take_shot(renderer: &mut GlesRenderer, shot: &mut Option<String>, frames_left: &mut u32, frames_drawn: u64, size: smithay::utils::Size<i32, smithay::utils::Physical>, target: &smithay::backend::renderer::gles::GlesTarget<'_>, damaged: i64) -> Option<(String, smithay::backend::renderer::gles::GlesMapping, smithay::utils::Size<i32, smithay::utils::Physical>)> {
+        let run = damaged > 0 && *frames_left > 0 && shot.is_none();
+        if run {
+            *frames_left -= 1;
+            *shot = Some(format!("/tmp/item-frame-{:03}-{}.rgba", frames_drawn, hybris_hwc::now_ns() / 1_000_000 % 100_000));
+        }
+        let path = shot.take()?;
+        // GL's rows are bottom-up: the first rows are the screen's bottom.
+        let size = if run { (size.w, FRAME_ROWS).into() } else { size };
+        let region = smithay::utils::Rectangle::from_size((size.w, size.h).into());
+        match renderer.copy_framebuffer(target, region, Fourcc::Abgr8888) {
+            Ok(mapping) => Some((path, mapping, size)),
+            Err(e) => {
+                tracing::warn!("screenshot: {e}");
+                None
+            }
         }
     }
 

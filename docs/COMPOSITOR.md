@@ -8,7 +8,7 @@ phosh", item-shell 0.1.x on phosh stays the shell in use, and phosh stays
 the way back after.
 
 The work so far, step by step with its measurements, is in
-`compositor/log/` (steps 1-21, 2026-09-30 to 2026-10-01); the probes that
+`compositor/log/` (steps 1-22, 2026-09-30 to 2026-10-01); the probes that
 chose the path are in agentsco-lab/duo-lindroid (private).
 
 ## Why a compositor of our own
@@ -53,23 +53,23 @@ most here (duo-lindroid's `log/2026-09-30-choosing-a-base.md`).
 The same phone, the same night, timed below both compositors: a uprobe on
 libhybris' `hwc2_compat_display_present`, the call both make to hand
 hwcomposer a frame, and a probe client both serve alike
-(`compositor/log/2026-10-01-step-21-ab.md`).
+(`compositor/log/2026-10-01-step-21-ab.md`, `-step-22-canvas.md`).
 
 | | item on phosh | item-compositor |
 |---|---|---|
 | the shade pulled back up | 6 gaps over 25 ms each time, up to 54 ms | 0-1, up to 29 ms |
 | the app grid going down | a 235-243 ms freeze each time | up to 34 ms |
 | the shade down, the grid up | at the vsync, 1-2 gaps | at the vsync, 1-3 gaps |
-| a tap, touch to the frame's present | 4.3 ms (p90 5.0) | 7.6 ms (p90 9.3) |
+| a tap, touch to the present with its content | 17.6 ms (p90 24.4) | 6.2 ms (p90 7.9) |
 | the shell at rest: memory (PSS) | 461 MB (phoc, phosh, dock, system screen, pen) | 173 MB |
 | the shell at rest: CPU | 3.5 % of a core | 2.6 % |
 
 Each of the 20 steps was also tried by hand on the phone.
 
-Where phosh is ahead: a quick client's tap reaches the screen about 3 ms
-sooner, since item-compositor draws each frame whole (partial redraws
-left garbage in Adreno's tiles). Drawing the damage into a buffer of its
-own and copying it out whole is the fix, first on the list below.
+A tap is timed from the touch to the present that holds the client's new
+frame. phoc presents twice to each tap: a frame of its own on the touch,
+then the one with the client's content; item-compositor presents once
+(`compositor/log/2026-10-01-step-22-canvas.md`).
 
 ## What it has (2026-10-01)
 
@@ -94,11 +94,11 @@ pen as a finger, the system screen, the pen's sheet, the GPU boost on touch,
 - The weather under the clock, the status icons in the shade's head, the
   grid's long press (to the dock and off it), running apps in the dock, the
   privacy dot.
-- The frame drawn from its damage (above); no vsync while at rest;
-  launches in an app scope of their own (GTK is refused its portal now).
+- No vsync while at rest; launches in an app scope of their own (GTK is
+  refused its portal now).
 - Installing as a session of its own beside phosh, with the way back: a
   package, a greeter entry or a switch like `sfduo-shell`, and a fall back
   to phosh if it does not start.
 
 Each goes in as a step in `compositor/log/`, measured and tried by
-hand, as the first 21 were.
+hand, as the first 22 were.

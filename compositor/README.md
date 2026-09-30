@@ -81,7 +81,8 @@ What it does not do yet: installing as a session of its own, the pen's own sheet
 | 18 | the lid, the pen, the system screen (sysscreen.rs) | (`log/2026-09-30-step-18-lid-pen-system.md`) |
 | 19 | a window's close, the volume bar, the dock's rise after an unlock | as item's (`log/2026-10-01-step-19-motion.md`) |
 | 20 | the pen's sheet (pensheet.rs) | drawn with the pen, steps 17-20 tried by hand; the dock now told on the frame after a slide ends (`log/2026-10-01-step-20-pen-sheet.md`) |
-| 21 | the A/B against item on phosh; `wp_presentation` | timed at hwcomposer's present under both: the shade and the grid keep the vsync where phosh's stutter (6 gaps; a 240 ms freeze); a third of the memory; a tap 3 ms slower (frames drawn whole) (`log/2026-10-01-step-21-ab.md`) |
+| 21 | the A/B against item on phosh; `wp_presentation` | timed at hwcomposer's present under both: the shade and the grid keep the vsync where phosh's stutter (6 gaps; a 240 ms freeze); a third of the memory (`log/2026-10-01-step-21-ab.md`) |
+| 22 | the frame drawn where it changed into a buffer of our own, copied whole; the tap measured right | a tap to the present with its content 6.2 ms (7.7 drawn whole), phosh 17.6 ms: phoc presents a frame of its own on the touch first (`log/2026-10-01-step-22-canvas.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
