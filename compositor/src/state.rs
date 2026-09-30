@@ -50,7 +50,16 @@ pub struct State {
     /// Each surface's kind of buffer (shm or EGL), logged when it changes.
     buffer_kinds: HashMap<String, String>,
     pub touches: u32,
+    pub commits: u32,
     started: std::time::Instant,
+    /// Something changed since the last frame: draw at the next vsync.
+    pub needs_redraw: bool,
+    /// A touch no client has answered yet (CLOCK_MONOTONIC ns).
+    pub touch_pending: Option<u64>,
+    /// A touch a client has answered with a commit: the next frame shows it.
+    pub touch_answered: Option<u64>,
+    /// Stop after this many seconds (for tests).
+    pub stop_after: Option<u64>,
 }
 
 impl State {
@@ -75,7 +84,12 @@ impl State {
             next_panel: 0,
             buffer_kinds: HashMap::new(),
             touches: 0,
+            commits: 0,
             started: std::time::Instant::now(),
+            needs_redraw: true,
+            touch_pending: None,
+            touch_answered: None,
+            stop_after: None,
         }
     }
 
@@ -110,6 +124,15 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.needs_redraw = true;
+        self.commits += 1;
+        // The first commit after a touch is taken for the client's answer to it,
+        // if it comes within half a second.
+        if let Some(touched) = self.touch_pending.take() {
+            if hybris_hwc::now_ns() - touched < 500_000_000 {
+                self.touch_answered.get_or_insert(touched);
+            }
+        }
         let kind = with_renderer_surface_state(surface, |rs| rs.buffer().map(|b| format!("{:?}", buffer_type(b))))
             .flatten();
         if let Some(kind) = kind {
@@ -175,6 +198,7 @@ impl XdgShellHandler for State {
         });
         let window = Window::new_wayland_window(surface);
         self.space.map_element(window, panel.loc, true);
+        self.needs_redraw = true;
         tracing::info!(
             "window mapped on the {} panel, {:.1} s after start",
             if panel.loc.x == 0 { "left" } else { "right" },

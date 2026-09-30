@@ -19,6 +19,7 @@ use smithay::utils::SERIAL_COUNTER;
 
 use crate::layout::LAYOUT;
 use crate::state::State;
+use crate::Data;
 
 /// libinput's path interface opens the device itself; the session's user is
 /// in the device's group (android_input).
@@ -54,7 +55,7 @@ fn find_touchscreen() -> Option<String> {
     })
 }
 
-pub fn init(handle: &LoopHandle<'static, State>) {
+pub fn init(handle: &LoopHandle<'static, Data>) {
     let mut libinput = Libinput::new_from_path(OpenDirect);
     match find_touchscreen() {
         Some(path) => match libinput.path_add_device(&path) {
@@ -64,7 +65,7 @@ pub fn init(handle: &LoopHandle<'static, State>) {
         None => tracing::warn!("touch: no touchscreen found"),
     }
     handle
-        .insert_source(LibinputInputBackend::new(libinput), |event, _, state: &mut State| state.on_input(event))
+        .insert_source(LibinputInputBackend::new(libinput), |event, _, data: &mut Data| data.state.on_input(event))
         .expect("libinput source");
 }
 
@@ -83,6 +84,12 @@ impl State {
                 }
                 let under = self.surface_under(pos);
                 self.touches += 1;
+                // A touch no client answers within half a second is not waited for.
+                let now = hybris_hwc::now_ns();
+                if self.touch_pending.is_some_and(|t| now - t > 500_000_000) {
+                    self.touch_pending = None;
+                }
+                self.touch_pending.get_or_insert(now);
                 tracing::debug!("touch down {:?} at {:.0},{:.0}", event.slot(), pos.x, pos.y);
                 touch.down(self, under, &DownEvent { slot: event.slot(), location: pos, serial, time: event.time_msec() });
             }

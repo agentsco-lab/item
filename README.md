@@ -30,9 +30,9 @@ item, which keep running the phone day to day.
 | clients | xdg-shell; shm, and GL over libhybris' `android_wlegl` | a window per panel, 60 fps with two |
 | touch | libinput to `wl_touch`, the touchscreen one to one with the output, hinge and all | both panels |
 | the session | the user's, on tty7 as phosh runs; our desktop name, a gtk portals configuration | GTK apps map in under 2 s |
+| frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed; the swap does not wait | 0 frames when still; touch to screen about 45 ms through GTK |
 
-What it does not do yet: frame scheduling (a frame is drawn every vsync and
-the swap blocks the event loop), the shell (shades, dock, gestures), the
+What it does not do yet: drawing late in the frame, `wp_presentation`, the shell (shades, dock, gestures), the
 on-screen keyboard, the pen, blanking and the power key, the portals'
 Settings interface.
 
@@ -45,6 +45,7 @@ Settings interface.
 | C2 | Wayland clients: shm, and GTK4 over `android_wlegl` | both, a window per panel (`log/2026-09-30-probe-c2.md`) |
 | C3 | touch | both panels, the port's `sfduo touchscreen` (`log/2026-09-30-probe-c3.md`) |
 | 1 | the compositor crate, in the user's session | apps in under 2 s once the session's portals were set up (`log/2026-09-30-step-1-compositor.md`) |
+| 2 | frames paced by vsync, drawn only on change | 0 frames when still, touch to screen about 45 ms (`log/2026-09-30-step-2-pacing.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:

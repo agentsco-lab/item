@@ -1,0 +1,64 @@
+hotplug: display 0 connected primary
+2026-09-30T12:54:53.149202Z  INFO item_compositor::output: hwcomposer display 0: 2784x1800, vsync 16.667 ms
+2026-09-30T12:54:53.169566Z  WARN smithay::backend::egl::ffi: [EGL] 0x3000 (SUCCESS) eglDebugMessageControlKHR: eglDebugMessageControlKHR is not supported by vendor library. Error reporting may not work correctly.
+2026-09-30T12:54:53.186467Z  WARN smithay::backend::egl::display: Dmabuf import extension not available
+2026-09-30T12:54:53.350597Z  INFO item_compositor::output: EGL bound to the Wayland display
+2026-09-30T12:54:53.353458Z  INFO item_compositor::input: touch: sfduo touchscreen (/dev/input/event6)
+2026-09-30T12:54:53.356922Z  INFO item_compositor: listening on "wayland-item"
+2026-09-30T12:54:53.358588Z  INFO item_compositor: spawned: gnome-calculator
+2026-09-30T12:54:53.360343Z  INFO item_compositor: spawned: GSK_RENDERER=cairo gnome-clocks
+2026-09-30T12:54:54.353623Z  INFO item_compositor: drawn   1 of  25 vsyncs  commits   0  presents   0  max between   0.00 ms  windows 0  touches 0  touch->screen -  errors 0
+
+(org.gnome.clocks:84576): Gdk-WARNING **: 15:54:54.454: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/84576/root
+
+(gnome-calculator:84575): Gdk-WARNING **: 15:54:54.455: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/84575/root
+
+** (org.gnome.clocks:84576): WARNING **: 15:54:54.680: utils.vala:147: Failed to get clock format from portal, fallback to GSettings.
+
+(org.gnome.clocks:84576): Gtk-WARNING **: 15:54:54.730: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/84576/root
+2026-09-30T12:54:54.730431Z  INFO item_compositor::state: window mapped on the left panel, 1.4 s after start
+
+(gnome-calculator:84575): Gtk-WARNING **: 15:54:54.967: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/84575/root
+2026-09-30T12:54:54.968011Z  INFO item_compositor::state: window mapped on the right panel, 1.6 s after start
+2026-09-30T12:54:54.977658Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+2026-09-30T12:54:55.353882Z  INFO item_compositor: drawn   3 of  60 vsyncs  commits   3  presents   3  max between 809.78 ms  windows 2  touches 0  touch->screen -  errors 0
+2026-09-30T12:54:55.927039Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Egl)
+2026-09-30T12:54:56.354464Z  INFO item_compositor: drawn   2 of  60 vsyncs  commits   2  presents   2  max between 926.05 ms  windows 2  touches 0  touch->screen -  errors 0
+2026-09-30T12:54:57.354797Z  INFO item_compositor: drawn   0 of  60 vsyncs  commits   0  presents   0  max between   0.00 ms  windows 2  touches 0  touch->screen -  errors 0
+2026-09-30T12:54:58.355007Z  INFO item_compositor: drawn  14 of  60 vsyncs  commits  15  presents  14  max between 2066.78 ms  windows 2  touches 2  touch->screen 1 mean 84.7 max 84.7 ms  errors 0
+2026-09-30T12:54:59.355548Z  INFO item_compositor: drawn  27 of  60 vsyncs  commits  26  presents  27  max between  50.50 ms  windows 2  touches 3  touch->screen 2 mean 30.0 max 39.0 ms  errors 0
+2026-09-30T12:55:00.355890Z  INFO item_compositor: drawn  18 of  60 vsyncs  commits  19  presents  18  max between 300.76 ms  windows 2  touches 3  touch->screen -  errors 0
+2026-09-30T12:55:01.356185Z  INFO item_compositor: drawn  15 of  60 vsyncs  commits  15  presents  15  max between 302.92 ms  windows 2  touches 3  touch->screen -  errors 0
+2026-09-30T12:55:02.356446Z  INFO item_compositor: drawn  19 of  60 vsyncs  commits  18  presents  19  max between 287.01 ms  windows 2  touches 3  touch->screen -  errors 0
+2026-09-30T12:55:03.356890Z  INFO item_compositor: drawn  19 of  60 vsyncs  commits  20  presents  19  max between 300.52 ms  windows 2  touches 3  touch->screen -  errors 0
+2026-09-30T12:55:04.357148Z  INFO item_compositor: drawn  19 of  60 vsyncs  commits  18  presents  19  max between 316.17 ms  windows 2  touches 5  touch->screen 2 mean 53.8 max 58.1 ms  errors 0
+2026-09-30T12:55:05.357354Z  INFO item_compositor: drawn  27 of  60 vsyncs  commits  28  presents  27  max between  98.71 ms  windows 2  touches 12  touch->screen 7 mean 49.8 max 68.6 ms  errors 0
+2026-09-30T12:55:06.357542Z  INFO item_compositor: drawn  25 of  60 vsyncs  commits  24  presents  25  max between 213.53 ms  windows 2  touches 18  touch->screen 5 mean 73.3 max 193.2 ms  errors 0
+2026-09-30T12:55:07.357692Z  INFO item_compositor: drawn  31 of  60 vsyncs  commits  31  presents  31  max between  50.90 ms  windows 2  touches 24  touch->screen 6 mean 42.4 max 59.5 ms  errors 0
+2026-09-30T12:55:08.357910Z  INFO item_compositor: drawn  26 of  60 vsyncs  commits  26  presents  26  max between 164.47 ms  windows 2  touches 29  touch->screen 5 mean 43.8 max 62.9 ms  errors 0
+2026-09-30T12:55:09.358171Z  INFO item_compositor: drawn  15 of  60 vsyncs  commits  15  presents  15  max between 229.95 ms  windows 2  touches 32  touch->screen 2 mean 46.0 max 50.7 ms  errors 0
+2026-09-30T12:55:09.857237Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+2026-09-30T12:55:10.359822Z  INFO item_compositor: drawn   6 of  60 vsyncs  commits   6  presents   6  max between 820.87 ms  windows 2  touches 34  touch->screen 1 mean 648.4 max 648.4 ms  errors 0
+2026-09-30T12:55:11.360337Z  INFO item_compositor: drawn  13 of  61 vsyncs  commits  13  presents  13  max between 267.06 ms  windows 2  touches 34  touch->screen -  errors 0
+2026-09-30T12:55:12.360718Z  INFO item_compositor: drawn   6 of  60 vsyncs  commits   6  presents   6  max between 251.40 ms  windows 2  touches 35  touch->screen 1 mean 64.2 max 64.2 ms  errors 0
+2026-09-30T12:55:13.361114Z  INFO item_compositor: drawn   8 of  60 vsyncs  commits   8  presents   8  max between 612.44 ms  windows 2  touches 36  touch->screen 1 mean 45.1 max 45.1 ms  errors 0
+2026-09-30T12:55:14.361665Z  INFO item_compositor: drawn   7 of  60 vsyncs  commits   7  presents   7  max between 498.76 ms  windows 2  touches 37  touch->screen 1 mean 46.5 max 46.5 ms  errors 0
+2026-09-30T12:55:15.380618Z  INFO item_compositor: drawn  13 of  61 vsyncs  commits  13  presents  13  max between 1097.97 ms  windows 2  touches 38  touch->screen 1 mean 62.6 max 62.6 ms  errors 0
+2026-09-30T12:55:16.380897Z  INFO item_compositor: drawn  11 of  60 vsyncs  commits  11  presents  11  max between 102.44 ms  windows 2  touches 39  touch->screen 1 mean 64.8 max 64.8 ms  errors 0
+2026-09-30T12:55:17.381125Z  INFO item_compositor: drawn  20 of  60 vsyncs  commits  20  presents  20  max between 298.42 ms  windows 2  touches 42  touch->screen 3 mean 38.1 max 55.9 ms  errors 0
+2026-09-30T12:55:18.392221Z  INFO item_compositor: drawn  27 of  60 vsyncs  commits  27  presents  27  max between  53.00 ms  windows 2  touches 48  touch->screen 6 mean 33.1 max 50.2 ms  errors 0
+2026-09-30T12:55:19.392529Z  INFO item_compositor: drawn  24 of  60 vsyncs  commits  25  presents  24  max between  55.55 ms  windows 2  touches 53  touch->screen 5 mean 39.0 max 49.2 ms  errors 0
+2026-09-30T12:55:20.392902Z  INFO item_compositor: drawn  19 of  60 vsyncs  commits  18  presents  19  max between 119.21 ms  windows 2  touches 56  touch->screen 3 mean 57.0 max 85.4 ms  errors 0
+2026-09-30T12:55:21.393332Z  INFO item_compositor: drawn  15 of  60 vsyncs  commits  15  presents  15  max between 118.30 ms  windows 2  touches 57  touch->screen 1 mean 32.3 max 32.3 ms  errors 0
+2026-09-30T12:55:22.393687Z  INFO item_compositor: drawn   8 of  60 vsyncs  commits   8  presents   8  max between 831.73 ms  windows 2  touches 59  touch->screen 2 mean 48.8 max 60.3 ms  errors 0
+2026-09-30T12:55:23.394586Z  INFO item_compositor: drawn   0 of  60 vsyncs  commits   0  presents   0  max between   0.00 ms  windows 2  touches 61  touch->screen -  errors 0
+2026-09-30T12:55:24.395085Z  INFO item_compositor: drawn   0 of  60 vsyncs  commits   0  presents   0  max between   0.00 ms  windows 2  touches 62  touch->screen -  errors 0
+2026-09-30T12:55:25.395374Z  INFO item_compositor: drawn   0 of  60 vsyncs  commits   0  presents   0  max between   0.00 ms  windows 2  touches 63  touch->screen -  errors 0
+2026-09-30T12:55:26.166018Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Egl)
+2026-09-30T12:55:26.395839Z  INFO item_compositor: drawn   1 of  60 vsyncs  commits   1  presents   1  max between 3909.55 ms  windows 2  touches 64  touch->screen 1 mean 3111.6 max 3111.6 ms  errors 0
+2026-09-30T12:55:27.396254Z  INFO item_compositor: drawn  28 of  60 vsyncs  commits  28  presents  28  max between 302.72 ms  windows 2  touches 69  touch->screen 5 mean 47.4 max 57.5 ms  errors 0
+2026-09-30T12:55:28.396733Z  INFO item_compositor: drawn  24 of  60 vsyncs  commits  24  presents  24  max between 186.51 ms  windows 2  touches 70  touch->screen 1 mean 55.6 max 55.6 ms  errors 0
+2026-09-30T12:55:29.397024Z  INFO item_compositor: drawn  25 of  60 vsyncs  commits  25  presents  25  max between 268.75 ms  windows 2  touches 70  touch->screen -  errors 0
+2026-09-30T12:55:30.397319Z  INFO item_compositor: drawn  31 of  60 vsyncs  commits  32  presents  31  max between 137.78 ms  windows 2  touches 76  touch->screen 6 mean 36.6 max 54.8 ms  errors 0
+2026-09-30T12:55:31.397584Z  INFO item_compositor: drawn  23 of  60 vsyncs  commits  22  presents  23  max between 251.26 ms  windows 2  touches 82  touch->screen 5 mean 48.2 max 71.0 ms  errors 0
+2026-09-30T12:55:32.397872Z  INFO item_compositor: drawn  21 of  60 vsyncs  commits  21  presents  21  max between 167.69 ms  windows 2  touches 84  touch->screen 3 mean 55.7 max 63.9 ms  errors 0

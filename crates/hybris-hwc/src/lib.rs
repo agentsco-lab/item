@@ -160,9 +160,35 @@ struct Stats {
 static PRESENTER: Mutex<Option<Presenter>> = Mutex::new(None);
 static HWC: Mutex<Option<Hwc>> = Mutex::new(None);
 
-extern "C" fn on_vsync(_: *mut Listener, _: i32, _: u64, _: i64) {
+/// Called on hwcomposer's thread at each vsync, with its timestamp (ns).
+static VSYNC_HANDLER: std::sync::OnceLock<Box<dyn Fn(i64) + Send + Sync>> = std::sync::OnceLock::new();
+
+extern "C" fn on_vsync(_: *mut Listener, _: i32, _: u64, timestamp: i64) {
     VSYNCS.fetch_add(1, Ordering::Relaxed);
+    LAST_VSYNC_NS.store(timestamp as u64, Ordering::Relaxed);
+    if let Some(handler) = VSYNC_HANDLER.get() {
+        handler(timestamp);
+    }
 }
+
+static LAST_VSYNC_NS: AtomicU64 = AtomicU64::new(0);
+
+/// Sets what runs at each vsync, on hwcomposer's thread; once.
+pub fn set_vsync_handler(handler: impl Fn(i64) + Send + Sync + 'static) {
+    let _ = VSYNC_HANDLER.set(Box::new(handler));
+}
+
+/// The last vsync's timestamp, in hwcomposer's clock (CLOCK_MONOTONIC, ns).
+pub fn last_vsync_ns() -> u64 {
+    LAST_VSYNC_NS.load(Ordering::Relaxed)
+}
+
+/// The time of the last present to hwcomposer (CLOCK_MONOTONIC, ns).
+pub fn last_present_ns() -> u64 {
+    LAST_PRESENT_NS.load(Ordering::Relaxed)
+}
+
+static LAST_PRESENT_NS: AtomicU64 = AtomicU64::new(0);
 
 extern "C" fn on_hotplug(_: *mut Listener, _: i32, display: u64, connected: bool, primary: bool) {
     println!("hotplug: display {display} {} {}",
@@ -229,6 +255,7 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
     p.last = buffer;
 
     let now = now_ns();
+    LAST_PRESENT_NS.store(now, Ordering::Relaxed);
     if p.last_ns != 0 {
         let ms = (now - p.last_ns) as f64 / 1e6;
         p.stats.frames += 1;

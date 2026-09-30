@@ -25,6 +25,9 @@ use crate::state::State;
 
 pub struct Screen {
     pub output: Output,
+    pub vsync_period_ns: u64,
+    /// CLOCK_MONOTONIC at start: frame callbacks' times count from it.
+    pub clock_origin_ns: u64,
     surface: EGLSurface,
     renderer: GlesRenderer,
     damage_tracker: OutputDamageTracker,
@@ -38,7 +41,9 @@ impl Screen {
         tracing::info!("hwcomposer display 0: {width}x{height}, vsync {:.3} ms", hwc.vsync_period_ns as f64 / 1e6);
 
         let egl_display = unsafe { EGLDisplay::new(HybrisDisplay) }.expect("EGLDisplay");
-        let attributes = GlAttributes { version: (3, 0), profile: None, debug: false, vsync: true };
+        // No swap interval: the swap hands the frame to hwcomposer and returns;
+        // frames are paced by hwcomposer's vsync events instead.
+        let attributes = GlAttributes { version: (3, 0), profile: None, debug: false, vsync: false };
         let context = EGLContext::new_with_config(&egl_display, attributes, PixelFormatRequirements::_8_bit())
             .expect("EGLContext");
         let pixel_format = context.pixel_format().expect("pixel format");
@@ -66,11 +71,11 @@ impl Screen {
         output.set_preferred(mode);
 
         let damage_tracker = OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180);
-        Screen { output, surface, renderer, damage_tracker, _hwc: hwc }
+        let vsync_period_ns = hwc.vsync_period_ns as u64;
+        Screen { output, vsync_period_ns, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
     }
 
-    /// Draws the space and hands the frame to hwcomposer. The swap waits for
-    /// vsync.
+    /// Draws the space and hands the frame to hwcomposer.
     pub fn render(&mut self, state: &State) {
         let elements = space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
             .expect("render elements");
@@ -83,7 +88,8 @@ impl Screen {
         self.surface.swap_buffers(None).expect("swap_buffers");
     }
 
-    /// Frame callbacks to every window, after a frame went out.
+    /// Frame callbacks to every window, after a frame went out, with the time
+    /// it will be on screen.
     pub fn send_frames(&self, state: &State, time: Duration) {
         for window in state.space.elements() {
             window.send_frame(&self.output, time, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
