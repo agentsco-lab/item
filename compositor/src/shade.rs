@@ -6,18 +6,26 @@
 //! the sheet and never reaches a client. While the finger holds it, the sheet's
 //! bottom edge follows the finger; let go, it runs to open or closed by the
 //! finger's speed, or by how far it was pulled. A tap on an open sheet closes
-//! it. The sheet carries a clock, in seven segments of solid rectangles: no
-//! text rendering yet.
-
-use std::cell::Cell;
+//! it. The sheet carries the time, the date and the battery, as text
+//! (`text.rs`).
 
 use smithay::backend::input::TouchSlot;
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
-use smithay::backend::renderer::element::{Id, Kind};
+use smithay::backend::renderer::element::{render_elements, Id, Kind};
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::utils::CommitCounter;
-use smithay::utils::{Logical, Physical, Rectangle};
+use smithay::utils::{Physical, Rectangle};
 
 use crate::layout::{self, SCALE};
+use crate::text::{Font, Label};
+
+render_elements! {
+    /// What the shell draws: rectangles and text.
+    pub ShellElement<=GlesRenderer>;
+    Solid=SolidColorRenderElement,
+    Text=MemoryRenderBufferRenderElement<GlesRenderer>,
+}
 
 /// Touches starting this close to a panel's top pull its sheet (logical px).
 const EDGE: f64 = 20.0;
@@ -29,7 +37,8 @@ const FLING: f64 = 0.3;
 const TAP: f64 = 8.0;
 
 const SHEET: [f32; 4] = premultiplied([0.06, 0.08, 0.12], 0.88);
-const DIGITS: [f32; 4] = [0.92, 0.94, 0.96, 1.0];
+const TEXT: [f32; 4] = [0.93, 0.95, 0.97, 1.0];
+const DIM: [f32; 4] = [0.62, 0.66, 0.72, 1.0];
 const HANDLE: [f32; 4] = [0.45, 0.48, 0.52, 1.0];
 
 const fn premultiplied(rgb: [f32; 3], a: f32) -> [f32; 4] {
@@ -84,14 +93,49 @@ pub struct Shade {
     /// A finger's move the screen has not shown yet: the event's time (µs,
     /// CLOCK_MONOTONIC as libinput stamps it) and when it reached us (ns).
     moved: Option<(u64, u64)>,
-    /// The minute the clock shows.
-    minute: Cell<i32>,
+    fonts: Option<(Font, Font)>,
+    time: Label,
+    date: Label,
+    battery: Label,
 }
 
 impl Shade {
     pub fn new() -> Shade {
         let sheet = || Sheet { height: 0.0, grab: None, run: None, ids: (0..40).map(|_| Id::new()).collect() };
-        Shade { sheets: [sheet(), sheet()], moved: None, minute: Cell::new(-1) }
+        let light = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
+        let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
+        if light.is_none() || regular.is_none() {
+            tracing::warn!("shade: no fonts, no text");
+        }
+        let mut shade = Shade {
+            sheets: [sheet(), sheet()],
+            moved: None,
+            fonts: light.zip(regular),
+            time: Label::new(64.0, TEXT),
+            date: Label::new(18.0, TEXT),
+            battery: Label::new(15.0, DIM),
+        };
+        shade.refresh_text();
+        shade
+    }
+
+    /// Brings the text up to the time and the battery; returns whether any
+    /// of it changed.
+    pub fn refresh_text(&mut self) -> bool {
+        let Some((light, regular)) = &self.fonts else { return false };
+        let now = local_time();
+        let time = format!("{}:{:02}", now.tm_hour, now.tm_min);
+        let date = format!("{}, {} {}", WEEKDAYS[now.tm_wday as usize], now.tm_mday, MONTHS[now.tm_mon as usize]);
+        let battery = battery();
+        let mut changed = self.time.set(light, &time);
+        changed |= self.date.set(regular, &date);
+        changed |= self.battery.set(regular, &battery);
+        changed
+    }
+
+    /// Whether a sheet is out, and its text worth keeping up to date.
+    pub fn visible(&self) -> bool {
+        self.sheets.iter().any(|s| s.height > 0.0 || s.run.is_some() || s.grab.is_some())
     }
 
     /// A touch down: taken by a sheet if it starts at a panel's top edge or on
@@ -107,8 +151,10 @@ impl Shade {
         // Caught mid-run: it stops under the finger.
         sheet.run = None;
         sheet.height = height;
-        sheet.grab = Some(Grab { slot, offset: height - y, start_y: y, moved: false, last: (time_us, y), velocity: 0.0 });
+        let sheet_grab = Grab { slot, offset: height - y, start_y: y, moved: false, last: (time_us, y), velocity: 0.0 };
+        sheet.grab = Some(sheet_grab);
         tracing::debug!("shade {p}: grabbed at {y:.0}, height {height:.0}");
+        self.refresh_text();
         true
     }
 
@@ -185,17 +231,8 @@ impl Shade {
         self.moved.take()
     }
 
-    /// Whether a sheet is out and the clock on it shows another minute than
-    /// the time's.
-    pub fn clock_stale(&self) -> bool {
-        self.sheets.iter().any(|s| s.height > 0.0 || s.run.is_some()) && local_minutes() != self.minute.get()
-    }
-
-    /// The sheets' rectangles for a frame shown at `frame_ns`, topmost first.
-    pub fn elements(&self, frame_ns: u64) -> Vec<SolidColorRenderElement> {
-        let minutes = local_minutes();
-        self.minute.set(minutes);
-        let digits = [minutes / 600, minutes / 60 % 10, minutes % 60 / 10, minutes % 10];
+    /// What the sheets draw for a frame shown at `frame_ns`, topmost first.
+    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
         let mut out = Vec::new();
         for (sheet, panel) in self.sheets.iter().zip(layout::panels()) {
             let height = sheet.height_at(frame_ns);
@@ -205,67 +242,60 @@ impl Shade {
                 continue;
             }
             let panel = panel.to_physical(SCALE);
-            let mut ids = sheet.ids.iter();
-            let mut push = |rect: Rectangle<i32, Logical>, color: [f32; 4], ids: &mut std::slice::Iter<Id>| {
-                let id = ids.next().expect("enough ids").clone();
-                // The sheet's content hangs from its bottom edge.
-                let r = Rectangle::<i32, Physical>::new(
-                    (panel.loc.x + rect.loc.x * SCALE, h + rect.loc.y * SCALE).into(),
-                    (rect.size.w * SCALE, rect.size.h * SCALE).into(),
-                );
-                if let Some(r) = r.intersection(Rectangle::new(panel.loc, (panel.size.w, h).into())) {
-                    out.push(SolidColorRenderElement::new(id, r, CommitCounter::default(), color, Kind::Unspecified));
+            // The sheet's content hangs from its bottom edge: `y` is logical
+            // px from it, and a label is centred on the panel.
+            for (label, y) in [(&self.time, -210), (&self.date, -118), (&self.battery, -80)] {
+                if label.extent.w == 0 {
+                    continue;
                 }
-            };
-            // The handle, then the clock, above the sheet.
-            push(Rectangle::new((675 / 2 - 30, -16).into(), (60, 5).into()), HANDLE, &mut ids);
-            let (w, dh, t) = (40, 72, 8);
-            let top = -150;
-            let left = (675 - 232) / 2;
-            for (i, &d) in digits.iter().enumerate() {
-                let x = left + [0, 56, 136, 192][i];
-                for (s, seg) in segments(w, dh, t).iter().enumerate() {
-                    if SEVEN[d as usize] & (1 << s) != 0 {
-                        push(Rectangle::new((x + seg.0, top + seg.1).into(), (seg.2, seg.3).into()), DIGITS, &mut ids);
-                    }
+                let x = panel.loc.x + (panel.size.w - label.extent.w * SCALE) / 2;
+                let loc = (x as f64, (h + y * SCALE) as f64);
+                match MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &label.buffer, None, None, None, Kind::Unspecified) {
+                    Ok(e) => out.push(ShellElement::Text(e)),
+                    Err(e) => tracing::warn!("shade: text: {e}"),
                 }
             }
-            for y in [dh / 3, dh * 2 / 3] {
-                push(Rectangle::new((left + 116, top + y - t / 2).into(), (t, t).into()), DIGITS, &mut ids);
+            let mut ids = sheet.ids.iter();
+            let handle = Rectangle::<i32, Physical>::new(
+                (panel.loc.x + panel.size.w / 2 - 30 * SCALE, h - 16 * SCALE).into(),
+                (60 * SCALE, 5 * SCALE).into(),
+            );
+            if let Some(r) = handle.intersection(Rectangle::new(panel.loc, (panel.size.w, h).into())) {
+                let id = ids.next().expect("enough ids").clone();
+                out.push(ShellElement::Solid(SolidColorRenderElement::new(id, r, CommitCounter::default(), HANDLE, Kind::Unspecified)));
             }
             // The sheet itself, from the panel's top to its edge, in physical
             // px: in logical ones an odd height left a line of the window
             // above it.
             let id = ids.next().expect("enough ids").clone();
             let sheet_rect = Rectangle::new(panel.loc, (panel.size.w, h).into());
-            out.push(SolidColorRenderElement::new(id, sheet_rect, CommitCounter::default(), SHEET, Kind::Unspecified));
+            out.push(ShellElement::Solid(SolidColorRenderElement::new(id, sheet_rect, CommitCounter::default(), SHEET, Kind::Unspecified)));
         }
         out
     }
 }
 
-/// The segments a-g of a digit `w` by `h` with strokes `t`: x, y, w, h.
-fn segments(w: i32, h: i32, t: i32) -> [(i32, i32, i32, i32); 7] {
-    [
-        (0, 0, w, t),
-        (w - t, 0, t, h / 2),
-        (w - t, h / 2, t, h / 2),
-        (0, h - t, w, t),
-        (0, h / 2, t, h / 2),
-        (0, 0, t, h / 2),
-        (0, h / 2 - t / 2, w, t),
-    ]
-}
+const WEEKDAYS: [&str; 7] = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
+const MONTHS: [&str; 12] = [
+    "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря",
+];
 
-/// Which of the segments a-g (bits 0-6) each digit lights.
-const SEVEN: [u8; 10] = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f];
-
-/// Minutes since local midnight.
-fn local_minutes() -> i32 {
+fn local_time() -> libc::tm {
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&now, &mut tm);
-        tm.tm_hour * 60 + tm.tm_min
+        tm
+    }
+}
+
+/// The battery's charge and whether it charges, from the kernel.
+fn battery() -> String {
+    let read = |f: &str| std::fs::read_to_string(format!("/sys/class/power_supply/battery/{f}")).map(|s| s.trim().to_owned());
+    match (read("capacity"), read("status")) {
+        (Ok(c), Ok(s)) if s == "Charging" => format!("{c} % · заряжается"),
+        (Ok(c), Ok(s)) if s == "Full" => format!("{c} % · заряжен"),
+        (Ok(c), _) => format!("{c} %"),
+        _ => String::new(),
     }
 }

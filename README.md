@@ -30,10 +30,10 @@ item, which keep running the phone day to day.
 | clients | xdg-shell; shm, and GL over libhybris' `android_wlegl` | a window per panel, 60 fps with two |
 | touch | libinput to `wl_touch`, the touchscreen one to one with the output, hinge and all | both panels |
 | the session | the user's, on tty7 as phosh runs; our desktop name, a gtk portals configuration | GTK apps map in under 2 s |
-| the shade | a sheet per panel, pulled from the top edge by the finger, drawn in the compositor's own pass | finger to screen 22-26 ms, no frames missed |
+| the shade | a sheet per panel, pulled from the top edge by the finger, drawn in the compositor's own pass; the time, the date, the battery as text (fontdue, the system's fonts) | finger to screen 22-26 ms, no frames missed |
 | frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, drawn late in the frame; only the damage redrawn | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
-What it does not do yet: cheaper shm frames, `wp_presentation`, the rest of the shell (the shade's contents and text, the dock, gestures between panels), the
+What it does not do yet: cheaper shm frames, `wp_presentation`, the rest of the shell (the shade's quick settings and notifications, the dock, gestures between panels), the
 on-screen keyboard, the pen, blanking and the power key, the portals'
 Settings interface.
 
@@ -51,6 +51,7 @@ Settings interface.
 | 4a | buffer age and damage: redraw only what changed | one panel instead of the screen; GL client frames 2 ms, shm 9-11 ms (`log/2026-09-30-step-4-damage.md`) |
 | 4b | the present, the buffer age, a tapping benchmark | presentOrValidate crashes; buffer age 3 not EGL's 2 (flicker gone); drawing late takes about 5 ms off, to about 39 ms touch to screen (`log/2026-09-30-step-4b-present.md`) |
 | 5 | the shade: a sheet per panel following the finger, a clock in seven segments | finger to screen 22-26 ms against about 39 ms through GTK; a 1 px line from logical rounding fixed (`log/2026-09-30-step-5-shade.md`) |
+| 5b | text on the shade: fontdue into a texture, remade only when the text changes | sharp, the right way up, as smooth; two seconds of missed frames to look into (`log/2026-09-30-step-5b-text.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -109,7 +110,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences

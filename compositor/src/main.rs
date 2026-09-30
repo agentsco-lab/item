@@ -19,6 +19,7 @@ mod layout;
 mod output;
 mod shade;
 mod state;
+mod text;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -288,7 +289,7 @@ fn main() {
     handle
         .insert_source(Timer::from_duration(std::time::Duration::from_secs(1)), |_, _, data: &mut Data| {
             data.log_report();
-            if data.state.shade.clock_stale() {
+            if data.state.shade.visible() && data.state.shade.refresh_text() {
                 data.state.needs_redraw = true;
             }
             if let Some(s) = data.state.stop_after {

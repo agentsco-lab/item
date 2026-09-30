@@ -10,6 +10,7 @@ smithay-hybris = { path = "../crates/smithay-hybris" }
 smithay = { version = "0.7", default-features = false, features = ["renderer_gl", "wayland_frontend", "desktop", "use_system_lib", "backend_libinput"] }
 # libwayland-server is opened at run time, not linked: the cross build has none.
 wayland-sys = { version = "0.31", features = ["dlopen"] }
+fontdue = "0.9"
 libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

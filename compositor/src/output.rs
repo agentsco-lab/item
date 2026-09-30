@@ -11,7 +11,6 @@ use hybris_hwc::Output as HwcOutput;
 use smithay::backend::egl::context::{GlAttributes, PixelFormatRequirements};
 use smithay::backend::egl::{EGLContext, EGLDisplay, EGLSurface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -24,6 +23,7 @@ use smithay::utils::Transform;
 use smithay_hybris::{HwcWindow, HybrisDisplay};
 
 use crate::layout::SCALE;
+use crate::shade::ShellElement;
 use crate::state::State;
 
 /// What drawing a frame took.
@@ -41,7 +41,7 @@ pub struct FrameCost {
 render_elements! {
     /// What a frame is drawn from: the shell's own rectangles over the windows.
     FrameElement<=GlesRenderer>;
-    Shell=SolidColorRenderElement,
+    Shell=ShellElement,
     Space=SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
 }
 
@@ -118,7 +118,7 @@ impl Screen {
         // left the undamaged parts of a buffer three frames old, not two: an
         // empty panel flickered.
         let age = if self.frames_drawn < BUFFERS as u64 { 0 } else { BUFFERS };
-        let mut elements: Vec<FrameElement> = state.shade.elements(frame_ns).into_iter().map(FrameElement::from).collect();
+        let mut elements: Vec<FrameElement> = state.shade.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
         elements.extend(
             space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
                 .expect("render elements")
