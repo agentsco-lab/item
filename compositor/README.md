@@ -1,11 +1,12 @@
 # item-compositor
 
 A Wayland compositor of our own for the Surface Duo 1, in Rust on
-[smithay](https://github.com/Smithay/smithay), meant to become the base of
-item-shell (agentsco-lab/item).
+[smithay](https://github.com/Smithay/smithay), item-shell's next base
+([docs/COMPOSITOR.md](../docs/COMPOSITOR.md)). It was an experiment of its
+own until 2026-10-01 and came into item with its history.
 
 Why, from a day of probes on the Lindroid chain
-(agentsco-lab/duo-lindroid, `log/2026-09-30-choosing-a-base.md`):
+(agentsco-lab/duo-lindroid, private, `log/2026-09-30-choosing-a-base.md`):
 
 - **Speed.** It draws straight into Android's hwcomposer through libhybris'
   hwc2 API, as Droidian's phoc does in C: no Lindroid chain, no CPU copy of

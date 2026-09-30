@@ -42,6 +42,13 @@ the hinge hides is in the middle), at the port's output scale of 2.
 
 [docs/SHELL.md](docs/SHELL.md) has what each of these does and why.
 
+**What comes next**: item-shell moves onto a compositor of its own,
+`compositor/`, which draws the whole shell in one GPU pass through the
+phone's hwcomposer. Measured against item on phosh it keeps the vsync where
+phosh's shade and grid stutter, in a third of the memory. Until it has
+everything phosh gives today, item-shell 0.1 on phosh stays the one to
+install: [docs/COMPOSITOR.md](docs/COMPOSITOR.md).
+
 ## Installing
 
 item-shell 0.1.0 needs the port, 0.21.0 or later, on Droidian 102:
@@ -70,7 +77,8 @@ sudo systemctl restart phosh
 | `package/` | `build.sh`, which makes `item-shell_<version>_arm64.deb` |
 | `tests/` | the running-apps grouping and the dock's placing, without a phone |
 | `tools/` | `sfduo-perfcheck`: the shell's frame times against thresholds, on the phone |
-| `docs/` | [SHELL.md](docs/SHELL.md), [SETTINGS.md](docs/SETTINGS.md) |
+| `compositor/` | item-compositor: the shell's next base, a compositor of its own in Rust drawing through hwcomposer, with its steps and measurements in `compositor/log/` ([COMPOSITOR.md](docs/COMPOSITOR.md)) |
+| `docs/` | [SHELL.md](docs/SHELL.md), [SETTINGS.md](docs/SETTINGS.md), [COMPOSITOR.md](docs/COMPOSITOR.md) |
 
 ## License
 
