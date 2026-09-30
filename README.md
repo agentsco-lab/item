@@ -26,6 +26,8 @@ item, which keep running the phone day to day.
 | | | |
 |---|---|---|
 | A | smithay's anvil on the Lindroid chain (duo-lindroid's test image): do smithay's EGL and GLES run on libhybris? | |
+| C1 | smithay's `GlesRenderer` on our EGL over hwcomposer (no GBM: the Android platform and the hwcomposer window) | done 2026-09-30: 60 fps, 1-1.5 ms to render a frame (`log/2026-09-30-probe-c1.md`) |
+| C2 | a Wayland client in it: foot (shm), then GTK4 over `android_wlegl` | |
 | B | a minimal Rust program that puts a GL frame on the Duo's panels through libhybris' hwc2, at vsync: the core of the backend | done 2026-09-30: 60 fps across both panels, 16.7 ms between frames, no copy (`log/2026-09-30-probe-b.md`) |
 
 What each must answer - the seams between smithay and libhybris, not the
@@ -62,7 +64,10 @@ with item as a Rust daemon over sway's IPC and layer-shell clients
 
 ## Layout
 
+- `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client layer, a native window presenting with fences
 - `probes/hwc-frame` - probe B: a GL frame through hwcomposer from Rust
+- `probes/smithay-frame` - probe C1: smithay's renderer into that window
+- `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against (into `sysroot/`, not tracked)
 - `tools/probe-run.sh` - runs a probe on the phone with the shell stopped, and the shell back after
 - `log/` - what each probe found
 - Cross builds: `cargo build --release --target aarch64-unknown-linux-gnu`

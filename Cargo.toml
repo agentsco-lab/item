@@ -1,5 +1,5 @@
 [workspace]
-members = ["probes/hwc-frame"]
+members = ["crates/hybris-hwc", "probes/hwc-frame", "probes/smithay-frame"]
 resolver = "2"
 
 [profile.release]

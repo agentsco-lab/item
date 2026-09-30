@@ -5,3 +5,4 @@ edition = "2021"
 description = "Probe B: a GL frame on the Surface Duo's panels through libhybris' hwc2, at vsync"
 
 [dependencies]
+hybris-hwc = { path = "../../crates/hybris-hwc" }
