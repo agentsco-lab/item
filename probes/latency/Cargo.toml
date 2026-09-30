@@ -1,0 +1,10 @@
+[package]
+name = "latency-probe"
+version = "0.1.0"
+edition = "2021"
+description = "A Wayland client that times its frames to the screen with wp_presentation, the same under any compositor"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client"] }
+libc = "0.2"

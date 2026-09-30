@@ -64,6 +64,8 @@ pub struct State {
     _text_input_state: TextInputManagerState,
     _virtual_keyboard_state: VirtualKeyboardManagerState,
     data_control_state: DataControlState,
+    /// wp_presentation: clients told when their frame reached the screen.
+    _presentation_state: smithay::wayland::presentation::PresentationState,
     pub layers: crate::layers::Layers,
     /// The keyboard's height taken off the windows of its panel, as applied.
     osk_applied: Option<(usize, i32)>,
@@ -133,6 +135,7 @@ impl State {
             _text_input_state: TextInputManagerState::new::<State>(dh),
             _virtual_keyboard_state: VirtualKeyboardManagerState::new::<State, _>(dh, |_| true),
             data_control_state: DataControlState::new::<State, _>(dh, None, |_| true),
+            _presentation_state: smithay::wayland::presentation::PresentationState::new::<State>(dh, libc::CLOCK_MONOTONIC as u32),
             layers: Default::default(),
             osk_applied: None,
             seat_state,
@@ -663,3 +666,4 @@ delegate_input_method_manager!(State);
 delegate_text_input_manager!(State);
 delegate_virtual_keyboard_manager!(State);
 smithay::delegate_data_control!(State);
+smithay::delegate_presentation!(State);

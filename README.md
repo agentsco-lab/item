@@ -80,6 +80,7 @@ What it does not do yet: installing as a session of its own, the pen's own sheet
 | 18 | the lid, the pen, the system screen (sysscreen.rs) | (`log/2026-09-30-step-18-lid-pen-system.md`) |
 | 19 | a window's close, the volume bar, the dock's rise after an unlock | as item's (`log/2026-10-01-step-19-motion.md`) |
 | 20 | the pen's sheet (pensheet.rs) | drawn with the pen, steps 17-20 tried by hand; the dock now told on the frame after a slide ends (`log/2026-10-01-step-20-pen-sheet.md`) |
+| 21 | the A/B against item on phosh; `wp_presentation` | timed at hwcomposer's present under both: the shade and the grid keep the vsync where phosh's stutter (6 gaps; a 240 ms freeze); a third of the memory; a tap 3 ms slower (frames drawn whole) (`log/2026-10-01-step-21-ab.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -152,6 +153,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
   of taps and drags, with frames saved
 - `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against
   (into `sysroot/`, not tracked)
+- `tools/ab-latency.sh`, `tools/ab-motion.sh`, `tools/ab-idle.py`, `tools/ab-probe.sh`, `tools/ab-phosh.sh`, `probes/latency` - the A/B of the two stacks, timed below both (a uprobe on hwc2 present) and by a probe client
 - `tools/bench.sh`, `tools/tap.py`, `tools/swipe.py` - benchmarks through a
   virtual touchscreen, with no one at the phone: tapping GNOME Calculator,
   pulling the shades (`DRIVER=swipe`), or scrolling Settings (`DRIVER=scroll`)

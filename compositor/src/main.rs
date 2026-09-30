@@ -61,6 +61,8 @@ pub struct Data {
     report: Report,
     handle: LoopHandle<'static, Data>,
     pacing: Pacing,
+    /// Swapped frames' presentation feedback, with the vsync each shows at.
+    feedback: Vec<(u64, smithay::desktop::utils::OutputPresentationFeedback)>,
 }
 
 /// When in the frame to draw.
@@ -189,6 +191,18 @@ impl Data {
             self.pacing.callbacks_due = false;
             let time = std::time::Duration::from_nanos(vsync.saturating_sub(self.screen.clock_origin_ns));
             self.screen.send_frames(&self.state, time);
+            let _ = self.state.display_handle.flush_clients();
+        }
+        // wp_presentation: the frames that were to show at this vsync are on
+        // screen; their time is the vsync's (CLOCK_MONOTONIC, hwcomposer's).
+        if self.feedback.first().is_some_and(|(at, _)| *at <= vsync + period as u64 / 2) {
+            use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
+            let refresh = smithay::wayland::presentation::Refresh::fixed(std::time::Duration::from_nanos(period as u64));
+            let seq = hybris_hwc::vsyncs();
+            while self.feedback.first().is_some_and(|(at, _)| *at <= vsync + period as u64 / 2) {
+                let (_, mut f) = self.feedback.remove(0);
+                f.presented::<_, smithay::utils::Monotonic>(std::time::Duration::from_nanos(vsync), refresh, seq, Kind::Vsync);
+            }
             let _ = self.state.display_handle.flush_clients();
         }
         // The first frame after a pause is drawn at once: the GPU wakes slowly,
@@ -337,6 +351,10 @@ impl Data {
             );
             target + self.screen.vsync_period_ns
         };
+        if cost.swapped {
+            let feedback = self.screen.take_feedback(&self.state);
+            self.feedback.push((shown_at, feedback));
+        }
         if let Some(touched) = self.state.touch_answered.take() {
             self.report.touch_to_screen_ms.push(shown_at.saturating_sub(touched) as f64 / 1e6);
         }
@@ -620,7 +638,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing };
+        volume_bar_up: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.

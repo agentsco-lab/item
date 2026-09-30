@@ -364,6 +364,21 @@ impl Screen {
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }
 
+    /// The presentation feedback the windows and layer surfaces asked for
+    /// with the frame just drawn, to be answered when it is on screen.
+    pub fn take_feedback(&self, state: &State) -> smithay::desktop::utils::OutputPresentationFeedback {
+        use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind;
+        let mut feedback = smithay::desktop::utils::OutputPresentationFeedback::new(&self.output);
+        let output = self.output.clone();
+        for window in state.space.elements() {
+            window.take_presentation_feedback(&mut feedback, |_, _| Some(output.clone()), |_, _| Kind::Vsync);
+        }
+        for layer in &state.layers.surfaces {
+            smithay::desktop::utils::take_presentation_feedback_surface_tree(layer.wl_surface(), &mut feedback, |_, _| Some(output.clone()), |_, _| Kind::Vsync);
+        }
+        feedback
+    }
+
     /// Frame callbacks to every window, after a frame went out, with the time
     /// it will be on screen.
     pub fn send_frames(&self, state: &State, time: Duration) {
