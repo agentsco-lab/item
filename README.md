@@ -47,6 +47,7 @@ Settings interface.
 | 1 | the compositor crate, in the user's session | apps in under 2 s once the session's portals were set up (`log/2026-09-30-step-1-compositor.md`) |
 | 2 | frames paced by vsync, drawn only on change | 0 frames when still, touch to screen about 45 ms (`log/2026-09-30-step-2-pacing.md`) |
 | 3 | drawing late in the frame | in, but a frame costs 3-13 ms plus hwcomposer's 3 ms present: make it cheaper first (`log/2026-09-30-step-3-late-draw.md`) |
+| 4a | buffer age and damage: redraw only what changed | one panel instead of the screen; GL client frames 2 ms, shm 9-11 ms (`log/2026-09-30-step-4-damage.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:

@@ -23,9 +23,23 @@ use smithay_hybris::{HwcWindow, HybrisDisplay};
 use crate::layout::SCALE;
 use crate::state::State;
 
+/// What drawing a frame took.
+pub struct FrameCost {
+    pub draw_ns: u64,
+    pub swap_ns: u64,
+    /// The buffer's age (0: unknown, all redrawn).
+    pub age: usize,
+    /// Physical px redrawn.
+    pub damaged_px: i64,
+    /// Whether a frame went to hwcomposer (nothing damaged: no).
+    pub swapped: bool,
+}
+
 pub struct Screen {
     pub output: Output,
     pub vsync_period_ns: u64,
+    /// The output's physical pixels.
+    pub pixels: i64,
     /// CLOCK_MONOTONIC at start: frame callbacks' times count from it.
     pub clock_origin_ns: u64,
     surface: EGLSurface,
@@ -72,24 +86,42 @@ impl Screen {
 
         let damage_tracker = OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180);
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, vsync_period_ns, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
+        Screen { output, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
     }
 
-    /// Draws the space and hands the frame to hwcomposer. Returns how long
-    /// the drawing and the swap took (ns).
-    pub fn render(&mut self, state: &State) -> (u64, u64) {
+    /// Draws what changed in the space and hands the frame to hwcomposer.
+    ///
+    /// The EGL surface's buffer age says how many frames old the buffer's
+    /// contents are; the damage tracker redraws only what changed since then
+    /// (everything when the age is 0, unknown). Nothing changed: no swap.
+    pub fn render(&mut self, state: &State) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
+        let age = self.surface.buffer_age().unwrap_or(0).max(0) as usize;
         let elements = space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
             .expect("render elements");
-        {
+        let damaged_px: i64 = {
             let mut target = self.renderer.bind(&mut self.surface).expect("bind");
-            self.damage_tracker
-                .render_output(&mut self.renderer, &mut target, 0, &elements, [0.08, 0.1, 0.14, 1.0])
+            let result = self
+                .damage_tracker
+                .render_output(&mut self.renderer, &mut target, age, &elements, [0.08, 0.1, 0.14, 1.0])
                 .expect("render_output");
-        }
+            result
+                .damage
+                .map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum())
+                .unwrap_or(0)
+        };
         let t1 = hybris_hwc::now_ns();
-        self.surface.swap_buffers(None).expect("swap_buffers");
-        (t1 - t0, hybris_hwc::now_ns() - t1)
+        let swapped = damaged_px > 0;
+        if swapped {
+            self.surface.swap_buffers(None).expect("swap_buffers");
+        }
+        FrameCost {
+            draw_ns: t1 - t0,
+            swap_ns: hybris_hwc::now_ns() - t1,
+            age,
+            damaged_px,
+            swapped,
+        }
     }
 
     /// Frame callbacks to every window, after a frame went out, with the time

@@ -84,6 +84,12 @@ struct Report {
     swap_ms: Vec<f64>,
     present_ms: Vec<f64>,
     touch_to_screen_ms: Vec<f64>,
+    /// Frames by buffer age.
+    ages: std::collections::BTreeMap<usize, u32>,
+    /// Share of the screen redrawn, %.
+    damaged_share: Vec<f64>,
+    /// Frames drawn with nothing damaged (no swap).
+    no_damage: u32,
 }
 
 /// "mean/max" of a second's samples.
@@ -136,8 +142,14 @@ impl Data {
             return;
         }
         self.state.needs_redraw = false;
-        let (draw_ns, swap_ns) = self.screen.render(&self.state);
+        let cost = self.screen.render(&self.state);
+        let (draw_ns, swap_ns) = (cost.draw_ns, cost.swap_ns);
         let took = draw_ns + swap_ns;
+        *self.report.ages.entry(cost.age).or_default() += 1;
+        self.report.damaged_share.push(cost.damaged_px as f64 / self.screen.pixels as f64 * 100.0);
+        if !cost.swapped {
+            self.report.no_damage += 1;
+        }
         // A frame longer than two periods (the first, a stall) says nothing
         // about the next one.
         if took < 2 * self.screen.vsync_period_ns {
@@ -146,7 +158,9 @@ impl Data {
         self.report.render_max_ms = self.report.render_max_ms.max(took as f64 / 1e6);
         self.report.draw_ms.push(draw_ns as f64 / 1e6);
         self.report.swap_ms.push(swap_ns as f64 / 1e6);
-        self.report.present_ms.push(hybris_hwc::last_present_took_ns() as f64 / 1e6);
+        if cost.swapped {
+            self.report.present_ms.push(hybris_hwc::last_present_took_ns() as f64 / 1e6);
+        }
         self.report.drawn += 1;
 
         // The frame shows at the vsync it aimed for, or one later if its
@@ -180,10 +194,10 @@ impl Data {
             format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
         };
         tracing::info!(
-            "drawn {:3} of {:3}  missed {:2}  commits {:3}  draw {} swap {} (present {}) ms  budget {:4.1}  touches {}  touch->screen {}  errors {}",
+            "drawn {:3} of {:3}  missed {:2}  commits {:3}  draw {} swap {} (present {}) ms  redrawn {}%  ages {:?}  no damage {}  budget {:4.1}  touches {}  touch->screen {}  errors {}",
             r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits),
-            mean_max(&r.draw_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms),
-            self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text, st.errors
+            mean_max(&r.draw_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), mean_max(&r.damaged_share),
+            r.ages, r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text, st.errors
         );
         self.report.vsyncs_at_last = v;
     }
