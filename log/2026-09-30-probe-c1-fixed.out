@@ -1,0 +1,15 @@
+Created symlink '/run/systemd/system/phosh.service' → '/dev/null'.
+[15:06:46.431] composer up: 1
+=== probe B
+  8.0 s:  60 fps  mean 16.68 ms  max  17.34 ms  over 20 ms  0  swap 16.42 ms  vsyncs  60  errors 0
+  9.0 s:  59 fps  mean 16.69 ms  max  17.37 ms  over 20 ms  0  swap 16.39 ms  vsyncs  59  errors 0
+ 10.0 s:  60 fps  mean 16.68 ms  max  18.37 ms  over 20 ms  0  swap 16.40 ms  vsyncs  60  errors 0
+=== probe C1
+  8.0 s:  60 fps  mean 16.68 ms  max  17.48 ms  over 20 ms  0  render  1.14 ms  swap 15.53 ms  vsyncs  60  errors 0
+        pixels 100:3f4159 700:3f4159 1300:3f4159 1390:000000 1500:3f4159 2100:3f4159 2700:3f4159  white at (Some(2736), Some(2776)) (bar drawn at x 2735)
+  9.0 s:  60 fps  mean 16.68 ms  max  17.43 ms  over 20 ms  0  render  1.24 ms  swap 15.42 ms  vsyncs  60  errors 0
+        pixels 100:3f4159 700:3f4159 1300:3f4159 1390:000000 1500:3f4159 2100:3f4159 2700:3f4159  white at (Some(2736), Some(2776)) (bar drawn at x 2735)
+ 10.0 s:  60 fps  mean 16.69 ms  max  17.42 ms  over 20 ms  0  render  1.23 ms  swap 15.44 ms  vsyncs  60  errors 0
+[15:07:08.193] exit 0
+[15:07:08.197] rollback
+[15:07:21.922] phosh active

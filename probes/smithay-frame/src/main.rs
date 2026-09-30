@@ -70,6 +70,25 @@ unsafe impl EGLNativeSurface for HwcWindow {
     }
 }
 
+extern "C" {
+    fn dlopen(file: *const std::ffi::c_char, flags: i32) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
+}
+
+fn libc_dlopen(name: &str) -> *mut c_void {
+    let c = std::ffi::CString::new(name).unwrap();
+    let h = unsafe { dlopen(c.as_ptr(), 2) };
+    assert!(!h.is_null(), "dlopen {name}");
+    h
+}
+
+unsafe fn libc_dlsym<T: Copy>(lib: *mut c_void, name: &str) -> T {
+    let c = std::ffi::CString::new(name).unwrap();
+    let p = dlsym(lib, c.as_ptr());
+    assert!(!p.is_null(), "dlsym {name}");
+    std::mem::transmute_copy(&p)
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -94,7 +113,19 @@ fn main() {
     println!("EGL context: {:?}", pixel_format);
     let mut surface = unsafe { EGLSurface::new(&display, pixel_format, context.config_id(), HwcWindow(out.window)) }
         .expect("EGLSurface");
+    let config_id = context.config_id();
     let mut renderer = unsafe { GlesRenderer::new(context) }.expect("GlesRenderer");
+
+    // Diagnostics: what EGL made of the window and the config.
+    let dh = display.get_display_handle();
+    let mut visual = 0;
+    unsafe { ffi::egl::GetConfigAttrib(**dh, config_id, ffi::egl::NATIVE_VISUAL_ID as i32, &mut visual) };
+    println!("EGL config native visual id {visual} (HAL format: 1 RGBA_8888, 2 RGBX_8888, 5 BGRA_8888); surface size {:?}",
+             surface.get_size());
+    let read_pixels: extern "C" fn(i32, i32, i32, i32, u32, u32, *mut c_void) = unsafe {
+        let lib = libc_dlopen("libGLESv2.so.2");
+        libc_dlsym(lib, "glReadPixels")
+    };
 
     let size: Size<i32, Physical> = (width, height).into();
     let full = Rectangle::from_size(size);
@@ -105,6 +136,7 @@ fn main() {
     let mut next_report = start + 1_000_000_000;
     let mut vsyncs_at_report = vsyncs();
     let (mut render_ns, mut swap_ns) = (0u64, 0u64);
+    let mut pixel_report = String::new();
     loop {
         let t = (now_ns() - start) as f64 / 1e9;
         if t > seconds as f64 {
@@ -119,17 +151,41 @@ fn main() {
             let mut target = renderer.bind(&mut surface).expect("bind");
             let mut frame = renderer.render(&mut target, size, Transform::Normal).expect("render");
             frame.clear(bg, &[full]).expect("clear");
-            frame.draw_solid(hinge, &[hinge], Color32F::new(0.0, 0.0, 0.0, 1.0)).expect("hinge");
-            frame.draw_solid(bar, &[bar], Color32F::new(1.0, 1.0, 1.0, 1.0)).expect("bar");
+            // draw_solid's damage is relative to its destination, not to the output.
+            frame.draw_solid(hinge, &[Rectangle::from_size(hinge.size)], Color32F::new(0.0, 0.0, 0.0, 1.0)).expect("hinge");
+            frame.draw_solid(bar, &[Rectangle::from_size(bar.size)], Color32F::new(1.0, 1.0, 1.0, 1.0)).expect("bar");
             let _ = frame.finish().expect("finish");
         }
         let r1 = now_ns();
+        if now_ns() >= next_report {
+                // What the frame holds: colours along the middle row, and where
+                // the white bar is (read before the swap: after it the back buffer is undefined).
+                let probe_row = height / 2;
+                let mut samples = String::new();
+                for sx in [100, 700, 1300, 1390, 1500, 2100, 2700] {
+                    let mut px = [0u8; 4];
+                    read_pixels(sx, probe_row, 1, 1, 0x1908, 0x1401, px.as_mut_ptr() as *mut c_void);
+                    samples += &format!(" {sx}:{:02x}{:02x}{:02x}", px[0], px[1], px[2]);
+                }
+                let mut white = Vec::new();
+                let mut sx = 0;
+                while sx < width {
+                    let mut px = [0u8; 4];
+                    read_pixels(sx, probe_row, 1, 1, 0x1908, 0x1401, px.as_mut_ptr() as *mut c_void);
+                    if px[0] > 0xf0 && px[1] > 0xf0 && px[2] > 0xf0 {
+                        white.push(sx);
+                    }
+                    sx += 8;
+                }
+                pixel_report = format!("        pixels{samples}  white at {:?} (bar drawn at x {x})", (white.first(), white.last()));
+        }
         surface.swap_buffers(None).expect("swap_buffers");
         let r2 = now_ns();
         render_ns += r1 - r0;
         swap_ns += r2 - r1;
 
         if r2 >= next_report {
+            println!("{pixel_report}");
             let v = vsyncs();
             let st = take_stats();
             let f = st.frames.max(1) as f64;
