@@ -44,3 +44,10 @@ third with the pen's other end. The saved PNG was the sheet as drawn
 itself.
 
 ![the sheet out; the saved PNG of the test stroke; the dock back on both panels after it left](step-20/sheet.png)
+
+## A session by hand (2026-10-01)
+
+A 15-minute session with everything from steps 17-20 at the phone: the
+pen's sheet with the pen itself, the pen as a finger, the system screen,
+a window's close, the volume bar, the power key, the PIN, the lid, the
+dock's rise. All good. Steps 1-20 are now all tried by hand.
