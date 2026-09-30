@@ -21,7 +21,6 @@ pub fn panels() -> [Rectangle<i32, Logical>; 2] {
 }
 
 /// The panel under a point, if it is not on the hinge.
-#[allow(dead_code)]
 pub fn panel_at(point: Point<f64, Logical>) -> Option<usize> {
     panels().iter().position(|p| p.to_f64().contains(point))
 }

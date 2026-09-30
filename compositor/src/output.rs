@@ -30,6 +30,8 @@ use crate::state::State;
 /// What drawing a frame took.
 pub struct FrameCost {
     pub draw_ns: u64,
+    /// Of the draw: gathering the elements, clients' buffers made textures.
+    pub elements_ns: u64,
     pub swap_ns: u64,
     /// The buffer's age (0: unknown, all redrawn).
     pub age: usize,
@@ -137,6 +139,7 @@ impl Screen {
                 .into_iter()
                 .map(FrameElement::from),
         );
+        let elements_ns = hybris_hwc::now_ns() - t0;
         // Every frame is drawn whole (age 0). Drawing only the damage on top
         // of the buffer's old contents (its age: BUFFERS, the window's strict
         // turn) left garbage on Adreno through libhybris: the driver does not
@@ -152,7 +155,7 @@ impl Screen {
         if !partial && primed && self.shot.is_none() {
             let changed = self.damage_tracker.damage_output(1, &elements).map(|(d, _)| d.is_some()).unwrap_or(true);
             if !changed {
-                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, swap_ns: 0, age: 0, damaged_px: 0, swapped: false };
+                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age: 0, damaged_px: 0, swapped: false };
             }
         }
         let age = if partial && primed && self.shot.is_none() { BUFFERS } else { 0 };
@@ -232,6 +235,7 @@ impl Screen {
         }
         FrameCost {
             draw_ns: t1 - t0,
+            elements_ns,
             swap_ns: hybris_hwc::now_ns() - t1,
             age,
             damaged_px,

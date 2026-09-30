@@ -1,7 +1,17 @@
-//! The dock: item's two halves, a rounded slab at each panel's outer bottom
-//! corner, drawn by the compositor. A tap on an icon launches the app onto
-//! that panel. A half stands on an empty panel and slides down out of sight
-//! while a window has the panel; it comes back when the panel is empty again.
+//! The dock: item's two halves, drawn by the compositor, and item's way of
+//! moving them (sfduo-dock's `_pane_targets`, `_pane_path`).
+//!
+//! - Both panels free: each half is a rounded slab at its panel's outer
+//!   bottom corner, under the thumbs of two hands holding the open device.
+//! - One panel taken: the two stand side by side on the free one. The half
+//!   whose panel it is stays where it stood; the other comes across the
+//!   hinge and stands beside it, square where they meet, its inner padding
+//!   tucked under.
+//! - Both taken: they dip below the bottom edge where they stand.
+//!
+//! A move takes 440 ms, eased in and out. The hinge is crossed as a tunnel
+//! an icon long, so an icon goes all the way in before any of it comes out.
+//! A tap on an icon launches the app onto the panel it was tapped on.
 //!
 //! The apps are item's: `~/.config/sfduo/dock.json` (`{"left": [...],
 //! "right": [...]}`, desktop file names), else a default. Icons come from the
@@ -29,8 +39,13 @@ const PAD: i32 = 12;
 const MARGIN: i32 = 10;
 const RADIUS: f32 = 20.0;
 const SLAB: [u8; 4] = [38, 48, 43, 235];
-/// How long a half takes to slide in or out.
-const SLIDE_NS: u64 = 260_000_000;
+/// How long a move takes (item's MOVE_CROSS_MS).
+const MOVE_NS: u64 = 440_000_000;
+/// The hinge as the halves cross it: a tunnel an icon long (item's TUNNEL_PX).
+const TUNNEL: f64 = (ICON + 2) as f64;
+/// The arriving half's inner padding, tucked under where the two meet
+/// (item's JOIN_TUCK): their icons then stand GAP apart, as within a half.
+const TUCK: f64 = (PAD - (GAP - PAD)) as f64;
 /// A touch that travels this far is not a tap.
 const TAP: f64 = 12.0;
 
@@ -45,53 +60,52 @@ struct App {
     icon: Option<MemoryRenderBuffer>,
 }
 
-struct Slide {
-    from: f64,
-    to: f64,
-    start_ns: u64,
+/// Where the halves stand.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Mode {
+    /// Each at its own panel's outer edge.
+    Both,
+    /// Side by side on this panel.
+    On(usize),
+    /// Below the bottom edge.
+    Hidden,
 }
 
 struct Half {
     apps: Vec<App>,
+    /// All corners round, and square on the side that meets the other half
+    /// (the right side for the left half, the left for the right).
     slab: MemoryRenderBuffer,
-    /// Where the slab stands when shown, logical px.
-    rect: Rectangle<i32, Logical>,
-    /// 0 shown, 1 out of sight.
-    hidden: f64,
-    slide: Option<Slide>,
+    slab_joined: MemoryRenderBuffer,
+    /// The slab's size, logical px.
+    size: (i32, i32),
     /// The icon a finger is on, and the finger.
     pressed: Option<(usize, TouchSlot, Point<f64, Logical>)>,
 }
 
-impl Half {
-    fn hidden_at(&self, frame_ns: u64) -> f64 {
-        match &self.slide {
-            Some(s) => {
-                let p = (frame_ns.saturating_sub(s.start_ns) as f64 / SLIDE_NS as f64).clamp(0.0, 1.0);
-                // Eased in and out: it leaves from rest and arrives at rest.
-                let e = p * p * (3.0 - 2.0 * p);
-                s.from + (s.to - s.from) * e
-            }
-            None => self.hidden,
-        }
-    }
+/// A half's place at a moment: its slab's left edge and top, logical px;
+/// how much of its inner padding is tucked; whether it is square where the
+/// halves meet.
+#[derive(Clone, Copy)]
+struct Place {
+    x: f64,
+    y: f64,
+    tuck: f64,
+    joined: bool,
+}
 
-    /// How far down the slab is, logical px, for `hidden`.
-    fn drop(&self, hidden: f64) -> i32 {
-        ((self.rect.size.h + MARGIN + 4) as f64 * hidden).round() as i32
-    }
-
-    /// The icon cell `i`, logical px, with the slab shown.
-    fn cell(&self, i: usize) -> Rectangle<i32, Logical> {
-        Rectangle::new(
-            (self.rect.loc.x + PAD + i as i32 * (ICON + GAP), self.rect.loc.y + PAD).into(),
-            (ICON, ICON).into(),
-        )
-    }
+struct Move {
+    from: Mode,
+    to: Mode,
+    start_ns: u64,
 }
 
 pub struct Dock {
     halves: Vec<Half>,
+    mode: Mode,
+    /// The mode before the last Hidden, whose places Hidden dips from.
+    shown: Mode,
+    moving: Option<Move>,
 }
 
 /// What a touch on the dock asks for.
@@ -103,7 +117,6 @@ pub enum Tap {
 impl Dock {
     pub fn new() -> Dock {
         let lists = config();
-        let panels = layout::panels();
         let halves = lists
             .iter()
             .enumerate()
@@ -112,61 +125,149 @@ impl Dock {
                 let n = apps.len() as i32;
                 let w = 2 * PAD + n * ICON + (n - 1).max(0) * GAP;
                 let h = 2 * PAD + ICON;
-                let panel = panels[p];
-                // The outer edge: left of the left panel, right of the right.
-                let x = if p == 0 { panel.loc.x + MARGIN } else { panel.loc.x + panel.size.w - MARGIN - w };
-                let y = panel.size.h - MARGIN - h;
                 tracing::info!(
                     "dock {}: {}",
                     if p == 0 { "left" } else { "right" },
                     apps.iter().map(|a| format!("{}{}", a.name, if a.icon.is_some() { "" } else { " (no icon)" })).collect::<Vec<_>>().join(", ")
                 );
-                Half { apps, slab: slab(w, h), rect: Rectangle::new((x, y).into(), (w, h).into()), hidden: 0.0, slide: None, pressed: None }
+                // The left half meets the other with its right side, the
+                // right half with its left.
+                let joined = if p == 0 { slab(w, h, false, true) } else { slab(w, h, true, false) };
+                Half { apps, slab: slab(w, h, false, false), slab_joined: joined, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { halves }
+        Dock { halves, mode: Mode::Both, shown: Mode::Both, moving: None }
     }
 
-    /// Shows the half on each panel that is free, hides it on each that is
-    /// taken. Returns whether a half set off.
-    pub fn follow(&mut self, taken: [bool; 2], now_ns: u64) -> bool {
-        let mut moved = false;
-        for (half, &taken) in self.halves.iter_mut().zip(taken.iter()) {
-            let to = if taken { 1.0 } else { 0.0 };
-            if half.hidden != to {
-                let from = half.hidden_at(now_ns);
-                half.slide = Some(Slide { from, to, start_ns: now_ns });
-                half.hidden = to;
-                half.pressed = None;
-                moved = true;
+    /// Each half's place in a mode (item's `_pane_targets`).
+    fn targets(&self, mode: Mode) -> [Place; 2] {
+        let (lw, h) = self.halves[0].size;
+        let rw = self.halves[1].size.0;
+        let (width, height) = (layout::LAYOUT.0 as f64, layout::LAYOUT.1 as f64);
+        let y = height - (MARGIN + h) as f64;
+        let place = |x: f64, tuck: f64, joined: bool| Place { x, y, tuck, joined };
+        match mode {
+            Mode::Both => [place(MARGIN as f64, 0.0, false), place(width - (MARGIN + rw) as f64, 0.0, false)],
+            // The left half stays at the left edge; the right one arrives
+            // beside it, its padding tucked under.
+            Mode::On(0) => {
+                let l = MARGIN as f64;
+                [place(l, 0.0, true), place(l + lw as f64 - TUCK, TUCK, true)]
             }
-        }
-        moved
-    }
-
-    /// After a frame for `frame_ns`: whether a half is still sliding.
-    pub fn settle(&mut self, frame_ns: u64) -> bool {
-        let mut sliding = false;
-        for half in &mut self.halves {
-            if let Some(s) = &half.slide {
-                if frame_ns >= s.start_ns + SLIDE_NS {
-                    half.slide = None;
-                } else {
-                    sliding = true;
+            Mode::On(_) => {
+                let end = width - MARGIN as f64;
+                [place(end - (rw + lw) as f64 + TUCK, TUCK, true), place(end - rw as f64, 0.0, true)]
+            }
+            Mode::Hidden => {
+                let mut t = self.targets(self.shown);
+                for p in &mut t {
+                    p.y = height + 4.0;
                 }
+                t
             }
         }
-        sliding
     }
 
-    /// A touch down: taken if it lands on a shown half. Returns whether it was.
-    pub fn down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>) -> bool {
+    /// Each half's place at `frame_ns` (item's `_pane_path`).
+    fn places(&self, frame_ns: u64) -> [Place; 2] {
+        let Some(m) = &self.moving else { return self.targets(self.mode) };
+        let k = (frame_ns.saturating_sub(m.start_ns) as f64 / MOVE_NS as f64).clamp(0.0, 1.0);
+        // Cubic ease in and out: off gently, parked gently.
+        let e = if k < 0.5 { 4.0 * k * k * k } else { 1.0 - (-2.0 * k + 2.0).powi(3) / 2.0 };
+        let (a, b) = (self.targets(m.from), self.targets(m.to));
+        let mut out = b;
+        for i in 0..2 {
+            out[i] = Place {
+                x: lerp_x(a[i].x, b[i].x, e),
+                y: a[i].y + (b[i].y - a[i].y) * e,
+                tuck: 0.0,
+                joined: false,
+            };
+        }
+        // The arriving (or leaving) half tucks its inner padding only as far
+        // as it would run over the other: whole and round while apart, cut
+        // square in the last TUCK px, as if sliding under.
+        let overlap = (out[0].x + self.halves[0].size.0 as f64 - out[1].x).clamp(0.0, TUCK);
+        let tucker = if a[1].tuck > 0.0 || b[1].tuck > 0.0 { 1 } else { 0 };
+        if a[tucker].tuck > 0.0 || b[tucker].tuck > 0.0 {
+            out[tucker].tuck = overlap;
+        }
+        // Square where they touch, round while apart: the gap between the
+        // left half's visible right edge and the right half's visible left
+        // edge (a tucked padding is not drawn).
+        let gap = out[1].x + out[1].tuck - (out[0].x + self.halves[0].size.0 as f64 - out[0].tuck);
+        let touching = gap.abs() < 1.0;
+        out[0].joined = touching;
+        out[1].joined = touching;
+        out
+    }
+
+    /// Where the halves go for the panels windows have. Returns whether they
+    /// set off.
+    pub fn follow(&mut self, taken: [bool; 2], now_ns: u64) -> bool {
+        let mode = match taken {
+            [false, false] => Mode::Both,
+            [false, true] => Mode::On(0),
+            [true, false] => Mode::On(1),
+            [true, true] => Mode::Hidden,
+        };
+        if mode == self.mode {
+            return false;
+        }
+        // A move still under way is cut short: the new one starts from the
+        // old one's target, so the halves may jump (rare: panels change
+        // hands less often than every 440 ms).
+        let from = self.mode;
+        if mode != Mode::Hidden {
+            self.shown = mode;
+        } else if from != Mode::Hidden {
+            self.shown = from;
+        }
+        tracing::debug!("dock: {from:?} -> {mode:?}");
+        self.moving = Some(Move { from, to: mode, start_ns: now_ns });
+        self.mode = mode;
         for half in &mut self.halves {
-            if half.hidden > 0.0 || half.slide.is_some() || !half.rect.to_f64().contains(pos) {
+            half.pressed = None;
+        }
+        true
+    }
+
+    /// After a frame for `frame_ns`: whether the halves are still moving.
+    pub fn settle(&mut self, frame_ns: u64) -> bool {
+        match &self.moving {
+            Some(m) if frame_ns >= m.start_ns + MOVE_NS => {
+                self.moving = None;
+                false
+            }
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Icon `i` of a half at `place`, logical px.
+    fn cell(&self, i: usize, place: &Place) -> Rectangle<f64, Logical> {
+        Rectangle::new(
+            (place.x + (PAD + i as i32 * (ICON + GAP)) as f64, place.y + PAD as f64).into(),
+            (ICON as f64, ICON as f64).into(),
+        )
+    }
+
+    /// A touch down: taken if it lands on a half standing still. Returns
+    /// whether it was.
+    pub fn down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>) -> bool {
+        if self.moving.is_some() || self.mode == Mode::Hidden {
+            return false;
+        }
+        let places = self.targets(self.mode);
+        for h in 0..2 {
+            let (w, ht) = self.halves[h].size;
+            let p = places[h];
+            let slab = Rectangle::<f64, Logical>::new((p.x + p.tuck, p.y).into(), (w as f64 - p.tuck, ht as f64).into());
+            if !slab.contains(pos) {
                 continue;
             }
-            let icon = (0..half.apps.len()).find(|&i| half.cell(i).to_f64().contains(pos));
-            half.pressed = icon.map(|i| (i, slot, pos));
+            let icon = (0..self.halves[h].apps.len()).find(|&i| self.cell(i, &p).contains(pos));
+            self.halves[h].pressed = icon.map(|i| (i, slot, pos));
             return true;
         }
         false
@@ -187,12 +288,14 @@ impl Dock {
         }
     }
 
+    /// The finger lets go: a tap launches the app onto the panel it was on.
     pub fn up(&mut self, slot: TouchSlot) -> Option<Tap> {
-        for (p, half) in self.halves.iter_mut().enumerate() {
-            if let Some((i, s, _)) = half.pressed {
+        for half in &mut self.halves {
+            if let Some((i, s, at)) = half.pressed {
                 if s == slot {
                     half.pressed = None;
-                    return Some(Tap::Launch(half.apps[i].exec.clone(), p));
+                    let panel = layout::panel_at(at).unwrap_or(0);
+                    return Some(Tap::Launch(half.apps[i].exec.clone(), panel));
                 }
             }
         }
@@ -209,7 +312,7 @@ impl Dock {
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
         self.halves
             .iter()
-            .flat_map(|h| std::iter::once(&h.slab).chain(h.apps.iter().filter_map(|a| a.icon.as_ref())))
+            .flat_map(|h| [&h.slab, &h.slab_joined].into_iter().chain(h.apps.iter().filter_map(|a| a.icon.as_ref())))
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
@@ -217,15 +320,18 @@ impl Dock {
     /// What the dock draws for a frame shown at `frame_ns`, topmost first.
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
         let mut out = Vec::new();
-        for half in &self.halves {
-            let hidden = half.hidden_at(frame_ns);
-            if hidden >= 1.0 || half.apps.is_empty() {
+        let places = self.places(frame_ns);
+        let bottom = layout::LAYOUT.1 as f64;
+        for (h, half) in self.halves.iter().enumerate() {
+            let p = places[h];
+            if p.y >= bottom || half.apps.is_empty() {
                 continue;
             }
-            let drop = half.drop(hidden);
-            let mut push = |buffer: &MemoryRenderBuffer, at: Point<i32, Logical>, alpha: f32| {
-                let loc = ((at.x * SCALE) as f64, ((at.y + drop) * SCALE) as f64);
-                match MemoryRenderBufferRenderElement::from_buffer(renderer, loc, buffer, Some(alpha), None, None, Kind::Unspecified) {
+            // Whole physical px, so a slab at rest is sharp.
+            let px = |v: f64| (v * SCALE as f64).round();
+            let mut push = |buffer: &MemoryRenderBuffer, x: f64, y: f64, src: Option<Rectangle<f64, Logical>>, alpha: f32| {
+                let size = src.map(|r| r.size.to_i32_round());
+                match MemoryRenderBufferRenderElement::from_buffer(renderer, (px(x), px(y)), buffer, Some(alpha), src, size, Kind::Unspecified) {
                     Ok(e) => out.push(ShellElement::Text(e)),
                     Err(e) => tracing::warn!("dock: {e}"),
                 }
@@ -233,14 +339,57 @@ impl Dock {
             for (i, app) in half.apps.iter().enumerate() {
                 if let Some(icon) = &app.icon {
                     // A pressed icon dims under the finger.
-                    let alpha = if half.pressed.is_some_and(|(p, _, _)| p == i) { 0.55 } else { 1.0 };
-                    push(icon, half.cell(i).loc, alpha);
+                    let alpha = if half.pressed.is_some_and(|(q, _, _)| q == i) { 0.55 } else { 1.0 };
+                    let c = self.cell(i, &p);
+                    push(icon, c.loc.x, c.loc.y, None, alpha);
                 }
             }
-            push(&half.slab, half.rect.loc, 1.0);
+            // The arriving half's inner padding is cut off where the two
+            // meet: the left side of the right half, the right of the left.
+            let (w, ht) = half.size;
+            let tuck = p.tuck.round();
+            let slab = if p.joined { &half.slab_joined } else { &half.slab };
+            if tuck > 0.0 {
+                let (sx, dx) = if h == 1 { (tuck, p.x + tuck) } else { (0.0, p.x) };
+                let src = Rectangle::new((sx, 0.0).into(), (w as f64 - tuck, ht as f64).into());
+                push(slab, dx, p.y, Some(src), 1.0);
+            } else {
+                push(slab, p.x, p.y, None, 1.0);
+            }
         }
         out
     }
+}
+
+/// From x0 to x1 at e, through the hinge as through a tunnel TUNNEL long
+/// (item's `_lerp_x`): a half's left edge is moved in a space where the
+/// hinge is that long, so an icon goes all the way in before any of it
+/// comes out on the other panel. The hinge's columns are not on the
+/// screen, so what is drawn there is not seen.
+fn lerp_x(x0: f64, x1: f64, e: f64) -> f64 {
+    let panels = layout::panels();
+    let half = panels[0].size.w as f64;
+    let gap = (panels[1].loc.x - panels[0].size.w) as f64;
+    let squeeze = |x: f64| {
+        if x < half {
+            x
+        } else if x < half + gap {
+            half + (x - half) * TUNNEL / gap
+        } else {
+            x - gap + TUNNEL
+        }
+    };
+    let unsqueeze = |c: f64| {
+        if c < half {
+            c
+        } else if c < half + TUNNEL {
+            half + (c - half) * gap / TUNNEL
+        } else {
+            c - TUNNEL + gap
+        }
+    };
+    let (c0, c1) = (squeeze(x0), squeeze(x1));
+    unsqueeze(c0 + (c1 - c0) * e)
 }
 
 /// The dock's apps: item's configuration, else the default.
@@ -321,24 +470,26 @@ fn icon(name: &str) -> Option<MemoryRenderBuffer> {
     Some(MemoryRenderBuffer::from_slice(pixmap.data(), Fourcc::Abgr8888, (px as i32, px as i32), SCALE, Transform::Normal, None))
 }
 
-/// The slab: a rounded rectangle `w` by `h` logical px.
-fn slab(w: i32, h: i32) -> MemoryRenderBuffer {
+/// The slab: a rectangle `w` by `h` logical px, its corners round but on
+/// the sides asked square.
+fn slab(w: i32, h: i32, square_left: bool, square_right: bool) -> MemoryRenderBuffer {
     let (pw, ph) = ((w * SCALE) as u32, (h * SCALE) as u32);
     let mut pixmap = tiny_skia::Pixmap::new(pw.max(1), ph.max(1)).expect("slab pixmap");
     let r = RADIUS * SCALE as f32;
     let (fw, fh) = (pw as f32, ph as f32);
     let mut pb = tiny_skia::PathBuilder::new();
-    // Quarter circles as cubics.
-    let k = r * 0.5523;
-    pb.move_to(r, 0.0);
-    pb.line_to(fw - r, 0.0);
-    pb.cubic_to(fw - r + k, 0.0, fw, r - k, fw, r);
-    pb.line_to(fw, fh - r);
-    pb.cubic_to(fw, fh - r + k, fw - r + k, fh, fw - r, fh);
-    pb.line_to(r, fh);
-    pb.cubic_to(r - k, fh, 0.0, fh - r + k, 0.0, fh - r);
-    pb.line_to(0.0, r);
-    pb.cubic_to(0.0, r - k, r - k, 0.0, r, 0.0);
+    // Quarter circles as cubics; a square side's corners have none.
+    let (rl, rr) = (if square_left { 0.0 } else { r }, if square_right { 0.0 } else { r });
+    let (kl, kr) = (rl * 0.5523, rr * 0.5523);
+    pb.move_to(rl, 0.0);
+    pb.line_to(fw - rr, 0.0);
+    pb.cubic_to(fw - rr + kr, 0.0, fw, rr - kr, fw, rr);
+    pb.line_to(fw, fh - rr);
+    pb.cubic_to(fw, fh - rr + kr, fw - rr + kr, fh, fw - rr, fh);
+    pb.line_to(rl, fh);
+    pb.cubic_to(rl - kl, fh, 0.0, fh - rl + kl, 0.0, fh - rl);
+    pb.line_to(0.0, rl);
+    pb.cubic_to(0.0, rl - kl, rl - kl, 0.0, rl, 0.0);
     pb.close();
     if let Some(path) = pb.finish() {
         let mut paint = tiny_skia::Paint::default();

@@ -78,5 +78,6 @@ systemd-run --wait --collect --unit=item-compositor \
     ${LATE:+-p "Environment=LATE=$LATE"} ${LATE_MARGIN_MS:+-p "Environment=LATE_MARGIN_MS=$LATE_MARGIN_MS"} \
     ${HWC_PRESENT_OR_VALIDATE:+-p "Environment=HWC_PRESENT_OR_VALIDATE=$HWC_PRESENT_OR_VALIDATE"} \
     ${TOUCHSCREEN:+-p "Environment=TOUCHSCREEN=$TOUCHSCREEN"} ${LOG_BUFFERS:+-p "Environment=LOG_BUFFERS=$LOG_BUFFERS"} ${INSTANCING:+-p "Environment=INSTANCING=$INSTANCING"} ${LOG_DAMAGE:+-p "Environment=LOG_DAMAGE=$LOG_DAMAGE"} ${PARTIAL:+-p "Environment=PARTIAL=$PARTIAL"} ${NO_LOGIN_SHELL:+-p "Environment=NO_LOGIN_SHELL=$NO_LOGIN_SHELL"} ${LATE_CALLBACKS:+-p "Environment=LATE_CALLBACKS=$LATE_CALLBACKS"} ${SERVER_DEBUG:+-p "Environment=WAYLAND_DEBUG=server"} \
+    ${ASAP:+-p "Environment=ASAP=$ASAP"} \
     /tmp/item-compositor "$@"
 log "session ended"

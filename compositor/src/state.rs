@@ -63,6 +63,8 @@ pub struct State {
     /// Stop after this many seconds (for tests).
     pub stop_after: Option<u64>,
     pub shade: Shade,
+    /// A client committed a new buffer since the loop last looked.
+    pub client_frame: bool,
     pub dock: Dock,
     /// The panel the next window goes to, asked for by a launch from the
     /// dock, and when (CLOCK_MONOTONIC ns).
@@ -100,6 +102,7 @@ impl State {
             touch_answered: None,
             stop_after: None,
             shade: Shade::new(),
+            client_frame: false,
             dock: Dock::new(),
             launch_to: None,
             socket_name: Default::default(),
@@ -175,6 +178,7 @@ impl CompositorHandler for State {
         on_commit_buffer_handler::<Self>(surface);
         self.needs_redraw = true;
         self.commits += 1;
+        self.client_frame = true;
         // The first commit after a touch is taken for the client's answer to it,
         // if it comes within half a second.
         if let Some(touched) = self.touch_pending.take() {
