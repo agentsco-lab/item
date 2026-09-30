@@ -1,0 +1,13 @@
+[package]
+name = "wl-panels"
+version = "0.1.0"
+edition = "2021"
+description = "Probe C, stage 2: Wayland clients on the Duo's panels through hwcomposer"
+
+[dependencies]
+hybris-hwc = { path = "../../crates/hybris-hwc" }
+smithay-hybris = { path = "../../crates/smithay-hybris" }
+smithay = { version = "0.7", default-features = false, features = ["renderer_gl", "wayland_frontend", "desktop", "use_system_lib"] }
+# libwayland-server is opened at run time, not linked: the cross build has none.
+wayland-sys = { version = "0.31", features = ["dlopen"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -27,7 +27,7 @@ item, which keep running the phone day to day.
 |---|---|---|
 | A | smithay's anvil on the Lindroid chain (duo-lindroid's test image): do smithay's EGL and GLES run on libhybris? | |
 | C1 | smithay's `GlesRenderer` on our EGL over hwcomposer (no GBM: the Android platform and the hwcomposer window) | done 2026-09-30: 60 fps, 1-1.5 ms to render a frame (`log/2026-09-30-probe-c1.md`) |
-| C2 | a Wayland client in it: foot (shm), then GTK4 over `android_wlegl` | |
+| C2 | Wayland clients in it: shm, and GTK4 over `android_wlegl` | done 2026-09-30: both, one per panel, at 60 fps (`log/2026-09-30-probe-c2.md`) |
 | B | a minimal Rust program that puts a GL frame on the Duo's panels through libhybris' hwc2, at vsync: the core of the backend | done 2026-09-30: 60 fps across both panels, 16.7 ms between frames, no copy (`log/2026-09-30-probe-b.md`) |
 
 What each must answer - the seams between smithay and libhybris, not the
@@ -66,7 +66,9 @@ with item as a Rust daemon over sway's IPC and layer-shell clients
 
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client layer, a native window presenting with fences
 - `probes/hwc-frame` - probe B: a GL frame through hwcomposer from Rust
+- `crates/smithay-hybris` - smithay's native EGL traits for libhybris without GBM
 - `probes/smithay-frame` - probe C1: smithay's renderer into that window
+- `probes/wl-panels` - probe C2: a minimal compositor, a window per panel
 - `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against (into `sysroot/`, not tracked)
 - `tools/probe-run.sh` - runs a probe on the phone with the shell stopped, and the shell back after
 - `log/` - what each probe found

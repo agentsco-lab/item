@@ -15,60 +15,14 @@
 //! Run it with the shell stopped: `EGL_PLATFORM=hwcomposer smithay-frame [s]`.
 
 use std::ffi::c_void;
-use std::sync::Arc;
 
 use hybris_hwc::{now_ns, take_stats, vsyncs, Output};
-use smithay::backend::egl::display::EGLDisplayHandle;
-use smithay::backend::egl::native::{EGLNativeDisplay, EGLNativeSurface, EGLPlatform};
 use smithay::backend::egl::context::{GlAttributes, PixelFormatRequirements};
-use smithay::backend::egl::{ffi, wrap_egl_call_ptr, EGLContext, EGLDisplay, EGLError, EGLSurface};
+use smithay::backend::egl::{ffi, EGLContext, EGLDisplay, EGLSurface};
+use smithay_hybris::{HwcWindow, HybrisDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{Bind, Color32F, Frame, Renderer};
 use smithay::utils::{Physical, Rectangle, Size, Transform};
-
-/// `EGL_PLATFORM_ANDROID_KHR` (EGL_KHR_platform_android).
-const PLATFORM_ANDROID_KHR: u32 = 0x3141;
-
-struct HybrisDisplay;
-
-impl EGLNativeDisplay for HybrisDisplay {
-    fn supported_platforms(&self) -> Vec<EGLPlatform<'_>> {
-        vec![EGLPlatform::new(
-            PLATFORM_ANDROID_KHR,
-            "PLATFORM_ANDROID_KHR",
-            std::ptr::null_mut(), // EGL_DEFAULT_DISPLAY
-            vec![ffi::egl::NONE as ffi::EGLint],
-            &["EGL_KHR_platform_android"],
-        )]
-    }
-
-    fn identifier(&self) -> Option<String> {
-        Some("hybris/android".into())
-    }
-}
-
-/// The ANativeWindow of `hybris_hwc::Output`.
-struct HwcWindow(*mut c_void);
-
-// The window is libhybris' and lives as long as the program; EGL is its only
-// user after creation.
-unsafe impl Send for HwcWindow {}
-
-unsafe impl EGLNativeSurface for HwcWindow {
-    unsafe fn create(
-        &self,
-        display: &Arc<EGLDisplayHandle>,
-        config_id: ffi::egl::types::EGLConfig,
-    ) -> Result<*const c_void, EGLError> {
-        wrap_egl_call_ptr(|| unsafe {
-            ffi::egl::CreateWindowSurface(***display, config_id, self.0 as _, std::ptr::null())
-        })
-    }
-
-    fn identifier(&self) -> Option<String> {
-        Some("hybris/hwcomposer-window".into())
-    }
-}
 
 extern "C" {
     fn dlopen(file: *const std::ffi::c_char, flags: i32) -> *mut c_void;

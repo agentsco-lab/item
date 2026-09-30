@@ -27,6 +27,9 @@ for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
 hwc start
 for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
 log "composer up: $(composers)"
+# a Wayland socket needs a runtime directory; root has none
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/probe-runtime}
+mkdir -p -m 700 "$XDG_RUNTIME_DIR"
 EGL_PLATFORM=hwcomposer \
 __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_libhybris.json \
     timeout $((T + 20)) "$@" &
