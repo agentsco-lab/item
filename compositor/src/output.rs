@@ -151,6 +151,7 @@ impl Screen {
         // The keyboard and other layer surfaces, over the windows and the dock.
         elements.extend(state.layers.elements(&mut self.renderer).into_iter().map(FrameElement::Window));
         let running = state.running();
+        elements.extend(state.system.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.grid.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
         elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
         elements.extend(state.clock.elements(&mut self.renderer, state.dock.home_panel()).into_iter().map(FrameElement::from));

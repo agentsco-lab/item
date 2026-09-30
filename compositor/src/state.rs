@@ -96,6 +96,9 @@ pub struct State {
     pub clock: Clock,
     pub back: Back,
     pub lock: crate::lock::Lock,
+    pub system: crate::sysscreen::SystemScreen,
+    /// The pen's tip is on the screen.
+    pub pen_down: bool,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
     /// The panel the next window goes to, asked for by a launch from the
@@ -153,6 +156,8 @@ impl State {
             clock: Clock::new(),
             back: Back::new(),
             lock: crate::lock::Lock::new(wake.clone()),
+            system: crate::sysscreen::SystemScreen::new(wake.clone()),
+            pen_down: false,
             put_away: Vec::new(),
             launch_to: None,
             socket_name: Default::default(),

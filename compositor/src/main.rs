@@ -33,6 +33,7 @@ mod protocols;
 mod quick;
 mod shade;
 mod state;
+mod sysscreen;
 mod text;
 
 use std::sync::Arc;
@@ -267,6 +268,9 @@ impl Data {
         if let Some(p) = self.state.grid.panel() {
             taken[p] = true;
         }
+        if self.state.system.out() {
+            taken[0] = true;
+        }
         self.state.dock.follow(taken, started);
         // Callbacks::Draw: frame callbacks before the frame is drawn: the
         // clients' buffers for it are already taken, and a client starts on
@@ -366,6 +370,10 @@ impl Data {
         }
         if self.state.lock.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
+        }
+        if self.state.system.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
         }
         if self.state.grid.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
@@ -507,6 +515,9 @@ fn main() {
             if data.state.lock.locked && data.state.lock.refresh() {
                 data.state.needs_redraw = true;
             }
+            if data.state.system.refresh() {
+                data.state.needs_redraw = true;
+            }
             if data.state.clock.refresh() {
                 data.state.needs_redraw = true;
             }
@@ -528,6 +539,7 @@ fn main() {
     handle
         .insert_source(wake_source, |_, _, data: &mut Data| {
             data.state.lock.poll();
+            data.state.system.refresh();
             data.state.needs_redraw = true;
             data.on_client_frame();
         })

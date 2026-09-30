@@ -10,7 +10,11 @@ use std::os::fd::OwnedFd;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
-use smithay::backend::input::{AbsolutePositionEvent, Event, InputEvent, KeyState, KeyboardKeyEvent, TouchEvent};
+use smithay::backend::input::{
+    AbsolutePositionEvent, Event, InputEvent, KeyState, KeyboardKeyEvent, Switch, SwitchState, SwitchToggleEvent,
+    TabletToolTipEvent, TabletToolTipState, TouchEvent, TouchSlot,
+};
+use smithay::utils::{Logical, Point};
 use smithay::backend::libinput::LibinputInputBackend;
 use smithay::input::touch::{DownEvent, MotionEvent, UpEvent};
 use smithay::reexports::calloop::LoopHandle;
@@ -67,8 +71,8 @@ fn find(name: &str) -> Option<String> {
 
 pub fn init(handle: &LoopHandle<'static, Data>) {
     let mut libinput = Libinput::new_from_path(OpenDirect);
-    // The power key and the volume keys (lock.rs).
-    for name in ["qpnp_pon", "gpio-keys"] {
+    // The power key and the volume keys, the lid (lock.rs), the pen.
+    for name in ["qpnp_pon", "gpio-keys", "Surface Duo Lid Switch", "sfduo pen"] {
         match find(name).and_then(|p| libinput.path_add_device(&p).map(|_| p)) {
             Some(p) => tracing::info!("keys: {name} ({p})"),
             None => tracing::warn!("keys: no {name}"),
@@ -86,20 +90,86 @@ pub fn init(handle: &LoopHandle<'static, Data>) {
         .expect("libinput source");
 }
 
+/// A contact on the screen, from a finger or the pen: the pen is a touch of
+/// its own slot, so it taps, drags and scrolls as a finger does.
+enum Contact {
+    Down(TouchSlot, Point<f64, Logical>, u64),
+    Motion(TouchSlot, Point<f64, Logical>, u64),
+    Up(TouchSlot, u64),
+    Frame,
+    Cancel,
+}
+
+/// The pen's slot, clear of the fingers' (the touchscreen has ten).
+fn pen_slot() -> TouchSlot {
+    TouchSlot::from(Some(31u32))
+}
+
 impl State {
     fn on_input(&mut self, event: InputEvent<LibinputInputBackend>) {
-        // The keys: power, volume (evdev codes, +8 for xkb).
-        if let InputEvent::Keyboard { event } = &event {
-            if event.state() == KeyState::Pressed {
-                match event.key_code().raw().saturating_sub(8) {
-                    116 => self.lock.power_key(),
-                    115 => self.shade.quick.volume_step(true),
-                    114 => self.shade.quick.volume_step(false),
-                    _ => {}
+        let contact = match event {
+            // The keys: power, volume (evdev codes, +8 for xkb).
+            InputEvent::Keyboard { event } => {
+                if event.state() == KeyState::Pressed {
+                    match event.key_code().raw().saturating_sub(8) {
+                        116 => self.lock.power_key(),
+                        115 => self.shade.quick.volume_step(true),
+                        114 => self.shade.quick.volume_step(false),
+                        _ => {}
+                    }
+                    self.needs_redraw = true;
                 }
-                self.needs_redraw = true;
+                return;
             }
-            return;
+            // The lid: the Duo folded shut goes dark and locks, as logind
+            // was told to (HandleLidSwitch=lock); opened, it is lit, locked.
+            InputEvent::SwitchToggle { event } => {
+                if SwitchToggleEvent::<LibinputInputBackend>::switch(&event) == Some(Switch::Lid) {
+                    let shut = SwitchToggleEvent::<LibinputInputBackend>::state(&event) == SwitchState::On;
+                    tracing::info!("lid: {}", if shut { "shut" } else { "open" });
+                    if shut {
+                        self.lock.lock_now();
+                        self.lock.set_blank(true);
+                    } else {
+                        self.lock.set_blank(false);
+                    }
+                    self.needs_redraw = true;
+                }
+                return;
+            }
+            InputEvent::TouchDown { event } => Contact::Down(event.slot(), event.position_transformed(LAYOUT.into()), event.time()),
+            InputEvent::TouchMotion { event } => Contact::Motion(event.slot(), event.position_transformed(LAYOUT.into()), event.time()),
+            InputEvent::TouchUp { event } => Contact::Up(event.slot(), event.time()),
+            InputEvent::TouchFrame { .. } => Contact::Frame,
+            InputEvent::TouchCancel { .. } => Contact::Cancel,
+            // The pen: its tip down, moved, up.
+            InputEvent::TabletToolTip { event } => {
+                let pos = event.position_transformed(LAYOUT.into());
+                let c = match TabletToolTipEvent::<LibinputInputBackend>::tip_state(&event) {
+                    TabletToolTipState::Down => Contact::Down(pen_slot(), pos, event.time()),
+                    TabletToolTipState::Up => Contact::Up(pen_slot(), event.time()),
+                };
+                self.contact(c);
+                self.contact(Contact::Frame);
+                return;
+            }
+            InputEvent::TabletToolAxis { event } => {
+                if !self.pen_down {
+                    return;
+                }
+                self.contact(Contact::Motion(pen_slot(), event.position_transformed(LAYOUT.into()), event.time()));
+                Contact::Frame
+            }
+            _ => return,
+        };
+        self.contact(contact);
+    }
+
+    fn contact(&mut self, contact: Contact) {
+        match contact {
+            Contact::Down(slot, _, _) if slot == pen_slot() => self.pen_down = true,
+            Contact::Up(slot, _) if slot == pen_slot() => self.pen_down = false,
+            _ => {}
         }
         let Some(touch) = self.seat.get_touch() else { return };
         // A dark screen takes no touches; any other touch keeps it lit.
@@ -108,33 +178,31 @@ impl State {
         }
         self.lock.last_touch_ns = hybris_hwc::now_ns();
         // Locked: every touch is the lock screen's.
-        match &event {
-            InputEvent::TouchDown { event } if self.lock.holds_screen() => {
-                let pos = event.position_transformed(LAYOUT.into());
-                self.lock.down(event.slot(), pos.x, pos.y, event.time());
+        match &contact {
+            Contact::Down(slot, pos, t) if self.lock.holds_screen() => {
+                self.lock.down(*slot, pos.x, pos.y, *t);
                 self.needs_redraw = true;
                 return;
             }
-            InputEvent::TouchMotion { event } if self.lock.holds(event.slot()) => {
-                let pos = event.position_transformed(LAYOUT.into());
-                self.lock.motion(event.slot(), pos.y, event.time());
+            Contact::Motion(slot, pos, t) if self.lock.holds(*slot) => {
+                self.lock.motion(*slot, pos.y, *t);
                 self.needs_redraw = true;
                 return;
             }
-            InputEvent::TouchUp { event } if self.lock.holds(event.slot()) => {
-                self.lock.up(event.slot());
+            Contact::Up(slot, _) if self.lock.holds(*slot) => {
+                self.lock.up(*slot);
                 self.needs_redraw = true;
                 return;
             }
             _ => {}
         }
         // Anything the finger does wakes the GPU's clock (boost.rs).
-        if matches!(event, InputEvent::TouchDown { .. } | InputEvent::TouchMotion { .. } | InputEvent::TouchUp { .. }) {
+        if matches!(contact, Contact::Down(..) | Contact::Motion(..) | Contact::Up(..)) {
             self.boost.kick(hybris_hwc::now_ns());
         }
-        match event {
-            InputEvent::TouchDown { event } => {
-                let pos = event.position_transformed(LAYOUT.into());
+        let msec = |t: u64| (t / 1000) as u32;
+        match contact {
+            Contact::Down(slot, pos, time) => {
                 // A tap on a notification's banner: its action.
                 if let Some((rect, id)) = self.shade.quick.banner_at.get() {
                     if rect.contains(pos) {
@@ -145,18 +213,23 @@ impl State {
                     }
                 }
                 // A touch at a panel's top edge, or on its shade, is the shade's.
-                if self.shade.down(event.slot(), pos.x, pos.y, event.time()) {
+                if self.shade.down(slot, pos.x, pos.y, time) {
                     self.needs_redraw = true;
                     return;
                 }
-                if self.dock.down(event.slot(), pos) {
+                // The system screen, when it is out (sysscreen.rs).
+                if self.system.down(slot, pos, time) {
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.dock.down(slot, pos) {
                     self.needs_redraw = true;
                     return;
                 }
                 // The outer edge of a panel with a window: back (back.rs).
                 if let Some(panel) = crate::back::Back::strip_at(pos) {
                     if self.top_window(panel).is_some() && self.grid.panel() != Some(panel) {
-                        self.back.down(event.slot(), pos, panel);
+                        self.back.down(slot, pos, panel);
                         self.needs_redraw = true;
                         return;
                     }
@@ -166,14 +239,14 @@ impl State {
                 if pos.y >= LAYOUT.1 as f64 - crate::gesture::EDGE {
                     if let Some(panel) = crate::layout::panel_at(pos) {
                         if let Some(window) = self.top_window(panel) {
-                            self.gestures.down(event.slot(), pos, event.time(), window, panel);
+                            self.gestures.down(slot, pos, time, window, panel);
                             return;
                         }
                     }
                 }
                 // The app grid, and an empty panel's swipes (grid.rs).
                 let empty = crate::layout::panel_at(pos).is_some_and(|p| self.top_window(p).is_none());
-                if self.grid.down(event.slot(), pos, empty) {
+                if self.grid.down(slot, pos, empty) {
                     self.needs_redraw = true;
                     return;
                 }
@@ -192,90 +265,108 @@ impl State {
                     self.touch_pending = None;
                 }
                 self.touch_pending.get_or_insert(now);
-                tracing::debug!("touch down {:?} at {:.0},{:.0}", event.slot(), pos.x, pos.y);
-                touch.down(self, under, &DownEvent { slot: event.slot(), location: pos, serial, time: event.time_msec() });
+                tracing::debug!("touch down {slot:?} at {:.0},{:.0}", pos.x, pos.y);
+                touch.down(self, under, &DownEvent { slot, location: pos, serial, time: msec(time) });
             }
-            InputEvent::TouchMotion { event } => {
-                let pos = event.position_transformed(LAYOUT.into());
-                if self.shade.holds(event.slot()) {
-                    self.shade.motion_at(event.slot(), pos.x, pos.y, event.time());
+            Contact::Motion(slot, pos, time) => {
+                if self.shade.holds(slot) {
+                    self.shade.motion_at(slot, pos.x, pos.y, time);
                     self.needs_redraw = true;
                     return;
                 }
-                if self.back.holds(event.slot()) {
-                    self.back.motion(event.slot(), pos);
+                if self.system.holds(slot) {
+                    self.system.motion(slot, pos, time);
                     self.needs_redraw = true;
                     return;
                 }
-                if self.grid.holds(event.slot()) {
-                    if let crate::grid::Ask::Shade(start) = self.grid.motion(event.slot(), pos, event.time()) {
-                        self.shade.grab_from(event.slot(), start.x, start.y, event.time());
-                        self.shade.motion(event.slot(), pos.y, event.time());
+                if self.back.holds(slot) {
+                    self.back.motion(slot, pos);
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.grid.holds(slot) {
+                    match self.grid.motion(slot, pos, time) {
+                        crate::grid::Ask::Shade(start) => {
+                            self.shade.grab_from(slot, start.x, start.y, time);
+                            self.shade.motion(slot, pos.y, time);
+                        }
+                        // A swipe right on the left panel's desktop: the
+                        // system screen comes in with the finger.
+                        crate::grid::Ask::System(start) => {
+                            self.system.grab_from(slot, start, time);
+                            self.system.motion(slot, pos, time);
+                        }
+                        _ => {}
                     }
                     self.needs_redraw = true;
                     return;
                 }
-                if self.gestures.holds(event.slot()) {
-                    self.gestures.motion(event.slot(), pos.y, event.time());
+                if self.gestures.holds(slot) {
+                    self.gestures.motion(slot, pos.y, time);
                     self.needs_redraw = true;
                     return;
                 }
-                if self.dock.holds(event.slot()) {
-                    self.dock.motion(event.slot(), pos);
+                if self.dock.holds(slot) {
+                    self.dock.motion(slot, pos);
                     self.needs_redraw = true;
                     return;
                 }
                 let under = self.surface_under(pos);
-                touch.motion(self, under, &MotionEvent { slot: event.slot(), location: pos, time: event.time_msec() });
+                touch.motion(self, under, &MotionEvent { slot, location: pos, time: msec(time) });
             }
-            InputEvent::TouchUp { event } => {
-                if self.shade.holds(event.slot()) {
-                    if let Some(ask) = self.shade.up(event.slot()) {
+            Contact::Up(slot, time) => {
+                if self.shade.holds(slot) {
+                    if let Some(ask) = self.shade.up(slot) {
                         self.shade_ask(ask);
                     }
                     self.needs_redraw = true;
                     return;
                 }
-                if self.back.holds(event.slot()) {
-                    if let Some(panel) = self.back.up(event.slot()) {
+                if self.system.holds(slot) {
+                    self.system.up(slot);
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.back.holds(slot) {
+                    if let Some(panel) = self.back.up(slot) {
                         self.go_back(panel);
                     }
                     self.needs_redraw = true;
                     return;
                 }
-                if self.grid.holds(event.slot()) {
-                    if let crate::grid::Ask::Launch { exec, ids, icon, panel } = self.grid.up(event.slot()) {
+                if self.grid.holds(slot) {
+                    if let crate::grid::Ask::Launch { exec, ids, icon, panel } = self.grid.up(slot) {
                         let icon = icon.as_deref().and_then(|n| crate::apps::icon(n, crate::curtain::ICON));
                         self.launch(&exec, &ids, icon, panel);
                     }
                     self.needs_redraw = true;
                     return;
                 }
-                if self.gestures.holds(event.slot()) {
-                    self.gestures.up(event.slot(), hybris_hwc::now_ns());
+                if self.gestures.holds(slot) {
+                    self.gestures.up(slot, hybris_hwc::now_ns());
                     self.needs_redraw = true;
                     return;
                 }
-                if self.dock.holds(event.slot()) {
-                    if let Some(Tap::Launch(command, panel, icon, ids)) = self.dock.up(event.slot()) {
+                if self.dock.holds(slot) {
+                    if let Some(Tap::Launch(command, panel, icon, ids)) = self.dock.up(slot) {
                         self.launch(&command, &ids, icon, panel);
                     }
                     self.needs_redraw = true;
                     return;
                 }
-                touch.up(self, &UpEvent { slot: event.slot(), serial: SERIAL_COUNTER.next_serial(), time: event.time_msec() });
+                touch.up(self, &UpEvent { slot, serial: SERIAL_COUNTER.next_serial(), time: msec(time) });
             }
-            InputEvent::TouchFrame { .. } => touch.frame(self),
-            InputEvent::TouchCancel { .. } => {
+            Contact::Frame => touch.frame(self),
+            Contact::Cancel => {
                 self.shade.cancel();
                 self.dock.cancel();
                 self.gestures.cancel(hybris_hwc::now_ns());
                 self.grid.cancel();
                 self.back.cancel();
+                self.system.cancel();
                 self.needs_redraw = true;
                 touch.cancel(self)
             }
-            _ => {}
         }
     }
 }

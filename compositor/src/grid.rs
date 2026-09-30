@@ -54,6 +54,8 @@ pub enum Ask {
     Nothing,
     /// Pull the shade: the touch began here.
     Shade(Point<f64, Logical>),
+    /// Bring the system screen: the touch began here.
+    System(Point<f64, Logical>),
     /// Launch (or bring back) an app onto a panel.
     Launch { exec: String, ids: Vec<String>, icon: Option<String>, panel: usize },
 }
@@ -190,7 +192,8 @@ impl Grid {
         let p = self.pending.take().unwrap();
         self.pressed = None;
         if dy.abs() <= dx.abs() {
-            return Ask::Nothing;
+            // Right on the left panel's desktop: the system screen.
+            return if !p.on_grid && p.panel == 0 && dx > 0.0 { Ask::System(p.start) } else { Ask::Nothing };
         }
         let now = hybris_hwc::now_ns();
         match (p.on_grid, dy < 0.0) {
