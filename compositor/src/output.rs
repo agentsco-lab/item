@@ -143,6 +143,8 @@ impl Screen {
         }
         elements.extend(state.shade.elements(&mut self.renderer, frame_ns, &rows).into_iter().map(FrameElement::from));
         elements.extend(state.curtain.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // The keyboard and other layer surfaces, over the windows and the dock.
+        elements.extend(state.layers.elements(&mut self.renderer).into_iter().map(FrameElement::Window));
         let running = state.running();
         elements.extend(state.grid.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
         elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
@@ -295,6 +297,7 @@ impl Screen {
     /// Frame callbacks to every window, after a frame went out, with the time
     /// it will be on screen.
     pub fn send_frames(&self, state: &State, time: Duration) {
+        state.layers.send_frames(&self.output, time);
         for window in state.space.elements() {
             window.send_frame(&self.output, time, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
         }

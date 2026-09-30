@@ -27,8 +27,14 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState, XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::input_method::{InputMethodHandler, InputMethodManagerState, PopupSurface as ImPopup};
+use smithay::wayland::shell::wlr_layer::{Layer, LayerSurface as WlrLayerSurface, WlrLayerShellHandler, WlrLayerShellState};
+use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
+use smithay::wayland::text_input::TextInputManagerState;
+use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_output, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_input_method_manager, delegate_layer_shell, delegate_output,
+    delegate_seat, delegate_shm, delegate_text_input_manager, delegate_virtual_keyboard_manager, delegate_xdg_shell,
 };
 
 use crate::layout;
@@ -53,6 +59,14 @@ pub struct State {
     _output_manager_state: OutputManagerState,
     seat_state: SeatState<State>,
     data_device_state: DataDeviceState,
+    layer_shell_state: WlrLayerShellState,
+    _input_method_state: InputMethodManagerState,
+    _text_input_state: TextInputManagerState,
+    _virtual_keyboard_state: VirtualKeyboardManagerState,
+    data_control_state: DataControlState,
+    pub layers: crate::layers::Layers,
+    /// The keyboard's height taken off the windows of its panel, as applied.
+    osk_applied: Option<(usize, i32)>,
     /// The panel the next window opens on.
     next_panel: usize,
     /// Each surface's kind of buffer (shm or EGL), logged when it changes.
@@ -97,12 +111,20 @@ impl State {
         let mut seat = seat_state.new_wl_seat(dh, "duo");
         seat.add_keyboard(Default::default(), 200, 25).expect("keyboard");
         seat.add_touch();
+        crate::protocols::create_globals(dh);
         State {
             compositor_state: CompositorState::new::<State>(dh),
             xdg_shell_state: XdgShellState::new::<State>(dh),
             shm_state: ShmState::new::<State>(dh, vec![]),
             _output_manager_state: OutputManagerState::new_with_xdg_output::<State>(dh),
             data_device_state: DataDeviceState::new::<State>(dh),
+            layer_shell_state: WlrLayerShellState::new::<State>(dh),
+            _input_method_state: InputMethodManagerState::new::<State, _>(dh, |_| true),
+            _text_input_state: TextInputManagerState::new::<State>(dh),
+            _virtual_keyboard_state: VirtualKeyboardManagerState::new::<State, _>(dh, |_| true),
+            data_control_state: DataControlState::new::<State, _>(dh, None, |_| true),
+            layers: Default::default(),
+            osk_applied: None,
             seat_state,
             seat,
             display_handle,
@@ -339,8 +361,42 @@ impl State {
         true
     }
 
+    /// The windows' height on the keyboard's panel follows the keyboard:
+    /// shorter by its height while it is up, whole again after.
+    pub fn follow_keyboard(&mut self) {
+        let now = if std::env::var_os("NO_OSK_RESIZE").is_some() { None } else { self.layers.keyboard_height() };
+        if now == self.osk_applied {
+            return;
+        }
+        let panels = layout::panels();
+        for (p, rect) in panels.iter().enumerate() {
+            let cut = match now {
+                Some((kp, h)) if kp == p => h,
+                _ => 0,
+            };
+            let was = match self.osk_applied {
+                Some((ap, h)) if ap == p => h,
+                _ => 0,
+            };
+            if cut == was {
+                continue;
+            }
+            for window in self.space.elements().filter(|w| self.space.element_location(w).is_some_and(|l| rect.contains(l))) {
+                let t = window.toplevel().unwrap();
+                t.with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - cut).into()));
+                t.send_pending_configure();
+            }
+        }
+        tracing::info!("keyboard: {}", match now { Some((p, h)) => format!("up on the {} panel, {h} px", if p == 0 { "left" } else { "right" }), None => "down".into() });
+        self.osk_applied = now;
+        self.needs_redraw = true;
+    }
+
     /// The surface under a point of the layout, and where that surface starts.
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
+        if let Some(hit) = self.layers.surface_under(pos) {
+            return Some(hit);
+        }
         self.space.element_under(pos).and_then(|(window, location)| {
             window
                 .surface_under(pos - location.to_f64(), WindowSurfaceType::ALL)
@@ -378,6 +434,7 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.layers.commit(surface);
         self.needs_redraw = true;
         self.commits += 1;
         self.client_frame = true;
@@ -509,6 +566,19 @@ impl SeatHandler for State {
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        // The keyboard goes to the panel of the window that takes the focus.
+        if let Some(f) = focused {
+            let panels = layout::panels();
+            if let Some(p) = self
+                .space
+                .elements()
+                .find(|w| w.toplevel().unwrap().wl_surface() == f)
+                .and_then(|w| self.space.element_location(w))
+                .and_then(|l| panels.iter().position(|r| r.contains(l)))
+            {
+                self.layers.panel = p;
+            }
+        }
         let client = focused.and_then(|s| self.display_handle.get_client(s.id()).ok());
         set_data_device_focus(&self.display_handle, seat, client);
     }
@@ -524,6 +594,43 @@ impl DataDeviceHandler for State {
     }
 }
 
+impl WlrLayerShellHandler for State {
+    fn shell_state(&mut self) -> &mut WlrLayerShellState {
+        &mut self.layer_shell_state
+    }
+
+    fn new_layer_surface(&mut self, surface: WlrLayerSurface, _output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>, layer: Layer, namespace: String) {
+        tracing::info!("layer surface: {namespace} on {layer:?}");
+        self.layers.names.push((surface.wl_surface().clone(), namespace));
+        self.layers.surfaces.push(surface);
+    }
+
+    fn layer_destroyed(&mut self, surface: WlrLayerSurface) {
+        self.layers.surfaces.retain(|l| l != &surface);
+        self.layers.names.retain(|(s, _)| s != surface.wl_surface());
+        self.needs_redraw = true;
+    }
+}
+
+impl InputMethodHandler for State {
+    fn new_popup(&mut self, _surface: ImPopup) {}
+    fn dismiss_popup(&mut self, _surface: ImPopup) {}
+    fn popup_repositioned(&mut self, _surface: ImPopup) {}
+    fn parent_geometry(&self, parent: &WlSurface) -> smithay::utils::Rectangle<i32, Logical> {
+        self.space
+            .elements()
+            .find(|w| w.toplevel().unwrap().wl_surface() == parent)
+            .and_then(|w| self.space.element_geometry(w))
+            .unwrap_or_default()
+    }
+}
+
+impl DataControlHandler for State {
+    fn data_control_state(&self) -> &DataControlState {
+        &self.data_control_state
+    }
+}
+
 impl ClientDndGrabHandler for State {}
 impl ServerDndGrabHandler for State {}
 impl OutputHandler for State {}
@@ -534,3 +641,8 @@ delegate_xdg_shell!(State);
 delegate_seat!(State);
 delegate_data_device!(State);
 delegate_output!(State);
+delegate_layer_shell!(State);
+delegate_input_method_manager!(State);
+delegate_text_input_manager!(State);
+delegate_virtual_keyboard_manager!(State);
+smithay::delegate_data_control!(State);

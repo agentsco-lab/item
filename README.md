@@ -38,11 +38,10 @@ item, which keep running the phone day to day.
 | the app grid | every app in five columns on black, up with a swipe on an empty panel, following the finger, as item's | |
 | the shades' contents | left: brightness, volume, six quick settings; right: the open windows with close buttons, as item's split | brightness through logind from the session |
 | notifications | the session's notification server; a banner on the right panel, the list in the right shade | |
+| the on-screen keyboard | the port's stevia (item's build) through layer-shell, input-method, text-input and virtual-keyboard; windows shorten under it | types |
 | frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, a client's frame drawn at once, the shell's motion late in the frame; never two frames waiting in hwcomposer; drawn whole | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
-What it does not do yet: cheaper shm frames, `wp_presentation`, the rest of the shell (the shade's quick settings and notifications, the dock, gestures between panels), the
-on-screen keyboard, the pen, blanking and the power key, the portals'
-Settings interface.
+What it does not do yet: the system screen, the lock screen, the pen, blanking and the power key, cheaper shm frames, `wp_presentation`, the portals' Settings interface.
 
 ## How it was reached
 
@@ -70,6 +69,7 @@ Settings interface.
 | 11 | the desktop clock, running dots, back from the edge, an open app called over (clock.rs, back.rs) | all as item's (`log/2026-09-30-step-11-clock-dots-back-call.md`) |
 | 12 | the shades' contents (quick.rs) | settings left, open windows right; system commands on a thread (`log/2026-09-30-step-12-shade-contents.md`) |
 | 13 | notifications (notify.rs, zbus) | banner and shade list; actions and dismissals signalled (`log/2026-09-30-step-13-notifications.md`) |
+| 14 | the on-screen keyboard (layers.rs, protocols.rs) | stevia needs phoc's device state, wlr foreign toplevel and data control to start; the output after xdg-output; one stevia, its user unit (`log/2026-09-30-step-14-keyboard.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -128,7 +128,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `quick` (the shades' contents), `notify` (notifications), `text` (fonts and labels), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `quick` (the shades' contents), `notify` (notifications), `layers` (layer surfaces, the keyboard), `protocols` (the globals stevia needs), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences

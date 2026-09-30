@@ -89,5 +89,6 @@ systemd-run --wait --collect --unit=item-compositor \
     ${HWC_PRESENT_OR_VALIDATE:+-p "Environment=HWC_PRESENT_OR_VALIDATE=$HWC_PRESENT_OR_VALIDATE"} \
     ${TOUCHSCREEN:+-p "Environment=TOUCHSCREEN=$TOUCHSCREEN"} ${LOG_BUFFERS:+-p "Environment=LOG_BUFFERS=$LOG_BUFFERS"} ${INSTANCING:+-p "Environment=INSTANCING=$INSTANCING"} ${LOG_DAMAGE:+-p "Environment=LOG_DAMAGE=$LOG_DAMAGE"} ${PARTIAL:+-p "Environment=PARTIAL=$PARTIAL"} ${NO_LOGIN_SHELL:+-p "Environment=NO_LOGIN_SHELL=$NO_LOGIN_SHELL"} ${SERVER_DEBUG:+-p "Environment=WAYLAND_DEBUG=server"} \
     ${RUST_LOG:+-p "Environment=RUST_LOG=$RUST_LOG"} ${ASAP:+-p "Environment=ASAP=$ASAP"} ${GPU_BOOST:+-p "Environment=GPU_BOOST=$GPU_BOOST"} ${CALLBACKS:+-p "Environment=CALLBACKS=$CALLBACKS"} \
+    ${OSK_DEBUG:+-p "Environment=OSK_DEBUG=$OSK_DEBUG"} ${NO_OSK:+-p "Environment=NO_OSK=$NO_OSK"} ${NO_OSK_RESIZE:+-p "Environment=NO_OSK_RESIZE=$NO_OSK_RESIZE"} \
     /tmp/item-compositor "$@"
 log "session ended"

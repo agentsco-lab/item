@@ -23,9 +23,11 @@ mod dock;
 mod gesture;
 mod grid;
 mod input;
+mod layers;
 mod layout;
 mod notify;
 mod output;
+mod protocols;
 mod quick;
 mod shade;
 mod state;
@@ -246,6 +248,7 @@ impl Data {
         }
         self.state.needs_redraw = false;
         let started = hybris_hwc::now_ns();
+        self.state.follow_keyboard();
         // The dock stands on the panels no window has, nor a launch curtain.
         let mut taken = self.state.panels_taken();
         if let Some(p) = self.state.curtain.panel() {
@@ -430,7 +433,6 @@ fn main() {
     let dh = display.handle();
 
     let screen = Screen::new(&dh);
-    let _output_global = screen.output.create_global::<State>(&dh);
 
     // A fixed name, so the session can hand it to the portals before we run.
     let listening = ListeningSocketSource::with_name("wayland-item").expect("wayland socket");
@@ -505,11 +507,23 @@ fn main() {
         })
         .expect("wake source");
     let mut state = State::new(dh.clone(), event_loop.get_signal(), wake);
+    // The output's global after xdg-output's manager (made in State::new):
+    // phosh-osk-stevia asks the manager for each wl_output as it is
+    // announced, and crashed on a null manager when the output came first.
+    let _output_global = screen.output.create_global::<State>(&dh);
     state.stop_after = args.seconds;
     state.space.map_output(&screen.output, (0, 0));
     tracing::info!("listening on {:?}", socket_name);
 
     state.socket_name = socket_name.clone();
+    // The on-screen keyboard, the port's (layers.rs): its user unit, which
+    // phosh's session starts, restarted now that our socket is up - it takes
+    // the session's WAYLAND_DISPLAY, ours for the run. A second stevia of our
+    // own fought it for the input method (the second one gets "unavailable").
+    // No unit: stevia started directly. NO_OSK=1 leaves it out.
+    if std::env::var_os("NO_OSK").is_none() {
+        state.spawn("systemctl --user restart mobi.phosh.OSK.service 2>/dev/null || exec phosh-osk-stevia --replace");
+    }
     for command in &args.spawn {
         state.spawn(command);
     }
