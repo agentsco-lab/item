@@ -443,7 +443,7 @@ impl Quick {
 }
 
 /// A symbolic icon, recoloured white.
-fn symbolic(path: &str, size: i32) -> Option<MemoryRenderBuffer> {
+pub fn symbolic(path: &str, size: i32) -> Option<MemoryRenderBuffer> {
     let mut pixmap = crate::apps::icon_pixmap(path, size)?;
     for px in pixmap.pixels_mut() {
         let a = px.alpha();

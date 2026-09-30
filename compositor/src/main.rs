@@ -28,6 +28,7 @@ mod lock;
 mod layout;
 mod notify;
 mod output;
+mod pam;
 mod protocols;
 mod quick;
 mod shade;
@@ -526,6 +527,7 @@ fn main() {
     let (wake, wake_source) = make_ping().expect("ping");
     handle
         .insert_source(wake_source, |_, _, data: &mut Data| {
+            data.state.lock.poll();
             data.state.needs_redraw = true;
             data.on_client_frame();
         })

@@ -7,9 +7,10 @@
 //!   start; 0: never) does the same after that long without a touch.
 //! - The lock screen is drawn by the compositor over everything: the time
 //!   and the date on the left panel, a line on how to unlock on both. A
-//!   swipe up anywhere unlocks, and the lock screen fades out over 300 ms,
-//!   as item's (patches/phosh/0005). No PIN yet: that is PAM's, a step of
-//!   its own.
+//!   swipe up brings the PIN pad on the right panel; the PIN is checked as
+//!   phosh checks it (pam.rs), on a thread, and when it is right the lock
+//!   screen fades out over 300 ms, as item's (patches/phosh/0005). A swipe
+//!   down on the pad puts it away.
 //! - The volume keys (gpio-keys) set the volume, locked or not.
 
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
@@ -29,7 +30,29 @@ const FADE_NS: u64 = 300_000_000;
 const UNLOCK: f64 = 120.0;
 const FLING: f64 = 0.5;
 
+/// The PIN pad's keys, row by row.
+const KEYS: [&str; 12] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "←", "0", "OK"];
+const KEY: f64 = 76.0;
+const KEY_GAP: f64 = 22.0;
+const PAD_TOP: f64 = 330.0;
+const DOTS_Y: f64 = 220.0;
+const MAX_PIN: usize = 16;
+
 pub struct Lock {
+    /// The PIN pad is up, and what is typed.
+    entering: bool,
+    pin: String,
+    pressed: Option<usize>,
+    /// A check running on its thread, and its answer when it comes.
+    checking: std::sync::Arc<std::sync::Mutex<Option<Option<bool>>>>,
+    wake: smithay::reexports::calloop::ping::Ping,
+    message: Label,
+    keys: Vec<Label>,
+    key_bg: smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    key_on: smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    dot: smithay::backend::renderer::element::memory::MemoryRenderBuffer,
+    /// The backspace key's icon (the fonts have no arrow).
+    erase: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
     pub locked: bool,
     pub blank: bool,
     /// When the unlock began: the lock screen fading.
@@ -51,7 +74,7 @@ pub struct Lock {
 }
 
 impl Lock {
-    pub fn new() -> Lock {
+    pub fn new(wake: smithay::reexports::calloop::ping::Ping) -> Lock {
         let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
         let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
         let idle_s = std::process::Command::new("gsettings")
@@ -62,6 +85,18 @@ impl Lock {
             .unwrap_or(0);
         tracing::info!("lock: idle delay {}", if idle_s == 0 { "never".into() } else { format!("{idle_s} s") });
         let mut lock = Lock {
+            entering: false,
+            pin: String::new(),
+            pressed: None,
+            checking: Default::default(),
+            wake,
+            message: Label::new(16.0, [1.0, 1.0, 1.0, 0.7]),
+            keys: KEYS.iter().map(|_| Label::new(28.0, [1.0, 1.0, 1.0, 0.95])).collect(),
+            key_bg: crate::grid::rounded(KEY, KEY, KEY / 2.0, [30, 30, 30, 30]),
+            key_on: crate::grid::rounded(KEY, KEY, KEY / 2.0, [77, 77, 77, 77]),
+            dot: crate::grid::rounded(12.0, 12.0, 6.0, [240, 240, 240, 240]),
+            erase: crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/ui/edit-clear-symbolic.svg", 28)
+                .or_else(|| crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/actions/edit-clear-symbolic.svg", 28)),
             locked: false,
             blank: false,
             fading: None,
@@ -77,8 +112,89 @@ impl Lock {
             idle_ns: idle_s * 1_000_000_000,
             relit: false,
         };
+        if let Some((_, regular)) = &lock.fonts {
+            for (l, k) in lock.keys.iter_mut().zip(KEYS) {
+                l.set(regular, k);
+            }
+            lock.message.set(regular, "Введите PIN");
+        }
         lock.refresh();
         lock
+    }
+
+    fn say(&mut self, text: &str) {
+        if let Some((_, regular)) = &self.fonts {
+            self.message.set(regular, text);
+        }
+    }
+
+    /// Key `i`'s rect on the right panel, logical px.
+    fn key_rect(i: usize) -> Rectangle<f64, smithay::utils::Logical> {
+        let p = layout::panels()[1];
+        let w = 3.0 * KEY + 2.0 * KEY_GAP;
+        let x0 = p.loc.x as f64 + (p.size.w as f64 - w) / 2.0;
+        let (col, row) = ((i % 3) as f64, (i / 3) as f64);
+        Rectangle::new((x0 + col * (KEY + KEY_GAP), PAD_TOP + row * (KEY + KEY_GAP)).into(), (KEY, KEY).into())
+    }
+
+    fn key_at(x: f64, y: f64) -> Option<usize> {
+        (0..KEYS.len()).find(|&i| Self::key_rect(i).contains((x, y)))
+    }
+
+    /// A key of the pad let go.
+    fn key(&mut self, i: usize) {
+        let checking = self.checking.lock().unwrap().is_some();
+        if checking {
+            return;
+        }
+        match KEYS[i] {
+            "←" => {
+                self.pin.pop();
+            }
+            "OK" => self.submit(),
+            d => {
+                if self.pin.len() < MAX_PIN {
+                    self.pin.push_str(d);
+                }
+            }
+        }
+    }
+
+    /// The PIN to PAM, on a thread.
+    fn submit(&mut self) {
+        if self.pin.is_empty() {
+            return;
+        }
+        let pin = std::mem::take(&mut self.pin);
+        *self.checking.lock().unwrap() = Some(None);
+        self.say("Проверка…");
+        let (slot, wake) = (self.checking.clone(), self.wake.clone());
+        std::thread::spawn(move || {
+            let ok = crate::pam::check(&pin);
+            drop(pin);
+            *slot.lock().unwrap() = Some(Some(ok));
+            wake.ping();
+        });
+    }
+
+    /// A check's answer, if it came: unlocked, or told so.
+    pub fn poll(&mut self) -> bool {
+        let answer = { *self.checking.lock().unwrap() };
+        match answer {
+            Some(Some(ok)) => {
+                *self.checking.lock().unwrap() = None;
+                if ok {
+                    tracing::info!("lock: unlocked");
+                    self.fading = Some(hybris_hwc::now_ns());
+                    self.entering = false;
+                    self.say("Введите PIN");
+                } else {
+                    self.say("Неверный PIN");
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The time brought up to the minute; whether it changed.
@@ -118,6 +234,9 @@ impl Lock {
         self.locked = true;
         self.fading = None;
         self.lift = 0.0;
+        self.entering = false;
+        self.pin.clear();
+        self.say("Введите PIN");
         self.refresh();
     }
 
@@ -151,7 +270,8 @@ impl Lock {
         true
     }
 
-    pub fn down(&mut self, slot: TouchSlot, y: f64, time_us: u64) {
+    pub fn down(&mut self, slot: TouchSlot, x: f64, y: f64, time_us: u64) {
+        self.pressed = if self.entering { Self::key_at(x, y) } else { None };
         self.grab = Some((slot, y, (time_us, y), 0.0));
     }
 
@@ -166,19 +286,32 @@ impl Lock {
                 g.3 = g.3 * 0.4 + (y - g.2 .1) / dt * 0.6;
             }
             g.2 = (time_us, y);
-            self.lift = (g.1 - y).max(0.0);
+            if (g.1 - y).abs() > 12.0 {
+                self.pressed = None;
+            }
+            if !self.entering {
+                self.lift = (g.1 - y).max(0.0);
+            }
         }
     }
 
-    /// The finger lets go: unlocked if it went far or fast enough up.
+    /// The finger lets go: a swipe up brings the PIN pad, a swipe down on
+    /// it puts it away, a tap on a key types.
     pub fn up(&mut self, slot: TouchSlot) {
         let Some(g) = self.grab.take_if(|g| g.0 == slot) else { return };
-        if self.lift > UNLOCK || g.3 < -FLING {
-            tracing::info!("lock: unlocked");
-            self.fading = Some(hybris_hwc::now_ns());
-        } else {
-            self.lift = 0.0;
+        if self.entering {
+            if let Some(i) = self.pressed.take() {
+                self.key(i);
+            } else if g.2 .1 - g.1 > UNLOCK || g.3 > FLING {
+                self.entering = false;
+                self.pin.clear();
+            }
+            return;
         }
+        if self.lift > UNLOCK || g.3 < -FLING {
+            self.entering = true;
+        }
+        self.lift = 0.0;
     }
 
     /// After a frame: whether the lock screen still wants frames.
@@ -191,13 +324,14 @@ impl Lock {
                 true
             }
             Some(_) => true,
-            None => self.grab.is_some(),
+                None => self.grab.is_some() || self.checking.lock().unwrap().is_some(),
         }
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.time, &self.date, &self.hint]
-            .iter()
+        [&self.time, &self.date, &self.hint, &self.message]
+            .into_iter()
+            .chain(self.keys.iter())
             .filter(|l| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), &l.buffer, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
@@ -210,20 +344,41 @@ impl Lock {
             Some(t) => 1.0 - (frame_ns.saturating_sub(t) as f32 / FADE_NS as f32).clamp(0.0, 1.0),
             None => 1.0 - (self.lift / 400.0).clamp(0.0, 0.5) as f32,
         };
-        let rise = -(self.lift * 0.5) as i32;
         let mut out = Vec::new();
-        let mut push = |label: &Label, x: i32, y: i32| {
-            let loc = ((x * SCALE) as f64, ((y + rise) * SCALE) as f64);
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &label.buffer, Some(alpha), None, None, Kind::Unspecified) {
+        // One way to put a texture: logical px, the lock screen's alpha.
+        let mut put = |out: &mut Vec<ShellElement>, b: &smithay::backend::renderer::element::memory::MemoryRenderBuffer, x: f64, y: f64| {
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * SCALE as f64).round(), (y * SCALE as f64).round()), b, Some(alpha), None, None, Kind::Unspecified) {
                 out.push(ShellElement::Text(e));
             }
         };
         let panels = layout::panels();
         let left = panels[0];
-        push(&self.time, left.loc.x + (left.size.w - self.time.extent.w) / 2, 150);
-        push(&self.date, left.loc.x + (left.size.w - self.date.extent.w) / 2, 150 + self.time.extent.h + 4);
-        for p in panels {
-            push(&self.hint, p.loc.x + (p.size.w - self.hint.extent.w) / 2, p.size.h - 60);
+        if self.entering {
+            let right = panels[1];
+            // What is typed, as dots; what is going on, under them.
+            let n = self.pin.len() as f64;
+            let dots_w = n * 12.0 + (n - 1.0).max(0.0) * 10.0;
+            for i in 0..self.pin.len() {
+                put(&mut out, &self.dot, right.loc.x as f64 + (right.size.w as f64 - dots_w) / 2.0 + i as f64 * 22.0, DOTS_Y);
+            }
+            put(&mut out, &self.message.buffer, right.loc.x as f64 + (right.size.w - self.message.extent.w) as f64 / 2.0, DOTS_Y + 36.0);
+            for (i, l) in self.keys.iter().enumerate() {
+                let r = Self::key_rect(i);
+                match (&self.erase, KEYS[i]) {
+                    (Some(e), "←") => put(&mut out, e, r.loc.x + (KEY - 28.0) / 2.0, r.loc.y + (KEY - 28.0) / 2.0),
+                    _ => put(&mut out, &l.buffer, r.loc.x + (KEY - l.extent.w as f64) / 2.0, r.loc.y + (KEY - l.extent.h as f64) / 2.0),
+                }
+                put(&mut out, if self.pressed == Some(i) { &self.key_on } else { &self.key_bg }, r.loc.x, r.loc.y);
+            }
+        }
+        let rise = -(self.lift * 0.5);
+        let cx = |l: &Label, p: smithay::utils::Rectangle<i32, smithay::utils::Logical>| (p.loc.x + (p.size.w - l.extent.w) / 2) as f64;
+        put(&mut out, &self.time.buffer, cx(&self.time, left), 150.0 + rise);
+        put(&mut out, &self.date.buffer, cx(&self.date, left), 154.0 + self.time.extent.h as f64 + rise);
+        if !self.entering {
+            for p in panels {
+                put(&mut out, &self.hint.buffer, cx(&self.hint, p), (p.size.h - 60) as f64 + rise);
+            }
         }
         let (w, h) = layout::LAYOUT;
         let rect = Rectangle::<i32, Physical>::from_size((w * SCALE, h * SCALE).into());

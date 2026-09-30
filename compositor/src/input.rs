@@ -111,7 +111,7 @@ impl State {
         match &event {
             InputEvent::TouchDown { event } if self.lock.holds_screen() => {
                 let pos = event.position_transformed(LAYOUT.into());
-                self.lock.down(event.slot(), pos.y, event.time());
+                self.lock.down(event.slot(), pos.x, pos.y, event.time());
                 self.needs_redraw = true;
                 return;
             }
