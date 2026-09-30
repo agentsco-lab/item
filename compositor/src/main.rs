@@ -17,6 +17,7 @@
 mod input;
 mod layout;
 mod output;
+mod shade;
 mod state;
 
 use std::sync::Arc;
@@ -84,6 +85,11 @@ struct Report {
     swap_ms: Vec<f64>,
     present_ms: Vec<f64>,
     touch_to_screen_ms: Vec<f64>,
+    /// From a finger's move on the shade (the kernel's time) to the frame
+    /// showing it.
+    shade_ms: Vec<f64>,
+    /// The same, from when the move reached the compositor.
+    shade_loop_ms: Vec<f64>,
     /// Frames by buffer age.
     ages: std::collections::BTreeMap<usize, u32>,
     /// Share of the screen redrawn, %.
@@ -142,7 +148,7 @@ impl Data {
             return;
         }
         self.state.needs_redraw = false;
-        let cost = self.screen.render(&self.state);
+        let cost = self.screen.render(&self.state, self.pacing.target_ns);
         let (draw_ns, swap_ns) = (cost.draw_ns, cost.swap_ns);
         let took = draw_ns + swap_ns;
         *self.report.ages.entry(cost.age).or_default() += 1;
@@ -176,6 +182,17 @@ impl Data {
         if let Some(touched) = self.state.touch_answered.take() {
             self.report.touch_to_screen_ms.push(shown_at.saturating_sub(touched) as f64 / 1e6);
         }
+        if let Some((moved_us, reached_ns)) = self.state.shade.take_moved() {
+            let moved_ns = moved_us * 1000;
+            // libinput's time is the kernel's CLOCK_MONOTONIC; skip it if not.
+            if moved_ns <= reached_ns {
+                self.report.shade_ms.push(shown_at.saturating_sub(moved_ns) as f64 / 1e6);
+            }
+            self.report.shade_loop_ms.push(shown_at.saturating_sub(reached_ns) as f64 / 1e6);
+        }
+        if self.state.shade.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+        }
         let time = std::time::Duration::from_nanos(shown_at.saturating_sub(self.screen.clock_origin_ns));
         self.screen.send_frames(&self.state, time);
         let _ = self.state.display_handle.flush_clients();
@@ -194,10 +211,11 @@ impl Data {
             format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
         };
         tracing::info!(
-            "drawn {:3} of {:3}  missed {:2}  commits {:3}  draw {} swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  errors {}",
+            "drawn {:3} of {:3}  missed {:2}  commits {:3}  draw {} swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  errors {}",
             r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits),
             mean_max(&r.draw_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), st.fast, mean_max(&r.damaged_share),
-            r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text, st.errors
+            r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text,
+            mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms), st.errors
         );
         self.report.vsyncs_at_last = v;
     }
@@ -270,6 +288,9 @@ fn main() {
     handle
         .insert_source(Timer::from_duration(std::time::Duration::from_secs(1)), |_, _, data: &mut Data| {
             data.log_report();
+            if data.state.shade.clock_stale() {
+                data.state.needs_redraw = true;
+            }
             if let Some(s) = data.state.stop_after {
                 if data.started.elapsed().as_secs() >= s {
                     data.state.loop_signal.stop();

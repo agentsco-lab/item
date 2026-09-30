@@ -32,6 +32,7 @@ use smithay::{
 };
 
 use crate::layout;
+use crate::shade::Shade;
 
 pub struct State {
     pub display_handle: DisplayHandle,
@@ -60,6 +61,7 @@ pub struct State {
     pub touch_answered: Option<u64>,
     /// Stop after this many seconds (for tests).
     pub stop_after: Option<u64>,
+    pub shade: Shade,
 }
 
 impl State {
@@ -90,6 +92,7 @@ impl State {
             touch_pending: None,
             touch_answered: None,
             stop_after: None,
+            shade: Shade::new(),
         }
     }
 

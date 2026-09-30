@@ -357,6 +357,7 @@ name = "item-compositor"
 version = "0.1.0"
 dependencies = [
  "hybris-hwc",
+ "libc",
  "smithay",
  "smithay-hybris",
  "tracing",

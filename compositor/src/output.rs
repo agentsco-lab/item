@@ -11,9 +11,12 @@ use hybris_hwc::Output as HwcOutput;
 use smithay::backend::egl::context::{GlAttributes, PixelFormatRequirements};
 use smithay::backend::egl::{EGLContext, EGLDisplay, EGLSurface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
+use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::{Bind, ImportEgl};
-use smithay::desktop::space::space_render_elements;
+use smithay::desktop::space::{space_render_elements, SpaceRenderElements};
 use smithay::desktop::Window;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::wayland_server::DisplayHandle;
@@ -33,6 +36,13 @@ pub struct FrameCost {
     pub damaged_px: i64,
     /// Whether a frame went to hwcomposer (nothing damaged: no).
     pub swapped: bool,
+}
+
+render_elements! {
+    /// What a frame is drawn from: the shell's own rectangles over the windows.
+    FrameElement<=GlesRenderer>;
+    Shell=SolidColorRenderElement,
+    Space=SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
 }
 
 /// The hwcomposer window's buffers.
@@ -98,8 +108,9 @@ impl Screen {
     ///
     /// The buffer's age says how many frames old its contents are; the damage
     /// tracker redraws only what changed since then (everything when the age
-    /// is 0, unknown). Nothing changed: no swap.
-    pub fn render(&mut self, state: &State) -> FrameCost {
+    /// is 0, unknown). Nothing changed: no swap. `frame_ns` is when the frame
+    /// will be on screen: the shade's runs are drawn where they will be then.
+    pub fn render(&mut self, state: &State, frame_ns: u64) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
         // EGL says 2 here, but libhybris' hwcomposer window hands out its
         // BUFFERS in strict turn: a buffer last held the frame BUFFERS frames
@@ -107,8 +118,13 @@ impl Screen {
         // left the undamaged parts of a buffer three frames old, not two: an
         // empty panel flickered.
         let age = if self.frames_drawn < BUFFERS as u64 { 0 } else { BUFFERS };
-        let elements = space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
-            .expect("render elements");
+        let mut elements: Vec<FrameElement> = state.shade.elements(frame_ns).into_iter().map(FrameElement::from).collect();
+        elements.extend(
+            space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
+                .expect("render elements")
+                .into_iter()
+                .map(FrameElement::from),
+        );
         let damaged_px: i64 = {
             let mut target = self.renderer.bind(&mut self.surface).expect("bind");
             let result = self

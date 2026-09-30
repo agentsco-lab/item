@@ -75,6 +75,11 @@ impl State {
         match event {
             InputEvent::TouchDown { event } => {
                 let pos = event.position_transformed(LAYOUT.into());
+                // A touch at a panel's top edge, or on its shade, is the shade's.
+                if self.shade.down(event.slot(), pos.x, pos.y, event.time()) {
+                    self.needs_redraw = true;
+                    return;
+                }
                 let serial = SERIAL_COUNTER.next_serial();
                 // The window under the finger comes up and takes the keyboard.
                 if let Some(window) = self.space.element_under(pos).map(|(w, _)| w.clone()) {
@@ -95,14 +100,28 @@ impl State {
             }
             InputEvent::TouchMotion { event } => {
                 let pos = event.position_transformed(LAYOUT.into());
+                if self.shade.holds(event.slot()) {
+                    self.shade.motion(event.slot(), pos.y, event.time());
+                    self.needs_redraw = true;
+                    return;
+                }
                 let under = self.surface_under(pos);
                 touch.motion(self, under, &MotionEvent { slot: event.slot(), location: pos, time: event.time_msec() });
             }
             InputEvent::TouchUp { event } => {
+                if self.shade.holds(event.slot()) {
+                    self.shade.up(event.slot());
+                    self.needs_redraw = true;
+                    return;
+                }
                 touch.up(self, &UpEvent { slot: event.slot(), serial: SERIAL_COUNTER.next_serial(), time: event.time_msec() });
             }
             InputEvent::TouchFrame { .. } => touch.frame(self),
-            InputEvent::TouchCancel { .. } => touch.cancel(self),
+            InputEvent::TouchCancel { .. } => {
+                self.shade.cancel();
+                self.needs_redraw = true;
+                touch.cancel(self)
+            }
             _ => {}
         }
     }
