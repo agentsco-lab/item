@@ -54,10 +54,11 @@ the start:
 
 About 5 ms off the touch's round trip. Late stays the default.
 
-## Open
+## Not a problem after all
 
-In both earlier comparisons the finger gave no touches at all in the
-late run - each time the second session of two in a row - while the
-benchmark's taps reach the late mode fine. Maybe the port's `sfduo
-touchscreen` gives nothing to a second session in a row, not the late mode.
-To try: the late mode first, with a finger.
+In both earlier comparisons the finger gave no touches in the late
+run, each time the second session of two in a row. It was the test: the
+second session began unannounced. The late mode first, with
+a finger: 83 touches; a second session in a row, announced: 88. The port's
+`sfduo-pen-split` passes fingers on unconditionally. A run that needs a
+person at the phone now starts when they are ready, one session at a time.
