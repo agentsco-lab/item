@@ -135,6 +135,7 @@ impl Screen {
         // The shade over the launch curtain over the dock over the windows.
         let mut elements: Vec<FrameElement> = state.shade.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
         elements.extend(state.curtain.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        elements.extend(state.grid.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.dock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The windows, topmost first; one put away or brought back as the
         // gesture has it (gesture.rs).
@@ -274,7 +275,7 @@ impl Screen {
     /// Uploads the shell's textures before they are first needed.
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
-        let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer);
+        let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }
 

@@ -14,10 +14,12 @@
 //! it logs frames drawn, vsyncs, time between presents, windows, touches, and
 //! the time from a touch to the first frame showing a client's answer to it.
 
+mod apps;
 mod boost;
 mod curtain;
 mod dock;
 mod gesture;
+mod grid;
 mod input;
 mod layout;
 mod output;
@@ -245,6 +247,9 @@ impl Data {
         if let Some(p) = self.state.curtain.panel() {
             taken[p] = true;
         }
+        if let Some(p) = self.state.grid.panel() {
+            taken[p] = true;
+        }
         self.state.dock.follow(taken, started);
         // Callbacks::Draw: frame callbacks before the frame is drawn: the
         // clients' buffers for it are already taken, and a client starts on
@@ -332,6 +337,10 @@ impl Data {
             self.state.put_window_away(window, panel);
         }
         if self.state.gestures.moving() {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        if self.state.grid.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }

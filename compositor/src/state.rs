@@ -36,6 +36,7 @@ use crate::boost::GpuBoost;
 use crate::curtain::Curtain;
 use crate::dock::Dock;
 use crate::gesture::Gestures;
+use crate::grid::Grid;
 use crate::shade::Shade;
 
 pub struct State {
@@ -72,6 +73,7 @@ pub struct State {
     pub boost: GpuBoost,
     pub curtain: Curtain,
     pub gestures: Gestures,
+    pub grid: Grid,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
     /// The panel the next window goes to, asked for by a launch from the
@@ -115,6 +117,7 @@ impl State {
             boost: GpuBoost::new(),
             curtain: Curtain::new(),
             gestures: Gestures::default(),
+            grid: Grid::new(),
             put_away: Vec::new(),
             launch_to: None,
             socket_name: Default::default(),
@@ -180,6 +183,19 @@ impl State {
             let surface = next.map(|w| w.toplevel().unwrap().wl_surface().clone());
             keyboard.set_focus(self, surface, smithay::utils::SERIAL_COUNTER.next_serial());
         }
+        self.needs_redraw = true;
+    }
+
+    /// An app onto a panel, from the dock or the grid: a window of it put
+    /// away comes back; else it is launched under the curtain.
+    pub fn launch(&mut self, exec: &str, ids: &[String], icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>, panel: usize) {
+        if self.bring_back(ids, panel) {
+            return;
+        }
+        let now = hybris_hwc::now_ns();
+        self.launch_to = Some((panel, now));
+        self.curtain.raise(panel, icon, now);
+        self.spawn(exec);
         self.needs_redraw = true;
     }
 

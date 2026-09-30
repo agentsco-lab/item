@@ -186,6 +186,22 @@ impl Shade {
         true
     }
 
+    /// A pull down that began anywhere on an empty panel (item's desktop
+    /// catcher): the sheet is taken from where the finger started, and
+    /// follows it from there.
+    pub fn grab_from(&mut self, slot: TouchSlot, x: f64, start_y: f64, time_us: u64) {
+        let Some(p) = layout::panel_at((x, start_y).into()) else { return };
+        let sheet = &mut self.sheets[p];
+        if sheet.grab.is_some() {
+            return;
+        }
+        let height = sheet.height_at(hybris_hwc::now_ns());
+        sheet.run = None;
+        sheet.height = height;
+        sheet.grab = Some(Grab { slot, offset: height - start_y, start_y, moved: true, last: (time_us, start_y), velocity: 0.0 });
+        self.refresh_text();
+    }
+
     /// Whether a touch belongs to a sheet.
     pub fn holds(&self, slot: TouchSlot) -> bool {
         self.sheets.iter().any(|s| s.grab.as_ref().is_some_and(|g| g.slot == slot))

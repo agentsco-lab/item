@@ -35,6 +35,7 @@ item, which keep running the phone day to day.
 | the GPU's clock | raised to the top on touch and while the shell moves, 1.5 s after (the governor leaves it at 257 of 585 MHz) | Settings scrolls at 60 fps (43) |
 | the launch curtain | the panel black with the app's icon from the tap to the window's first frame, as item's | up in the next frame; apps draw 1.5-2.5 s later |
 | putting a window away | a swipe up from a panel's bottom edge, the window following the finger, as phoc's minimize; back with a tap on its app in the dock | |
+| the app grid | every app in five columns on black, up with a swipe on an empty panel, following the finger, as item's | |
 | frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, a client's frame drawn at once, the shell's motion late in the frame; never two frames waiting in hwcomposer; drawn whole | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
 What it does not do yet: cheaper shm frames, `wp_presentation`, the rest of the shell (the shade's quick settings and notifications, the dock, gestures between panels), the
@@ -63,6 +64,7 @@ Settings interface.
 | 7b | the GPU boost on touch and shell motion (boost.rs) | Settings scrolls at 60 fps; a quick client's tap answer a vsync later (36 ms, 28 without); callbacks kept as the frame is drawn (`log/2026-09-30-step-7b-gpu-boost.md`) |
 | 8 | the launch curtain (curtain.rs) | the tap answered at once (`log/2026-09-30-step-8-curtain.md`) |
 | 9 | the swipe up that puts a window away (gesture.rs) | the window follows the finger; the dock comes back as it goes (`log/2026-09-30-step-9-put-away.md`) |
+| 10 | the app grid (grid.rs, apps.rs) | 18 apps; a tap launches under the curtain or brings a window back (`log/2026-09-30-step-10-grid.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -121,7 +123,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `text` (fonts and labels), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences

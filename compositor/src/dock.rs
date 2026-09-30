@@ -423,63 +423,13 @@ fn config() -> [Vec<String>; 2] {
     }
 }
 
-/// An app from its desktop file: its name, its command without field codes,
-/// and its icon.
+/// A dock item from its desktop file (apps.rs), with its icons at the
+/// dock's and the curtain's sizes.
 fn app(desktop: &str) -> Option<App> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let dirs = [format!("{home}/.local/share/applications"), "/usr/local/share/applications".into(), "/usr/share/applications".into()];
-    let text = dirs.iter().find_map(|d| std::fs::read_to_string(format!("{d}/{desktop}")).ok());
-    let Some(text) = text else {
-        tracing::warn!("dock: no {desktop}");
-        return None;
-    };
-    // The [Desktop Entry] group only: actions come after it.
-    let entry = text.split("\n[").next().unwrap_or(&text);
-    let key = |k: &str| entry.lines().find_map(|l| l.strip_prefix(&format!("{k}="))).map(str::to_owned);
-    let exec = key("Exec")?
-        .split_whitespace()
-        .filter(|w| !(w.starts_with('%') && w.len() == 2))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let name = key("Icon");
-    let small = name.as_deref().and_then(|n| icon(n, ICON));
-    let large = name.as_deref().and_then(|n| icon(n, crate::curtain::ICON));
-    let mut ids = vec![desktop.trim_end_matches(".desktop").to_owned()];
-    ids.extend(key("StartupWMClass"));
-    Some(App { name: key("Name").unwrap_or_else(|| desktop.to_owned()), exec, ids, icon: small, large })
-}
-
-/// An icon from the hicolor theme, `size` logical px at the output's scale.
-fn icon(name: &str, size: i32) -> Option<MemoryRenderBuffer> {
-    let px = (size * SCALE) as u32;
-    let base = "/usr/share/icons/hicolor";
-    let pixmap = if let Ok(data) = std::fs::read(format!("{base}/scalable/apps/{name}.svg")) {
-        let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;
-        let size = tree.size();
-        let scale = px as f32 / size.width().max(size.height());
-        let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
-        resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
-        pixmap
-    } else {
-        // The PNG closest above the size, scaled down.
-        let png = ["256x256", "192x192", "128x128", "96x96", "64x64", "48x48"]
-            .iter()
-            .find_map(|s| tiny_skia::Pixmap::load_png(format!("{base}/{s}/apps/{name}.png")).ok())?;
-        let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
-        let scale = px as f32 / png.width().max(png.height()) as f32;
-        pixmap.draw_pixmap(
-            0,
-            0,
-            png.as_ref(),
-            &tiny_skia::PixmapPaint { quality: tiny_skia::FilterQuality::Bicubic, ..Default::default() },
-            tiny_skia::Transform::from_scale(scale, scale),
-            None,
-        );
-        pixmap
-    };
-    // tiny-skia's pixels are premultiplied RGBA: R, G, B, A in memory, as
-    // Abgr8888 is.
-    Some(MemoryRenderBuffer::from_slice(pixmap.data(), Fourcc::Abgr8888, (px as i32, px as i32), SCALE, Transform::Normal, None))
+    let e = crate::apps::entry(desktop)?;
+    let small = e.icon.as_deref().and_then(|n| crate::apps::icon(n, ICON));
+    let large = e.icon.as_deref().and_then(|n| crate::apps::icon(n, crate::curtain::ICON));
+    Some(App { name: e.name, exec: e.exec, ids: e.ids, icon: small, large })
 }
 
 /// The slab: a rectangle `w` by `h` logical px, its corners round but on

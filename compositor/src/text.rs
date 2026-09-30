@@ -33,7 +33,7 @@ impl Font {
 
     /// `text` in one line, `size` logical px high, white: premultiplied
     /// RGBA and its size in physical px.
-    fn rasterize(&self, text: &str, size: f32, color: [f32; 4]) -> (Vec<u8>, i32, i32) {
+    pub fn rasterize(&self, text: &str, size: f32, color: [f32; 4]) -> (Vec<u8>, i32, i32) {
         let px = size * SCALE as f32;
         let line = self.0.horizontal_line_metrics(px).expect("a horizontal font");
         let mut glyphs = Vec::new();

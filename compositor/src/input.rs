@@ -99,6 +99,12 @@ impl State {
                         }
                     }
                 }
+                // The app grid, and an empty panel's swipes (grid.rs).
+                let empty = crate::layout::panel_at(pos).is_some_and(|p| self.top_window(p).is_none());
+                if self.grid.down(event.slot(), pos, empty) {
+                    self.needs_redraw = true;
+                    return;
+                }
                 let serial = SERIAL_COUNTER.next_serial();
                 // The window under the finger comes up and takes the keyboard.
                 if let Some(window) = self.space.element_under(pos).map(|(w, _)| w.clone()) {
@@ -124,6 +130,14 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.grid.holds(event.slot()) {
+                    if let crate::grid::Ask::Shade(start) = self.grid.motion(event.slot(), pos, event.time()) {
+                        self.shade.grab_from(event.slot(), start.x, start.y, event.time());
+                        self.shade.motion(event.slot(), pos.y, event.time());
+                    }
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.gestures.holds(event.slot()) {
                     self.gestures.motion(event.slot(), pos.y, event.time());
                     self.needs_redraw = true;
@@ -143,6 +157,14 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.grid.holds(event.slot()) {
+                    if let crate::grid::Ask::Launch { exec, ids, icon, panel } = self.grid.up(event.slot()) {
+                        let icon = icon.as_deref().and_then(|n| crate::apps::icon(n, crate::curtain::ICON));
+                        self.launch(&exec, &ids, icon, panel);
+                    }
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.gestures.holds(event.slot()) {
                     self.gestures.up(event.slot(), hybris_hwc::now_ns());
                     self.needs_redraw = true;
@@ -150,13 +172,7 @@ impl State {
                 }
                 if self.dock.holds(event.slot()) {
                     if let Some(Tap::Launch(command, panel, icon, ids)) = self.dock.up(event.slot()) {
-                        // A window of the app put away comes back; else the
-                        // app is launched.
-                        if !self.bring_back(&ids, panel) {
-                            self.launch_to = Some((panel, hybris_hwc::now_ns()));
-                            self.curtain.raise(panel, icon, hybris_hwc::now_ns());
-                            self.spawn(&command);
-                        }
+                        self.launch(&command, &ids, icon, panel);
                     }
                     self.needs_redraw = true;
                     return;
@@ -168,6 +184,7 @@ impl State {
                 self.shade.cancel();
                 self.dock.cancel();
                 self.gestures.cancel(hybris_hwc::now_ns());
+                self.grid.cancel();
                 self.needs_redraw = true;
                 touch.cancel(self)
             }
