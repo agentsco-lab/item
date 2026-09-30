@@ -60,13 +60,19 @@ struct Pacing {
     render_ns: f64,
     /// The vsync the frame being drawn aims for.
     target_ns: u64,
+    /// A frame missed its vsync and waits in hwcomposer for the next: skip
+    /// a vsync, or every frame after it queues behind one and hwcomposer's
+    /// present blocks until the vsync (11-14 ms), a frame late for good.
+    drain: bool,
+    /// When the last frame went to hwcomposer.
+    last_swap_ns: u64,
 }
 
 impl Pacing {
     fn from_env() -> Pacing {
         let late = std::env::var("LATE").map(|v| v != "0").unwrap_or(true);
         let margin_ms: f64 = std::env::var("LATE_MARGIN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
-        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, target_ns: 0 }
+        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, target_ns: 0, drain: false, last_swap_ns: 0 }
     }
 
     fn budget_ns(&self) -> u64 {
@@ -97,6 +103,8 @@ struct Report {
     damaged_share: Vec<f64>,
     /// Frames drawn with nothing damaged (no swap).
     no_damage: u32,
+    /// vsyncs skipped after a missed frame.
+    drained: u32,
 }
 
 /// "mean/max" of a second's samples.
@@ -116,7 +124,14 @@ impl Data {
         let vsync = hybris_hwc::last_vsync_ns();
         let period = self.screen.vsync_period_ns;
         self.pacing.target_ns = vsync + period;
-        if !self.pacing.late {
+        if std::mem::take(&mut self.pacing.drain) {
+            self.report.drained += 1;
+            return;
+        }
+        // The first frame after a pause is drawn at once: the GPU wakes slowly,
+        // and drawn late such a frame missed its vsync.
+        let idle = vsync.saturating_sub(self.pacing.last_swap_ns) > period * 3 / 2;
+        if !self.pacing.late || (idle && self.state.needs_redraw) {
             self.draw_if_needed();
             return;
         }
@@ -149,6 +164,7 @@ impl Data {
             return;
         }
         self.state.needs_redraw = false;
+        let started = hybris_hwc::now_ns();
         let cost = self.screen.render(&self.state, self.pacing.target_ns);
         let (draw_ns, swap_ns) = (cost.draw_ns, cost.swap_ns);
         let took = draw_ns + swap_ns;
@@ -157,10 +173,17 @@ impl Data {
         if !cost.swapped {
             self.report.no_damage += 1;
         }
-        // A frame longer than two periods (the first, a stall) says nothing
-        // about the next one.
-        if took < 2 * self.screen.vsync_period_ns {
-            self.pacing.render_ns = self.pacing.render_ns * 0.9 + took as f64 * 0.1;
+        if cost.swapped {
+            self.pacing.last_swap_ns = hybris_hwc::now_ns();
+            // Only a frame that went to hwcomposer says what the next will
+            // take (one with nothing damaged costs nothing), and not one of
+            // more than two periods (the first, a stall). A slower frame
+            // raises the estimate at once, faster ones lower it slowly: a
+            // budget too short misses vsyncs.
+            if took < 2 * self.screen.vsync_period_ns {
+                let weight = if took as f64 > self.pacing.render_ns { 0.5 } else { 0.1 };
+                self.pacing.render_ns += (took as f64 - self.pacing.render_ns) * weight;
+            }
         }
         self.report.render_max_ms = self.report.render_max_ms.max(took as f64 / 1e6);
         self.report.draw_ms.push(draw_ns as f64 / 1e6);
@@ -178,6 +201,16 @@ impl Data {
             target
         } else {
             self.report.missed += 1;
+            self.pacing.drain = true;
+            // Each missed frame, with where its time went.
+            let d = hybris_hwc::last_present_detail();
+            let ms = |ns: u64| ns as f64 / 1e6;
+            tracing::info!(
+                "missed: drawn {:.1} ms before the vsync, draw {:.1} swap {:.1}, presented {:.1} ms late: {:.1} after the last present, validate {:.1}, present {:.1}, GPU {}; redrawn {:.0}%, shade {}",
+                target as f64 / 1e6 - started as f64 / 1e6, ms(draw_ns), ms(swap_ns), ms(presented - target),
+                ms(d.since_last_ns), ms(d.validate_ns), ms(d.present_ns), if d.gpu_pending { "busy" } else { "done" },
+                cost.damaged_px as f64 / self.screen.pixels as f64 * 100.0, self.state.shade.describe()
+            );
             target + self.screen.vsync_period_ns
         };
         if let Some(touched) = self.state.touch_answered.take() {
@@ -212,8 +245,8 @@ impl Data {
             format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
         };
         tracing::info!(
-            "drawn {:3} of {:3}  missed {:2}  commits {:3}  draw {} swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  errors {}",
-            r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits),
+            "drawn {:3} of {:3}  missed {:2} (skipped {})  commits {:3}  draw {} swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  errors {}",
+            r.drawn, v - r.vsyncs_at_last, r.missed, r.drained, std::mem::take(&mut self.state.commits),
             mean_max(&r.draw_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), st.fast, mean_max(&r.damaged_share),
             r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text,
             mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms), st.errors
@@ -335,6 +368,8 @@ fn main() {
     let mut data = Data { state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
+    // The shade's text goes to the GPU now, not at the first pull.
+    data.screen.warm_up(&data.state);
     // The first frame, which starts hwcomposer's vsyncs.
     data.draw_if_needed();
     event_loop

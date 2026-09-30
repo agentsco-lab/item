@@ -52,6 +52,7 @@ Settings interface.
 | 4b | the present, the buffer age, a tapping benchmark | presentOrValidate crashes; buffer age 3 not EGL's 2 (flicker gone); drawing late takes about 5 ms off, to about 39 ms touch to screen (`log/2026-09-30-step-4b-present.md`) |
 | 5 | the shade: a sheet per panel following the finger, a clock in seven segments | finger to screen 22-26 ms against about 39 ms through GTK; a 1 px line from logical rounding fixed (`log/2026-09-30-step-5-shade.md`) |
 | 5b | text on the shade: fontdue into a texture, remade only when the text changes | sharp, the right way up, as smooth; two seconds of missed frames to look into (`log/2026-09-30-step-5b-text.md`) |
+| 5c | a shade benchmark (a virtual finger), each missed frame logged | chains of missed frames behind hwcomposer's blocking present: now a vsync skipped after a miss, the first frame after a pause drawn at once, the budget from swapped frames only; the run leaves at the finger's speed (`log/2026-09-30-step-5c-shade-bench.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -120,6 +121,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 - `tools/probe-run.sh` - a probe on the phone with the shell stopped
 - `tools/fetch-sysroot.sh` - the phone's libraries a cross build links against
   (into `sysroot/`, not tracked)
-- `tools/bench.sh`, `tools/tap.py` - a benchmark tapping GNOME Calculator
-  through a virtual touchscreen, with no one at the phone
+- `tools/bench.sh`, `tools/tap.py`, `tools/swipe.py` - benchmarks through a
+  virtual touchscreen, with no one at the phone: tapping GNOME Calculator,
+  or pulling the shades (`DRIVER=swipe`)
 - `log/` - what each step found, with the raw output

@@ -26,6 +26,7 @@ extern "C" {
     fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
     fn dlerror() -> *const c_char;
     fn close(fd: c_int) -> c_int;
+    fn poll(fds: *mut PollFd, n: u64, timeout: c_int) -> c_int;
     fn clock_gettime(clock: c_int, ts: *mut Timespec) -> c_int;
 }
 
@@ -190,6 +191,39 @@ pub fn last_present_ns() -> u64 {
     LAST_PRESENT_NS.load(Ordering::Relaxed)
 }
 
+#[repr(C)]
+struct PollFd {
+    fd: c_int,
+    events: i16,
+    revents: i16,
+}
+
+/// Whether a sync fence has not signalled yet.
+fn fence_pending(fd: c_int) -> bool {
+    if fd < 0 {
+        return false;
+    }
+    let mut p = PollFd { fd, events: 1, revents: 0 };
+    unsafe { poll(&mut p, 1, 0) == 0 }
+}
+
+/// Where the last present callback's time went.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct PresentDetail {
+    /// Since the present before it.
+    pub since_last_ns: u64,
+    pub validate_ns: u64,
+    pub present_ns: u64,
+    /// The GPU had not finished the frame when it was handed over.
+    pub gpu_pending: bool,
+}
+
+static DETAIL: Mutex<PresentDetail> = Mutex::new(PresentDetail { since_last_ns: 0, validate_ns: 0, present_ns: 0, gpu_pending: false });
+
+pub fn last_present_detail() -> PresentDetail {
+    *DETAIL.lock().unwrap()
+}
+
 static LAST_PRESENT_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_PRESENT_TOOK_NS: AtomicU64 = AtomicU64::new(0);
 
@@ -225,6 +259,7 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
 
     let t_start = now_ns();
     let acquire = (w.get_fence)(buffer);
+    let mut detail = PresentDetail { gpu_pending: fence_pending(acquire), ..Default::default() };
     (h.set_client_target)(p.display, 0, buffer, acquire, HAL_DATASPACE_UNKNOWN);
 
     // presentOrValidate presents at once when nothing in the layers changed
@@ -242,7 +277,9 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
         p.stats.fast += 1;
     } else {
         if !PRESENT_OR_VALIDATE.load(Ordering::Relaxed) {
+            let t = now_ns();
             let err = (h.validate)(p.display, &mut types, &mut requests);
+            detail.validate_ns = now_ns() - t;
             if err != HWC2_ERROR_NONE && err != HWC2_ERROR_HAS_CHANGES {
                 p.stats.errors += 1;
                 return;
@@ -252,9 +289,11 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
             (h.accept_changes)(p.display);
         }
         present_fence = -1;
+        let t = now_ns();
         if (h.present)(p.display, &mut present_fence) != HWC2_ERROR_NONE {
             p.stats.errors += 1;
         }
+        detail.present_ns = now_ns() - t;
     }
 
     let mut fences: *mut Fences = null_mut();
@@ -286,6 +325,8 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
     let now = now_ns();
     LAST_PRESENT_NS.store(now, Ordering::Relaxed);
     LAST_PRESENT_TOOK_NS.store(now - t_start, Ordering::Relaxed);
+    detail.since_last_ns = if p.last_ns != 0 { now - p.last_ns } else { 0 };
+    *DETAIL.lock().unwrap() = detail;
     if p.last_ns != 0 {
         let ms = (now - p.last_ns) as f64 / 1e6;
         p.stats.frames += 1;

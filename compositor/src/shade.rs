@@ -29,8 +29,9 @@ render_elements! {
 
 /// Touches starting this close to a panel's top pull its sheet (logical px).
 const EDGE: f64 = 20.0;
-/// How long the sheet takes to run open or closed.
-const RUN_NS: u64 = 250_000_000;
+/// How long the sheet may take to run open or closed, ms.
+const RUN_MIN_MS: f64 = 150.0;
+const RUN_MAX_MS: f64 = 350.0;
 /// A release faster than this (logical px per ms) decides by its direction.
 const FLING: f64 = 0.3;
 /// A touch that moves less than this is a tap.
@@ -59,10 +60,41 @@ struct Grab {
 }
 
 /// The sheet running open or closed after a release.
+///
+/// It leaves at the finger's speed and slows to a stop: a cubic from `from`
+/// to `to` with the release's velocity at the start and none at the end. From
+/// a finger held still it starts from rest, not at full speed.
 struct Run {
     from: f64,
     to: f64,
     start_ns: u64,
+    duration_ns: u64,
+    /// The start's velocity times the duration, logical px.
+    v0t: f64,
+}
+
+impl Run {
+    fn new(from: f64, to: f64, velocity: f64) -> Run {
+        let dist = to - from;
+        // Only a velocity towards `to` carries on.
+        let v = if velocity * dist > 0.0 { velocity.abs() } else { 0.0 };
+        // At most twice the distance over the duration: beyond that the
+        // cubic would overshoot `to`. Fast releases run shorter.
+        let ms = if v > 0.0 { (2.0 * dist.abs() / v).clamp(RUN_MIN_MS, RUN_MAX_MS) } else { RUN_MAX_MS };
+        let v0t = (v * ms).min(2.0 * dist.abs()) * dist.signum();
+        Run { from, to, start_ns: hybris_hwc::now_ns(), duration_ns: (ms * 1e6) as u64, v0t }
+    }
+
+    fn at(&self, frame_ns: u64) -> f64 {
+        let s = (frame_ns.saturating_sub(self.start_ns) as f64 / self.duration_ns as f64).clamp(0.0, 1.0);
+        // Hermite: from, to, the start's velocity, none at the end.
+        let (s2, s3) = (s * s, s * s * s);
+        (2.0 * s3 - 3.0 * s2 + 1.0) * self.from + (s3 - 2.0 * s2 + s) * self.v0t + (-2.0 * s3 + 3.0 * s2) * self.to
+    }
+
+    fn done(&self, frame_ns: u64) -> bool {
+        frame_ns >= self.start_ns + self.duration_ns
+    }
 }
 
 struct Sheet {
@@ -78,11 +110,7 @@ struct Sheet {
 impl Sheet {
     fn height_at(&self, frame_ns: u64) -> f64 {
         match &self.run {
-            Some(run) => {
-                let p = (frame_ns.saturating_sub(run.start_ns) as f64 / RUN_NS as f64).clamp(0.0, 1.0);
-                let eased = 1.0 - (1.0 - p).powi(3);
-                run.from + (run.to - run.from) * eased
-            }
+            Some(run) => run.at(frame_ns),
             None => self.height,
         }
     }
@@ -198,7 +226,7 @@ impl Shade {
             };
             let to = if open { full } else { 0.0 };
             tracing::debug!("shade {p}: released at {:.0}, {:.2} px/ms, to {to:.0}", sheet.height, grab.velocity);
-            sheet.run = Some(Run { from: sheet.height, to, start_ns: hybris_hwc::now_ns() });
+            sheet.run = Some(Run::new(sheet.height, to, grab.velocity));
             sheet.height = to;
         }
     }
@@ -216,7 +244,7 @@ impl Shade {
         let mut running = false;
         for sheet in &mut self.sheets {
             if let Some(run) = &sheet.run {
-                if frame_ns >= run.start_ns + RUN_NS {
+                if run.done(frame_ns) {
                     sheet.run = None;
                 } else {
                     running = true;
@@ -229,6 +257,27 @@ impl Shade {
     /// The finger's move a frame has now shown, if there was one.
     pub fn take_moved(&mut self) -> Option<(u64, u64)> {
         self.moved.take()
+    }
+
+    /// Uploads the labels' textures; returns how many.
+    pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
+        [&self.time, &self.date, &self.battery]
+            .iter()
+            .filter(|l| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), &l.buffer, None, None, None, Kind::Unspecified).is_ok())
+            .count()
+    }
+
+    /// The sheets' state, for the log.
+    pub fn describe(&self) -> String {
+        let now = hybris_hwc::now_ns();
+        self.sheets
+            .iter()
+            .map(|s| {
+                let what = if s.grab.is_some() { "held" } else if s.run.is_some() { "running" } else { "still" };
+                format!("{:.0} {what}", s.height_at(now))
+            })
+            .collect::<Vec<_>>()
+            .join(" / ")
     }
 
     /// What the sheets draw for a frame shown at `frame_ns`, topmost first.
