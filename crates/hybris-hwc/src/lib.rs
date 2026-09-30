@@ -189,6 +189,13 @@ pub fn last_present_ns() -> u64 {
 }
 
 static LAST_PRESENT_NS: AtomicU64 = AtomicU64::new(0);
+static LAST_PRESENT_TOOK_NS: AtomicU64 = AtomicU64::new(0);
+
+/// How long the last present callback took: validate, set the client target,
+/// present, and the fences (ns).
+pub fn last_present_took_ns() -> u64 {
+    LAST_PRESENT_TOOK_NS.load(Ordering::Relaxed)
+}
 
 extern "C" fn on_hotplug(_: *mut Listener, _: i32, display: u64, connected: bool, primary: bool) {
     println!("hotplug: display {display} {} {}",
@@ -209,6 +216,7 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
     let p = guard.as_mut().expect("presenter");
     let (h, w) = (p.hwc, p.win);
 
+    let t_start = now_ns();
     let mut types = 0u32;
     let mut requests = 0u32;
     let err = (h.validate)(p.display, &mut types, &mut requests);
@@ -256,6 +264,7 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
 
     let now = now_ns();
     LAST_PRESENT_NS.store(now, Ordering::Relaxed);
+    LAST_PRESENT_TOOK_NS.store(now - t_start, Ordering::Relaxed);
     if p.last_ns != 0 {
         let ms = (now - p.last_ns) as f64 / 1e6;
         p.stats.frames += 1;

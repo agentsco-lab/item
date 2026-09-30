@@ -75,8 +75,10 @@ impl Screen {
         Screen { output, vsync_period_ns, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
     }
 
-    /// Draws the space and hands the frame to hwcomposer.
-    pub fn render(&mut self, state: &State) {
+    /// Draws the space and hands the frame to hwcomposer. Returns how long
+    /// the drawing and the swap took (ns).
+    pub fn render(&mut self, state: &State) -> (u64, u64) {
+        let t0 = hybris_hwc::now_ns();
         let elements = space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
             .expect("render elements");
         {
@@ -85,7 +87,9 @@ impl Screen {
                 .render_output(&mut self.renderer, &mut target, 0, &elements, [0.08, 0.1, 0.14, 1.0])
                 .expect("render_output");
         }
+        let t1 = hybris_hwc::now_ns();
         self.surface.swap_buffers(None).expect("swap_buffers");
+        (t1 - t0, hybris_hwc::now_ns() - t1)
     }
 
     /// Frame callbacks to every window, after a frame went out, with the time

@@ -1,0 +1,55 @@
+hotplug: display 0 connected primary
+2026-09-30T13:03:21.176720Z  INFO item_compositor::output: hwcomposer display 0: 2784x1800, vsync 16.667 ms
+2026-09-30T13:03:21.204734Z  WARN smithay::backend::egl::ffi: [EGL] 0x3000 (SUCCESS) eglDebugMessageControlKHR: eglDebugMessageControlKHR is not supported by vendor library. Error reporting may not work correctly.
+2026-09-30T13:03:21.225324Z  WARN smithay::backend::egl::display: Dmabuf import extension not available
+2026-09-30T13:03:21.393893Z  INFO item_compositor::output: EGL bound to the Wayland display
+2026-09-30T13:03:21.396659Z  INFO item_compositor::input: touch: sfduo touchscreen (/dev/input/event6)
+2026-09-30T13:03:21.400067Z  INFO item_compositor: listening on "wayland-item"
+2026-09-30T13:03:21.401817Z  INFO item_compositor: spawned: gnome-calculator
+2026-09-30T13:03:21.403351Z  INFO item_compositor: spawned: GSK_RENDERER=cairo gnome-clocks
+2026-09-30T13:03:21.403372Z  INFO item_compositor: pacing: at the vsync, margin 4.0 ms
+2026-09-30T13:03:22.396795Z  INFO item_compositor: drawn   1 of  26  missed  1  commits   0  draw 5.3/5.3 swap 566.3/566.3 (present 566.3/566.3) ms  budget  7.0  touches 0  touch->screen -  errors 0
+
+(gnome-calculator:95012): Gdk-WARNING **: 16:03:22.454: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/95012/root
+
+(org.gnome.clocks:95013): Gdk-WARNING **: 16:03:22.455: Failed to read portal settings: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/95013/root
+
+** (org.gnome.clocks:95013): WARNING **: 16:03:22.712: utils.vala:147: Failed to get clock format from portal, fallback to GSettings.
+
+(org.gnome.clocks:95013): Gtk-WARNING **: 16:03:22.776: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/95013/root
+2026-09-30T13:03:22.776525Z  INFO item_compositor::state: window mapped on the left panel, 1.4 s after start
+2026-09-30T13:03:22.987648Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+
+(gnome-calculator:95012): Gtk-WARNING **: 16:03:23.011: Creating a portal monitor failed: GDBus.Error:org.freedesktop.DBus.Error.AccessDenied: Portal operation not allowed: Unable to open /proc/95012/root
+2026-09-30T13:03:23.012171Z  INFO item_compositor::state: window mapped on the right panel, 1.6 s after start
+2026-09-30T13:03:23.397077Z  INFO item_compositor: drawn   3 of  60  missed  1  commits   3  draw 5.6/14.6 swap 3.2/4.1 (present 3.1/4.0) ms  budget  9.7  touches 0  touch->screen -  errors 0
+2026-09-30T13:03:24.011034Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Egl)
+2026-09-30T13:03:24.397485Z  INFO item_compositor: drawn   2 of  60  missed  0  commits   2  draw 5.1/6.2 swap 4.5/4.6 (present 4.3/4.4) ms  budget 11.4  touches 0  touch->screen -  errors 0
+2026-09-30T13:03:25.398865Z  INFO item_compositor: drawn  17 of  60  missed  0  commits  17  draw 3.5/5.3 swap 2.9/3.6 (present 2.8/3.5) ms  budget 13.1  touches 5  touch->screen 4 mean 58.0 max 78.7 ms  errors 0
+2026-09-30T13:03:26.400286Z  INFO item_compositor: drawn  29 of  60  missed  0  commits  29  draw 3.3/4.2 swap 3.0/3.9 (present 2.8/3.7) ms  budget 13.6  touches 11  touch->screen 6 mean 48.2 max 67.4 ms  errors 0
+2026-09-30T13:03:27.400614Z  INFO item_compositor: drawn  24 of  60  missed  0  commits  24  draw 3.3/6.6 swap 3.4/9.8 (present 3.2/9.6) ms  budget 14.1  touches 14  touch->screen 3 mean 54.9 max 64.0 ms  errors 0
+2026-09-30T13:03:28.400979Z  INFO item_compositor: drawn  33 of  60  missed  0  commits  34  draw 3.1/5.2 swap 3.1/5.2 (present 2.9/4.9) ms  budget 11.9  touches 18  touch->screen 3 mean 32.4 max 35.9 ms  errors 0
+2026-09-30T13:03:29.401178Z  INFO item_compositor: drawn  33 of  60  missed  0  commits  33  draw 3.3/9.4 swap 2.9/6.6 (present 2.8/6.4) ms  budget 12.9  touches 24  touch->screen 7 mean 47.2 max 68.2 ms  errors 0
+2026-09-30T13:03:30.401472Z  INFO item_compositor: drawn  26 of  60  missed  0  commits  26  draw 3.2/5.6 swap 3.0/4.3 (present 2.8/4.1) ms  budget 12.9  touches 29  touch->screen 4 mean 114.1 max 309.3 ms  errors 0
+2026-09-30T13:03:31.401746Z  INFO item_compositor: drawn  31 of  60  missed  0  commits  30  draw 2.9/9.5 swap 2.8/4.7 (present 2.6/4.5) ms  budget 12.7  touches 33  touch->screen 4 mean 75.8 max 199.0 ms  errors 0
+2026-09-30T13:03:32.403209Z  INFO item_compositor: drawn  22 of  60  missed  0  commits  22  draw 3.2/5.3 swap 3.1/5.8 (present 3.0/5.6) ms  budget 13.0  touches 37  touch->screen 4 mean 39.7 max 65.0 ms  errors 0
+2026-09-30T13:03:33.403780Z  INFO item_compositor: drawn  28 of  60  missed  0  commits  28  draw 3.4/4.4 swap 2.9/4.2 (present 2.7/4.0) ms  budget 13.6  touches 42  touch->screen 5 mean 51.2 max 78.0 ms  errors 0
+2026-09-30T13:03:34.404027Z  INFO item_compositor: drawn  31 of  60  missed  0  commits  32  draw 2.8/4.6 swap 2.8/4.7 (present 2.6/4.5) ms  budget 12.5  touches 43  touch->screen 1 mean 34.9 max 34.9 ms  errors 0
+2026-09-30T13:03:35.404312Z  INFO item_compositor: drawn   6 of  60  missed  1  commits   5  draw 3.3/8.1 swap 3.7/8.0 (present 3.5/7.7) ms  budget 13.2  touches 51  touch->screen 1 mean 23.0 max 23.0 ms  errors 0
+libinput error: libevdev: BUG: Device "sfduo touchscreen" received a double tracking ID 280 in slot 0.
+2026-09-30T13:03:36.404635Z  INFO item_compositor: drawn   0 of  60  missed  0  commits   0  draw - swap - (present -) ms  budget 13.2  touches 54  touch->screen -  errors 0
+2026-09-30T13:03:37.156318Z  INFO item_compositor::state: surface ObjectId(wl_surface@16): buffer Some(Shm)
+2026-09-30T13:03:37.413756Z  INFO item_compositor: drawn   7 of  61  missed  1  commits   7  draw 9.7/12.3 swap 2.6/4.4 (present 2.5/4.1) ms  budget 18.4  touches 55  touch->screen 1 mean 69.8 max 69.8 ms  errors 0
+2026-09-30T13:03:38.414098Z  INFO item_compositor: drawn   1 of  60  missed  1  commits   1  draw 13.0/13.0 swap 4.2/4.2 (present 4.0/4.0) ms  budget 19.6  touches 55  touch->screen -  errors 0
+2026-09-30T13:03:39.425753Z  INFO item_compositor: drawn   8 of  60  missed  1  commits   8  draw 10.1/14.4 swap 2.9/5.1 (present 2.8/4.8) ms  budget 21.9  touches 56  touch->screen 1 mean 51.3 max 51.3 ms  errors 0
+2026-09-30T13:03:40.428755Z  INFO item_compositor: drawn   7 of  60  missed  1  commits   7  draw 10.9/13.1 swap 2.9/3.7 (present 2.8/3.5) ms  budget 23.5  touches 57  touch->screen 1 mean 43.6 max 43.6 ms  errors 0
+2026-09-30T13:03:41.428988Z  INFO item_compositor: drawn  15 of  60  missed  3  commits  16  draw 11.5/13.1 swap 3.5/4.4 (present 3.2/4.0) ms  budget 25.4  touches 58  touch->screen 1 mean 24.4 max 24.4 ms  errors 0
+2026-09-30T13:03:42.429218Z  INFO item_compositor: drawn  27 of  60  missed  4  commits  26  draw 10.6/13.2 swap 2.9/5.1 (present 2.8/5.0) ms  budget 24.6  touches 63  touch->screen 5 mean 36.8 max 52.0 ms  errors 0
+2026-09-30T13:03:43.429472Z  INFO item_compositor: drawn  27 of  60  missed  3  commits  28  draw 10.1/14.5 swap 2.8/4.9 (present 2.6/4.4) ms  budget 23.3  touches 68  touch->screen 5 mean 41.4 max 78.3 ms  errors 0
+2026-09-30T13:03:44.429708Z  INFO item_compositor: drawn  25 of  60  missed  1  commits  24  draw 10.6/12.8 swap 2.6/4.0 (present 2.5/3.8) ms  budget 23.5  touches 74  touch->screen 6 mean 45.5 max 53.2 ms  errors 0
+2026-09-30T13:03:45.430870Z  INFO item_compositor: drawn  28 of  61  missed  1  commits  28  draw 10.4/12.7 swap 2.7/4.2 (present 2.5/4.1) ms  budget 23.3  touches 78  touch->screen 4 mean 41.9 max 77.5 ms  errors 0
+2026-09-30T13:03:46.431120Z  INFO item_compositor: drawn  19 of  60  missed  2  commits  19  draw 10.3/13.8 swap 2.7/5.7 (present 2.5/5.5) ms  budget 24.3  touches 80  touch->screen 2 mean 36.4 max 51.8 ms  errors 0
+2026-09-30T13:03:47.431379Z  INFO item_compositor: drawn  14 of  60  missed  2  commits  14  draw 11.1/14.0 swap 3.0/3.9 (present 2.9/3.7) ms  budget 24.9  touches 82  touch->screen 2 mean 52.0 max 54.3 ms  errors 0
+2026-09-30T13:03:48.431621Z  INFO item_compositor: drawn  18 of  60  missed  1  commits  18  draw 10.2/12.3 swap 3.2/4.5 (present 3.0/4.3) ms  budget 24.0  touches 83  touch->screen 1 mean 91.5 max 91.5 ms  errors 0
+2026-09-30T13:03:49.431819Z  INFO item_compositor: drawn  12 of  60  missed  0  commits  12  draw 11.0/13.0 swap 2.8/3.8 (present 2.6/3.5) ms  budget 24.4  touches 86  touch->screen 3 mean 46.0 max 65.3 ms  errors 0
+2026-09-30T13:03:50.431973Z  INFO item_compositor: drawn  15 of  60  missed  1  commits  15  draw 9.8/12.3 swap 2.8/5.4 (present 2.7/5.2) ms  budget 23.2  touches 92  touch->screen 6 mean 58.5 max 89.5 ms  errors 0

@@ -26,7 +26,7 @@ use hybris_hwc::{now_ns, take_stats, vsyncs};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::ping::make_ping;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::reexports::calloop::{EventLoop, Interest, Mode as CalloopMode, PostAction};
+use smithay::reexports::calloop::{EventLoop, Interest, LoopHandle, Mode as CalloopMode, PostAction};
 use smithay::reexports::wayland_server::Display;
 use smithay::wayland::socket::ListeningSocketSource;
 
@@ -39,30 +39,94 @@ pub struct Data {
     pub screen: Screen,
     started: Instant,
     report: Report,
+    handle: LoopHandle<'static, Data>,
+    pacing: Pacing,
+}
+
+/// When in the frame to draw.
+///
+/// A frame drawn right at a vsync shows at the next one, and anything a client
+/// commits after that vsync waits a whole frame more. Drawn late - at the next
+/// vsync less what a frame takes and a margin for hwcomposer's present - it
+/// takes in whatever came during the frame. Too late, and it misses the vsync
+/// and shows a frame later: a stutter. `LATE_MARGIN_MS` sets the margin
+/// (default 4), `LATE=0` draws at the vsync as before.
+struct Pacing {
+    late: bool,
+    margin_ns: u64,
+    /// A running average of the time a frame takes to render and hand over.
+    render_ns: f64,
+    /// The vsync the frame being drawn aims for.
+    target_ns: u64,
+}
+
+impl Pacing {
+    fn from_env() -> Pacing {
+        let late = std::env::var("LATE").map(|v| v != "0").unwrap_or(true);
+        let margin_ms: f64 = std::env::var("LATE_MARGIN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
+        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, target_ns: 0 }
+    }
+
+    fn budget_ns(&self) -> u64 {
+        (self.render_ns * 1.5) as u64 + self.margin_ns
+    }
 }
 
 /// What is logged once a second.
 #[derive(Default)]
 struct Report {
     drawn: u32,
+    missed: u32,
     vsync_ticks: u32,
     vsyncs_at_last: u64,
+    render_max_ms: f64,
+    draw_ms: Vec<f64>,
+    swap_ms: Vec<f64>,
+    present_ms: Vec<f64>,
     touch_to_screen_ms: Vec<f64>,
 }
 
+/// "mean/max" of a second's samples.
+fn mean_max(v: &[f64]) -> String {
+    if v.is_empty() {
+        return "-".into();
+    }
+    let mean = v.iter().sum::<f64>() / v.len() as f64;
+    format!("{:.1}/{:.1}", mean, v.iter().cloned().fold(0.0, f64::max))
+}
+
 impl Data {
-    /// At each vsync: draw a frame if something changed since the last one.
+    /// At each vsync: aim the next frame at the next vsync, and draw it now
+    /// or late in the frame.
     fn on_vsync(&mut self) {
         self.report.vsync_ticks += 1;
-        self.draw_if_needed();
+        let vsync = hybris_hwc::last_vsync_ns();
+        let period = self.screen.vsync_period_ns;
+        self.pacing.target_ns = vsync + period;
+        if !self.pacing.late {
+            self.draw_if_needed();
+            return;
+        }
+        let draw_at = self.pacing.target_ns.saturating_sub(self.pacing.budget_ns());
+        let now = hybris_hwc::now_ns();
+        if draw_at <= now {
+            self.draw_if_needed();
+            return;
+        }
+        let delay = std::time::Duration::from_nanos(draw_at - now);
+        let _ = self.handle.insert_source(Timer::from_duration(delay), |_, _, data: &mut Data| {
+            data.draw_if_needed();
+            TimeoutAction::Drop
+        });
     }
 
     /// hwcomposer sends no vsync before the first frame it is given, and may
     /// stop between frames: if something changed and no vsync came for 50 ms,
     /// draw anyway.
     fn on_watchdog(&mut self) {
-        let since_vsync = hybris_hwc::now_ns().saturating_sub(hybris_hwc::last_vsync_ns());
-        if since_vsync > 50_000_000 {
+        let now = hybris_hwc::now_ns();
+        if now.saturating_sub(hybris_hwc::last_vsync_ns()) > 50_000_000 {
+            self.pacing.target_ns = now + self.screen.vsync_period_ns;
             self.draw_if_needed();
         }
     }
@@ -72,12 +136,29 @@ impl Data {
             return;
         }
         self.state.needs_redraw = false;
-        self.screen.render(&self.state);
+        let (draw_ns, swap_ns) = self.screen.render(&self.state);
+        let took = draw_ns + swap_ns;
+        // A frame longer than two periods (the first, a stall) says nothing
+        // about the next one.
+        if took < 2 * self.screen.vsync_period_ns {
+            self.pacing.render_ns = self.pacing.render_ns * 0.9 + took as f64 * 0.1;
+        }
+        self.report.render_max_ms = self.report.render_max_ms.max(took as f64 / 1e6);
+        self.report.draw_ms.push(draw_ns as f64 / 1e6);
+        self.report.swap_ms.push(swap_ns as f64 / 1e6);
+        self.report.present_ms.push(hybris_hwc::last_present_took_ns() as f64 / 1e6);
         self.report.drawn += 1;
 
-        // The frame goes up at the next vsync: that is the time clients get
-        // with their frame callbacks, and the end of a touch's round trip.
-        let shown_at = hybris_hwc::last_vsync_ns() + self.screen.vsync_period_ns;
+        // The frame shows at the vsync it aimed for, or one later if its
+        // present came after that vsync.
+        let target = self.pacing.target_ns;
+        let presented = hybris_hwc::last_present_ns();
+        let shown_at = if presented <= target {
+            target
+        } else {
+            self.report.missed += 1;
+            target + self.screen.vsync_period_ns
+        };
         if let Some(touched) = self.state.touch_answered.take() {
             self.report.touch_to_screen_ms.push(shown_at.saturating_sub(touched) as f64 / 1e6);
         }
@@ -99,9 +180,10 @@ impl Data {
             format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
         };
         tracing::info!(
-            "drawn {:3} of {:3} vsyncs  commits {:3}  presents {:3}  max between {:6.2} ms  windows {}  touches {}  touch->screen {}  errors {}",
-            r.drawn, v - r.vsyncs_at_last, std::mem::take(&mut self.state.commits), st.frames, st.max_ms,
-            self.state.space.elements().count(), self.state.touches, lat_text, st.errors
+            "drawn {:3} of {:3}  missed {:2}  commits {:3}  draw {} swap {} (present {}) ms  budget {:4.1}  touches {}  touch->screen {}  errors {}",
+            r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits),
+            mean_max(&r.draw_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms),
+            self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text, st.errors
         );
         self.report.vsyncs_at_last = v;
     }
@@ -208,7 +290,13 @@ fn main() {
         }
     }
 
-    let mut data = Data { state, screen, started: Instant::now(), report: Report::default() };
+    let pacing = Pacing::from_env();
+    tracing::info!(
+        "pacing: {}, margin {:.1} ms",
+        if pacing.late { "late in the frame" } else { "at the vsync" },
+        pacing.margin_ns as f64 / 1e6
+    );
+    let mut data = Data { state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The first frame, which starts hwcomposer's vsyncs.

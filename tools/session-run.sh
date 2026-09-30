@@ -64,6 +64,7 @@ log "composer up: $(composers)"
 session_env
 
 chmod 755 /tmp/item-compositor
+rm -f /tmp/item-compositor.log   # systemd writes a file: output from its start, not truncating
 systemd-run --wait --collect --unit=item-compositor \
     -p User=$USER_NAME -p PAMName=phosh -p TTYPath=/dev/tty7 -p StandardInput=tty-fail \
     -p StandardOutput=file:/tmp/item-compositor.log -p StandardError=file:/tmp/item-compositor.log \
@@ -74,5 +75,6 @@ systemd-run --wait --collect --unit=item-compositor \
     -p Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID_N/bus \
     -p Environment=XDG_SESSION_TYPE=wayland -p Environment=XDG_CURRENT_DESKTOP=item \
     ${CLIENT_ENV:+-p "Environment=CLIENT_ENV=$CLIENT_ENV"} \
+    ${LATE:+-p "Environment=LATE=$LATE"} ${LATE_MARGIN_MS:+-p "Environment=LATE_MARGIN_MS=$LATE_MARGIN_MS"} \
     /tmp/item-compositor "$@"
 log "session ended"
