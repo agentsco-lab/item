@@ -32,7 +32,7 @@ item, which keep running the phone day to day.
 | the session | the user's, on tty7 as phosh runs; our desktop name, a gtk portals configuration | GTK apps map in under 2 s |
 | frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, drawn late in the frame; only the damage redrawn | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
-What it does not do yet: cheap frames (damage, buffer age, present off the loop), `wp_presentation`, the shell (shades, dock, gestures), the
+What it does not do yet: cheaper shm frames, `wp_presentation`, the shell (shades, dock, gestures), the
 on-screen keyboard, the pen, blanking and the power key, the portals'
 Settings interface.
 
