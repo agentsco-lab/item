@@ -80,6 +80,15 @@ impl State {
         match event {
             InputEvent::TouchDown { event } => {
                 let pos = event.position_transformed(LAYOUT.into());
+                // A tap on a notification's banner: its action.
+                if let Some((rect, id)) = self.shade.quick.banner_at.get() {
+                    if rect.contains(pos) {
+                        self.notes.invoke(id);
+                        self.shade.quick.banner_at.set(None);
+                        self.needs_redraw = true;
+                        return;
+                    }
+                }
                 // A touch at a panel's top edge, or on its shade, is the shade's.
                 if self.shade.down(event.slot(), pos.x, pos.y, event.time()) {
                     self.needs_redraw = true;

@@ -24,6 +24,7 @@ mod gesture;
 mod grid;
 mod input;
 mod layout;
+mod notify;
 mod output;
 mod quick;
 mod shade;
@@ -343,6 +344,13 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
+        // A notification's banner slides in and out.
+        if let Some(n) = self.state.notes.banner(now) {
+            let age = now.saturating_sub(n.at_ns);
+            if age < 300_000_000 || age + 300_000_000 > crate::notify::BANNER_NS {
+                self.state.needs_redraw = true;
+            }
+        }
         if self.state.grid.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
@@ -473,6 +481,10 @@ fn main() {
                 data.state.needs_redraw = true;
             }
             if data.state.clock.refresh() {
+                data.state.needs_redraw = true;
+            }
+            // A banner up, or just gone: a frame, so it goes.
+            if data.state.notes.banner(hybris_hwc::now_ns()).is_some() || data.state.shade.quick.banner_at.get().is_some() {
                 data.state.needs_redraw = true;
             }
             if let Some(s) = data.state.stop_after {

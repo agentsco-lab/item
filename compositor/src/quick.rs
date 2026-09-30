@@ -104,8 +104,10 @@ pub enum Control {
     Brightness,
     Volume,
     Tile(Tile),
-    /// The close button of the open windows' row `i`.
+    /// The close button of the right shade's row `i`.
     Close(usize),
+    /// The rest of row `i`: a notification's action.
+    Row(usize),
 }
 
 /// A row of the right shade: an open window.
@@ -113,6 +115,8 @@ pub struct Row {
     pub app_id: String,
     pub name: String,
     pub icon: Option<String>,
+    /// A notification's line of body.
+    pub detail: Option<String>,
 }
 
 // The layout, logical px from the panel's left and from the sheet's bottom
@@ -127,7 +131,7 @@ const TILES_Y: f64 = -372.0;
 const ICON: i32 = 24;
 const ROWS_Y: f64 = -520.0;
 const ROW_H: f64 = 64.0;
-const MAX_ROWS: usize = 6;
+const MAX_ROWS: usize = 7;
 
 pub struct Quick {
     pub sys: Arc<Mutex<Sys>>,
@@ -139,11 +143,14 @@ pub struct Quick {
     fill: MemoryRenderBuffer,
     knob: MemoryRenderBuffer,
     row_bg: MemoryRenderBuffer,
+    banner_bg: MemoryRenderBuffer,
     icons: HashMap<String, MemoryRenderBuffer>,
     labels: std::cell::RefCell<HashMap<String, Label>>,
     app_icons: std::cell::RefCell<HashMap<String, Option<MemoryRenderBuffer>>>,
     /// The windows' row caption when there are none.
     empty: String,
+    /// The banner's card as last drawn, and its notification, for touches.
+    pub banner_at: std::cell::Cell<Option<(Rectangle<f64, Logical>, u32)>>,
 }
 
 impl Quick {
@@ -178,10 +185,12 @@ impl Quick {
             fill: crate::grid::rounded(track_w, 8.0, 4.0, [235, 235, 235, 235]),
             knob: crate::grid::rounded(24.0, 24.0, 12.0, [255, 255, 255, 255]),
             row_bg: crate::grid::rounded(panel_w - 2.0 * SIDE, ROW_H - 8.0, 14.0, [20, 20, 20, 20]),
+            banner_bg: crate::grid::rounded(panel_w - 32.0, 72.0, 18.0, [36, 40, 46, 245]),
             icons,
             labels: Default::default(),
             app_icons: Default::default(),
-            empty: "Нет открытых окон".into(),
+            empty: "Нет окон и уведомлений".into(),
+            banner_at: std::cell::Cell::new(None),
         }
     }
 
@@ -225,7 +234,14 @@ impl Quick {
             }
             (0..TILES.len()).find(|&i| Self::tile_rect(i).contains(local)).map(|i| Control::Tile(TILES[i]))
         } else {
-            (0..rows.min(MAX_ROWS)).find(|&i| Self::close_rect(i).contains(local)).map(Control::Close)
+            let n = rows.min(MAX_ROWS);
+            if let Some(i) = (0..n).find(|&i| Self::close_rect(i).contains(local)) {
+                return Some(Control::Close(i));
+            }
+            let panel_w = crate::layout::panels()[0].size.w as f64;
+            (0..n)
+                .find(|&i| Rectangle::<f64, Logical>::new((SIDE, ROWS_Y + i as f64 * ROW_H).into(), (panel_w - 2.0 * SIDE, ROW_H - 8.0).into()).contains(local))
+                .map(Control::Row)
         }
     }
 
@@ -264,7 +280,7 @@ impl Quick {
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.tile_on, &self.tile_off, &self.track, &self.fill, &self.knob, &self.row_bg]
+        [&self.tile_on, &self.tile_off, &self.track, &self.fill, &self.knob, &self.row_bg, &self.banner_bg]
             .into_iter()
             .chain(self.icons.values())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
@@ -345,8 +361,20 @@ impl Quick {
                     let c = Self::close_rect(i);
                     push(ic, c.loc.x + (c.size.w - ICON as f64) / 2.0, c.loc.y + (c.size.h - ICON as f64) / 2.0, None);
                 }
-                if let Some(l) = self.label(&row.name, 16.0, white) {
-                    push(&l, SIDE + 60.0, y + 16.0, None);
+                match &row.detail {
+                    Some(d) => {
+                        if let Some(l) = self.label(&row.name, 15.0, white) {
+                            push(&l, SIDE + 60.0, y + 6.0, None);
+                        }
+                        if let Some(l) = self.label(d, 13.0, [0.62, 0.65, 0.7, 1.0]) {
+                            push(&l, SIDE + 60.0, y + 30.0, None);
+                        }
+                    }
+                    None => {
+                        if let Some(l) = self.label(&row.name, 16.0, white) {
+                            push(&l, SIDE + 60.0, y + 16.0, None);
+                        }
+                    }
                 }
                 let icon = self
                     .app_icons
@@ -361,6 +389,49 @@ impl Quick {
             }
         }
         out
+    }
+}
+
+impl Quick {
+    /// The banner of a new notification at the top of the right panel,
+    /// `age` into its time, sliding in and out over 200 ms. The card's
+    /// rect (logical px) for touches, and what it draws.
+    pub fn banner(&self, renderer: &mut GlesRenderer, note: &crate::notify::Note, age_ns: u64) -> (Rectangle<f64, Logical>, Vec<ShellElement>) {
+        let panel = crate::layout::panels()[1];
+        let (w, h) = (panel.size.w as f64 - 32.0, 72.0);
+        let slide = 200e6;
+        let left_ns = crate::notify::BANNER_NS.saturating_sub(age_ns) as f64;
+        let k = (age_ns as f64 / slide).min(left_ns / slide).clamp(0.0, 1.0);
+        let e = 1.0 - (1.0 - k).powi(3);
+        let y = -h + (16.0 + h) * e;
+        let x = panel.loc.x as f64 + 16.0;
+        let rect = Rectangle::new((x, y).into(), (w, h).into());
+        let s = SCALE as f64;
+        let mut out = Vec::new();
+        let mut push = |b: &MemoryRenderBuffer, bx: f64, by: f64| {
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((bx * s).round(), (by * s).round()), b, None, None, None, Kind::Unspecified) {
+                out.push(ShellElement::Text(el));
+            }
+        };
+        let white = [0.95, 0.95, 0.95, 1.0];
+        if let Some(l) = self.label(&note.summary, 15.0, white) {
+            push(&l, x + 64.0, y + 12.0);
+        }
+        if let Some(l) = self.label(&note.body, 13.0, [0.62, 0.65, 0.7, 1.0]) {
+            push(&l, x + 64.0, y + 38.0);
+        }
+        let icon = self
+            .app_icons
+            .borrow_mut()
+            .entry(format!("note:{}", note.icon))
+            .or_insert_with(|| (!note.icon.is_empty()).then(|| crate::apps::icon(&note.icon, 36)).flatten())
+            .clone();
+        if let Some(ic) = icon {
+            push(&ic, x + 16.0, y + 18.0);
+        }
+        push(&self.banner_bg, x, y);
+        self.banner_at.set(Some((rect, note.id)));
+        (rect, out)
     }
 }
 

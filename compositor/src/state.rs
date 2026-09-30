@@ -69,6 +69,7 @@ pub struct State {
     /// Stop after this many seconds (for tests).
     pub stop_after: Option<u64>,
     pub shade: Shade,
+    pub notes: crate::notify::Notes,
     /// Every app's desktop entry, read once (apps.rs).
     pub entries: Vec<crate::apps::Entry>,
     /// A client committed a new buffer since the loop last looked.
@@ -117,7 +118,8 @@ impl State {
             touch_pending: None,
             touch_answered: None,
             stop_after: None,
-            shade: Shade::new(wake),
+            shade: Shade::new(wake.clone()),
+            notes: crate::notify::Notes::new(wake),
             entries: crate::apps::all(),
             client_frame: false,
             dock: Dock::new(),
@@ -178,8 +180,19 @@ impl State {
         taken
     }
 
-    /// The right shade's rows: the open windows, shown and put away, topmost
-    /// first.
+    /// The right shade's rows: the notifications, newest first, then the
+    /// open windows, shown and put away, topmost first.
+    pub fn shade_rows(&self) -> Vec<crate::quick::Row> {
+        let notes = self.notes.list().into_iter().map(|n| crate::quick::Row {
+            app_id: format!("note:{}", n.icon),
+            name: if n.summary.is_empty() { n.app.clone() } else { n.summary.clone() },
+            icon: (!n.icon.is_empty()).then_some(n.icon.clone()),
+            detail: Some(n.body.clone()),
+        });
+        notes.chain(self.window_rows().into_iter().map(|(_, r)| r)).collect()
+    }
+
+    /// The open windows, shown and put away, topmost first, as rows.
     pub fn window_rows(&self) -> Vec<(Window, crate::quick::Row)> {
         let entries = &self.entries;
         self.space
@@ -190,7 +203,7 @@ impl State {
                 let id = app_id(w);
                 let entry = entries.iter().find(|e| e.ids.contains(&id));
                 let name = entry.map(|e| e.name.clone()).unwrap_or_else(|| if id.is_empty() { "Окно".into() } else { id.clone() });
-                (w.clone(), crate::quick::Row { app_id: id, name, icon: entry.and_then(|e| e.icon.clone()) })
+                (w.clone(), crate::quick::Row { app_id: id, name, icon: entry.and_then(|e| e.icon.clone()), detail: None })
             })
             .collect()
     }
@@ -198,7 +211,17 @@ impl State {
     /// A tap on a shade: a window closed, Settings opened.
     pub fn shade_ask(&mut self, ask: crate::shade::ShadeAsk) {
         match ask {
+            crate::shade::ShadeAsk::Close(i) | crate::shade::ShadeAsk::Row(i) if i < self.notes.list().len() => {
+                let id = self.notes.list()[i].id;
+                if matches!(ask, crate::shade::ShadeAsk::Row(_)) {
+                    self.notes.invoke(id);
+                } else {
+                    self.notes.dismiss(id);
+                }
+            }
+            crate::shade::ShadeAsk::Row(_) => {}
             crate::shade::ShadeAsk::Close(i) => {
+                let i = i - self.notes.list().len();
                 if let Some((window, _)) = self.window_rows().into_iter().nth(i) {
                     tracing::info!("shade: closing {}", app_id(&window));
                     window.toplevel().unwrap().send_close();

@@ -129,8 +129,10 @@ struct Press {
 
 /// What a tap on a shade asks of the state.
 pub enum ShadeAsk {
-    /// Close the open window of the right shade's row `i`.
+    /// The close button of the right shade's row `i`.
     Close(usize),
+    /// A tap on row `i`.
+    Row(usize),
     /// Open Settings on this panel.
     Settings(usize),
 }
@@ -302,6 +304,7 @@ impl Shade {
                     None
                 }
                 Control::Close(i) => Some(ShadeAsk::Close(i)),
+                Control::Row(i) => Some(ShadeAsk::Row(i)),
                 _ => None,
             };
         }
