@@ -57,6 +57,9 @@ const DEFAULT: [&[&str]; 2] = [
 struct App {
     name: String,
     exec: String,
+    /// The names its windows may give as their app id: the desktop file's
+    /// name and its StartupWMClass.
+    ids: Vec<String>,
     icon: Option<MemoryRenderBuffer>,
     /// The icon at the launch curtain's size.
     large: Option<MemoryRenderBuffer>,
@@ -112,8 +115,10 @@ pub struct Dock {
 
 /// What a touch on the dock asks for.
 pub enum Tap {
-    /// Launch this command on this panel; the app's icon for the curtain.
-    Launch(String, usize, Option<MemoryRenderBuffer>),
+    /// Launch this command on this panel; the app's icon for the curtain,
+    /// and the app ids its windows may have (a window put away comes back
+    /// instead).
+    Launch(String, usize, Option<MemoryRenderBuffer>, Vec<String>),
 }
 
 impl Dock {
@@ -297,7 +302,8 @@ impl Dock {
                 if s == slot {
                     half.pressed = None;
                     let panel = layout::panel_at(at).unwrap_or(0);
-                    return Some(Tap::Launch(half.apps[i].exec.clone(), panel, half.apps[i].large.clone()));
+                    let app = &half.apps[i];
+                    return Some(Tap::Launch(app.exec.clone(), panel, app.large.clone(), app.ids.clone()));
                 }
             }
         }
@@ -438,7 +444,9 @@ fn app(desktop: &str) -> Option<App> {
     let name = key("Icon");
     let small = name.as_deref().and_then(|n| icon(n, ICON));
     let large = name.as_deref().and_then(|n| icon(n, crate::curtain::ICON));
-    Some(App { name: key("Name").unwrap_or_else(|| desktop.to_owned()), exec, icon: small, large })
+    let mut ids = vec![desktop.trim_end_matches(".desktop").to_owned()];
+    ids.extend(key("StartupWMClass"));
+    Some(App { name: key("Name").unwrap_or_else(|| desktop.to_owned()), exec, ids, icon: small, large })
 }
 
 /// An icon from the hicolor theme, `size` logical px at the output's scale.

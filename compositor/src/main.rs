@@ -17,6 +17,7 @@
 mod boost;
 mod curtain;
 mod dock;
+mod gesture;
 mod input;
 mod layout;
 mod output;
@@ -324,6 +325,15 @@ impl Data {
         if self.state.dock.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(hybris_hwc::now_ns());
+        }
+        let now = hybris_hwc::now_ns();
+        for done in self.state.gestures.settle(self.pacing.target_ns) {
+            let crate::gesture::Done::PutAway(window, panel) = done;
+            self.state.put_window_away(window, panel);
+        }
+        if self.state.gestures.moving() {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
         }
         if self.state.curtain.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;

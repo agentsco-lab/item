@@ -35,6 +35,7 @@ use crate::layout;
 use crate::boost::GpuBoost;
 use crate::curtain::Curtain;
 use crate::dock::Dock;
+use crate::gesture::Gestures;
 use crate::shade::Shade;
 
 pub struct State {
@@ -70,6 +71,9 @@ pub struct State {
     pub dock: Dock,
     pub boost: GpuBoost,
     pub curtain: Curtain,
+    pub gestures: Gestures,
+    /// Windows put away, and the panel each was on.
+    pub put_away: Vec<(Window, usize)>,
     /// The panel the next window goes to, asked for by a launch from the
     /// dock, and when (CLOCK_MONOTONIC ns).
     pub launch_to: Option<(usize, u64)>,
@@ -110,6 +114,8 @@ impl State {
             dock: Dock::new(),
             boost: GpuBoost::new(),
             curtain: Curtain::new(),
+            gestures: Gestures::default(),
+            put_away: Vec::new(),
             launch_to: None,
             socket_name: Default::default(),
         }
@@ -137,11 +143,12 @@ impl State {
         }
     }
 
-    /// Which panels a window has.
+    /// Which panels a window has. A window on its way away no longer has
+    /// its panel.
     pub fn panels_taken(&self) -> [bool; 2] {
         let panels = layout::panels();
         let mut taken = [false; 2];
-        for window in self.space.elements() {
+        for window in self.space.elements().filter(|w| !self.gestures.leaving(w)) {
             if let Some(loc) = self.space.element_location(window) {
                 if let Some(p) = panels.iter().position(|p| p.contains(loc)) {
                     taken[p] = true;
@@ -149,6 +156,50 @@ impl State {
             }
         }
         taken
+    }
+
+    /// The window on top on a panel.
+    pub fn top_window(&self, panel: usize) -> Option<Window> {
+        let rect = layout::panels()[panel];
+        self.space
+            .elements()
+            .rev()
+            .find(|w| self.space.element_location(w).is_some_and(|loc| rect.contains(loc)))
+            .cloned()
+    }
+
+    /// Takes a window out of the space into the windows put away.
+    pub fn put_window_away(&mut self, window: Window, panel: usize) {
+        tracing::info!("put away: {} from the {} panel", app_id(&window), if panel == 0 { "left" } else { "right" });
+        self.space.unmap_elem(&window);
+        self.put_away.push((window.clone(), panel));
+        // The keyboard goes to what is left on top.
+        let keyboard = self.seat.get_keyboard().unwrap();
+        if keyboard.current_focus().is_some_and(|f| &f == window.toplevel().unwrap().wl_surface()) {
+            let next = self.top_window(panel).or_else(|| self.top_window(1 - panel));
+            let surface = next.map(|w| w.toplevel().unwrap().wl_surface().clone());
+            keyboard.set_focus(self, surface, smithay::utils::SERIAL_COUNTER.next_serial());
+        }
+        self.needs_redraw = true;
+    }
+
+    /// A window put away of one of these apps, if there is one, back onto
+    /// `panel`. Returns whether one came back.
+    pub fn bring_back(&mut self, ids: &[String], panel: usize) -> bool {
+        let Some(i) = self.put_away.iter().position(|(w, _)| ids.iter().any(|id| id == &app_id(w))) else {
+            return false;
+        };
+        let (window, _) = self.put_away.remove(i);
+        let rect = layout::panels()[panel];
+        window.toplevel().unwrap().with_pending_state(|s| s.size = Some(rect.size));
+        window.toplevel().unwrap().send_pending_configure();
+        self.space.map_element(window.clone(), rect.loc, true);
+        self.gestures.bring_back(window.clone(), panel, hybris_hwc::now_ns());
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+        self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+        tracing::info!("brought back: {} onto the {} panel", app_id(&window), if panel == 0 { "left" } else { "right" });
+        self.needs_redraw = true;
+        true
     }
 
     /// The surface under a point of the layout, and where that surface starts.
@@ -169,6 +220,14 @@ pub struct ClientState {
 impl ClientData for ClientState {
     fn initialized(&self, _: ClientId) {}
     fn disconnected(&self, _: ClientId, _: DisconnectReason) {}
+}
+
+/// A window's app id, as its client set it ("" before it does).
+pub fn app_id(window: &Window) -> String {
+    with_states(window.toplevel().unwrap().wl_surface(), |states| {
+        states.data_map.get::<XdgToplevelSurfaceData>().and_then(|d| d.lock().unwrap().app_id.clone())
+    })
+    .unwrap_or_default()
 }
 
 impl CompositorHandler for State {
@@ -201,7 +260,8 @@ impl CompositorHandler for State {
         if let Some(kind) = kind {
             let id = format!("{:?}", surface.id());
             if self.buffer_kinds.insert(id.clone(), kind.clone()).as_ref() != Some(&kind) {
-                tracing::info!("surface {id}: buffer {kind}");
+                let app = self.space.elements().find(|w| w.toplevel().unwrap().wl_surface() == surface).map(app_id);
+                tracing::info!("surface {id}: buffer {kind}{}", app.map(|a| format!(", app id {a}")).unwrap_or_default());
             }
         }
 
@@ -272,7 +332,7 @@ impl XdgShellHandler for State {
             self.curtain.adopt(p, surface.wl_surface());
         }
         let window = Window::new_wayland_window(surface);
-        self.space.map_element(window, panel.loc, true);
+        self.space.map_element(window.clone(), panel.loc, true);
         self.needs_redraw = true;
         tracing::info!(
             "window mapped on the {} panel, {:.1} s after start",

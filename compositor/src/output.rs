@@ -16,8 +16,8 @@ use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::{Bind, ExportMem, ImportEgl};
-use smithay::desktop::space::{space_render_elements, SpaceRenderElements};
-use smithay::desktop::Window;
+use smithay::backend::renderer::element::utils::{Relocate, RelocateRenderElement, RescaleRenderElement};
+use smithay::backend::renderer::element::AsRenderElements;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::utils::Transform;
@@ -45,7 +45,9 @@ render_elements! {
     /// What a frame is drawn from: the shell's own rectangles over the windows.
     FrameElement<=GlesRenderer>;
     Shell=ShellElement,
-    Space=SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
+    Window=WaylandSurfaceRenderElement<GlesRenderer>,
+    /// A window being put away or brought back: smaller, moved, fading.
+    Moving=RelocateRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
 }
 
 /// The rows of the screen's bottom a run of frames keeps: the dock and above.
@@ -134,12 +136,32 @@ impl Screen {
         let mut elements: Vec<FrameElement> = state.shade.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
         elements.extend(state.curtain.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.dock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        elements.extend(
-            space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
-                .expect("render elements")
-                .into_iter()
-                .map(FrameElement::from),
-        );
+        // The windows, topmost first; one put away or brought back as the
+        // gesture has it (gesture.rs).
+        let scale = smithay::utils::Scale::from(SCALE as f64);
+        for window in state.space.elements().rev() {
+            let Some(loc) = state.space.element_location(window) else { continue };
+            let loc = loc.to_physical(SCALE);
+            match state.gestures.progress(window, frame_ns) {
+                Some(p) => {
+                    let geo = smithay::utils::Rectangle::new(loc, window.geometry().size.to_physical(SCALE));
+                    let (s, offset) = crate::gesture::placement(geo, p);
+                    let parts: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                        window.render_elements(&mut self.renderer, loc, scale, crate::gesture::alpha(p));
+                    elements.extend(parts.into_iter().map(|e| {
+                        FrameElement::Moving(RelocateRenderElement::from_element(
+                            RescaleRenderElement::from_element(e, loc, s),
+                            offset,
+                            Relocate::Relative,
+                        ))
+                    }));
+                }
+                None => {
+                    let parts: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = window.render_elements(&mut self.renderer, loc, scale, 1.0);
+                    elements.extend(parts.into_iter().map(FrameElement::Window));
+                }
+            }
+        }
         let elements_ns = hybris_hwc::now_ns() - t0;
         // Every frame is drawn whole (age 0). Drawing only the damage on top
         // of the buffer's old contents (its age: BUFFERS, the window's strict

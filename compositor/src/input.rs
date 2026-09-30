@@ -89,6 +89,16 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                // The bottom band of a panel with a window: the swipe that
+                // puts it away (gesture.rs).
+                if pos.y >= LAYOUT.1 as f64 - crate::gesture::EDGE {
+                    if let Some(panel) = crate::layout::panel_at(pos) {
+                        if let Some(window) = self.top_window(panel) {
+                            self.gestures.down(event.slot(), pos, event.time(), window, panel);
+                            return;
+                        }
+                    }
+                }
                 let serial = SERIAL_COUNTER.next_serial();
                 // The window under the finger comes up and takes the keyboard.
                 if let Some(window) = self.space.element_under(pos).map(|(w, _)| w.clone()) {
@@ -114,6 +124,11 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.gestures.holds(event.slot()) {
+                    self.gestures.motion(event.slot(), pos.y, event.time());
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.dock.holds(event.slot()) {
                     self.dock.motion(event.slot(), pos);
                     self.needs_redraw = true;
@@ -128,11 +143,20 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.gestures.holds(event.slot()) {
+                    self.gestures.up(event.slot(), hybris_hwc::now_ns());
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.dock.holds(event.slot()) {
-                    if let Some(Tap::Launch(command, panel, icon)) = self.dock.up(event.slot()) {
-                        self.launch_to = Some((panel, hybris_hwc::now_ns()));
-                        self.curtain.raise(panel, icon, hybris_hwc::now_ns());
-                        self.spawn(&command);
+                    if let Some(Tap::Launch(command, panel, icon, ids)) = self.dock.up(event.slot()) {
+                        // A window of the app put away comes back; else the
+                        // app is launched.
+                        if !self.bring_back(&ids, panel) {
+                            self.launch_to = Some((panel, hybris_hwc::now_ns()));
+                            self.curtain.raise(panel, icon, hybris_hwc::now_ns());
+                            self.spawn(&command);
+                        }
                     }
                     self.needs_redraw = true;
                     return;
@@ -143,6 +167,7 @@ impl State {
             InputEvent::TouchCancel { .. } => {
                 self.shade.cancel();
                 self.dock.cancel();
+                self.gestures.cancel(hybris_hwc::now_ns());
                 self.needs_redraw = true;
                 touch.cancel(self)
             }
