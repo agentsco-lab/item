@@ -31,9 +31,10 @@ item, which keep running the phone day to day.
 | touch | libinput to `wl_touch`, the touchscreen one to one with the output, hinge and all | both panels |
 | the session | the user's, on tty7 as phosh runs; our desktop name, a gtk portals configuration | GTK apps map in under 2 s |
 | the shade | a sheet per panel, pulled from the top edge by the finger, drawn in the compositor's own pass; the time, the date, the battery as text (fontdue, the system's fonts) | finger to screen 22-26 ms, no frames missed |
-| frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, drawn late in the frame; only the damage redrawn | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
+| the dock | item's two halves at the panels' outer corners, apps from item's dock.json, a tap launches onto that panel, a half slides away while its panel has a window | launches in under 2 s; frames drawn whole (partial redraws left garbage on Adreno) |
+| frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, drawn late in the frame, drawn whole; frame callbacks before the frame | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
-What it does not do yet: cheaper shm frames, `wp_presentation`, the rest of the shell (the shade's quick settings and notifications, the dock, gestures between panels), the
+What it does not do yet: cheaper shm frames, `wp_presentation`, the rest of the shell (the dock's halves crossing to a free panel, the shade's quick settings and notifications, the dock, gestures between panels), the
 on-screen keyboard, the pen, blanking and the power key, the portals'
 Settings interface.
 
@@ -53,6 +54,7 @@ Settings interface.
 | 5 | the shade: a sheet per panel following the finger, a clock in seven segments | finger to screen 22-26 ms against about 39 ms through GTK; a 1 px line from logical rounding fixed (`log/2026-09-30-step-5-shade.md`) |
 | 5b | text on the shade: fontdue into a texture, remade only when the text changes | sharp, the right way up, as smooth; two seconds of missed frames to look into (`log/2026-09-30-step-5b-text.md`) |
 | 5c | a shade benchmark (a virtual finger), each missed frame logged | chains of missed frames behind hwcomposer's blocking present: now a vsync skipped after a miss, the first frame after a pause drawn at once, the budget from swapped frames only; the run leaves at the finger's speed (`log/2026-09-30-step-5c-shade-bench.md`) |
+| 6 | the dock; screenshots and frame runs | first frame not shown by hwcomposer; clients need the port's profile.d environment; partial redraws leave garbage in Adreno's tiles: frames drawn whole; Settings scrolls at 30 fps on its own side (`log/2026-09-30-step-6-dock.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -111,7 +113,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `text` (fonts and labels), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences
@@ -123,5 +125,8 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
   (into `sysroot/`, not tracked)
 - `tools/bench.sh`, `tools/tap.py`, `tools/swipe.py` - benchmarks through a
   virtual touchscreen, with no one at the phone: tapping GNOME Calculator,
-  or pulling the shades (`DRIVER=swipe`)
+  pulling the shades (`DRIVER=swipe`), or scrolling Settings (`DRIVER=scroll`)
+- `tools/frames-run.sh`, `tools/tap-at.py` - one tap and the 40 frames after it,
+  as they went to hwcomposer; `touch /tmp/item-shot` on the phone saves the next
+  frame
 - `log/` - what each step found, with the raw output

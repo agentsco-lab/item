@@ -14,6 +14,7 @@
 //! it logs frames drawn, vsyncs, time between presents, windows, touches, and
 //! the time from a touch to the first frame showing a client's answer to it.
 
+mod dock;
 mod input;
 mod layout;
 mod output;
@@ -165,6 +166,20 @@ impl Data {
         }
         self.state.needs_redraw = false;
         let started = hybris_hwc::now_ns();
+        // The dock stands on the panels no window has.
+        let taken = self.state.panels_taken();
+        self.state.dock.follow(taken, started);
+        // Frame callbacks go out before the frame is drawn, not after: the
+        // clients' buffers for it are already taken, and a client starts on
+        // its next frame while this one is drawn and presented (8-9 ms).
+        // Sent after, a GTK app had 7 ms left before the next vsync, missed
+        // it, and scrolled at 28 fps. Their time is the vsync the frame aims
+        // for.
+        if std::env::var_os("LATE_CALLBACKS").is_none() {
+            let time = std::time::Duration::from_nanos(self.pacing.target_ns.saturating_sub(self.screen.clock_origin_ns));
+            self.screen.send_frames(&self.state, time);
+            let _ = self.state.display_handle.flush_clients();
+        }
         let cost = self.screen.render(&self.state, self.pacing.target_ns);
         let (draw_ns, swap_ns) = (cost.draw_ns, cost.swap_ns);
         let took = draw_ns + swap_ns;
@@ -224,12 +239,23 @@ impl Data {
             }
             self.report.shade_loop_ms.push(shown_at.saturating_sub(reached_ns) as f64 / 1e6);
         }
+        // hwcomposer does not show the first frame after it powers the
+        // display on: with nothing moving, the screen stayed black. Every
+        // buffer gets a frame at start.
+        if !self.screen.primed() {
+            self.state.needs_redraw = true;
+        }
+        if self.state.dock.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+        }
         if self.state.shade.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
         }
-        let time = std::time::Duration::from_nanos(shown_at.saturating_sub(self.screen.clock_origin_ns));
-        self.screen.send_frames(&self.state, time);
-        let _ = self.state.display_handle.flush_clients();
+        if std::env::var_os("LATE_CALLBACKS").is_some() {
+            let time = std::time::Duration::from_nanos(shown_at.saturating_sub(self.screen.clock_origin_ns));
+            self.screen.send_frames(&self.state, time);
+            let _ = self.state.display_handle.flush_clients();
+        }
     }
 
     fn log_report(&mut self) {
@@ -322,6 +348,15 @@ fn main() {
     handle
         .insert_source(Timer::from_duration(std::time::Duration::from_secs(1)), |_, _, data: &mut Data| {
             data.log_report();
+            // `touch /tmp/item-shot` asks for a screenshot of the next frame.
+            if std::fs::remove_file("/tmp/item-shot").is_ok() {
+                data.screen.shot = Some(format!("/tmp/item-shot-{}.rgba", data.started.elapsed().as_secs()));
+                data.state.needs_redraw = true;
+            }
+            // `touch /tmp/item-frames` asks for the next 40 frames.
+            if std::fs::remove_file("/tmp/item-frames").is_ok() {
+                data.screen.frames_left = 40;
+            }
             if data.state.shade.visible() && data.state.shade.refresh_text() {
                 data.state.needs_redraw = true;
             }
@@ -339,24 +374,9 @@ fn main() {
     state.space.map_output(&screen.output, (0, 0));
     tracing::info!("listening on {:?}", socket_name);
 
+    state.socket_name = socket_name.clone();
     for command in &args.spawn {
-        // Clients take libhybris' Wayland EGL platform, not the compositor's
-        // hwcomposer one, and our desktop name. CLIENT_ENV adds "KEY=VALUE ..."
-        // for tests.
-        let child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .env("WAYLAND_DISPLAY", &socket_name)
-            .env("EGL_PLATFORM", "wayland")
-            .env("XDG_CURRENT_DESKTOP", "item")
-            .envs(std::env::var("CLIENT_ENV").ok().iter().flat_map(|e| {
-                e.split_whitespace().filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_owned(), v.to_owned())).collect::<Vec<_>>()
-            }))
-            .spawn();
-        match child {
-            Ok(_) => tracing::info!("spawned: {command}"),
-            Err(e) => tracing::warn!("could not spawn {command}: {e}"),
-        }
+        state.spawn(command);
     }
 
     let pacing = Pacing::from_env();

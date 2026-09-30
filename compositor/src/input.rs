@@ -17,6 +17,7 @@ use smithay::reexports::calloop::LoopHandle;
 use smithay::reexports::input::{Libinput, LibinputInterface};
 use smithay::utils::SERIAL_COUNTER;
 
+use crate::dock::Tap;
 use crate::layout::LAYOUT;
 use crate::state::State;
 use crate::Data;
@@ -80,6 +81,10 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.dock.down(event.slot(), pos) {
+                    self.needs_redraw = true;
+                    return;
+                }
                 let serial = SERIAL_COUNTER.next_serial();
                 // The window under the finger comes up and takes the keyboard.
                 if let Some(window) = self.space.element_under(pos).map(|(w, _)| w.clone()) {
@@ -105,6 +110,11 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.dock.holds(event.slot()) {
+                    self.dock.motion(event.slot(), pos);
+                    self.needs_redraw = true;
+                    return;
+                }
                 let under = self.surface_under(pos);
                 touch.motion(self, under, &MotionEvent { slot: event.slot(), location: pos, time: event.time_msec() });
             }
@@ -114,11 +124,20 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.dock.holds(event.slot()) {
+                    if let Some(Tap::Launch(command, panel)) = self.dock.up(event.slot()) {
+                        self.launch_to = Some((panel, hybris_hwc::now_ns()));
+                        self.spawn(&command);
+                    }
+                    self.needs_redraw = true;
+                    return;
+                }
                 touch.up(self, &UpEvent { slot: event.slot(), serial: SERIAL_COUNTER.next_serial(), time: event.time_msec() });
             }
             InputEvent::TouchFrame { .. } => touch.frame(self),
             InputEvent::TouchCancel { .. } => {
                 self.shade.cancel();
+                self.dock.cancel();
                 self.needs_redraw = true;
                 touch.cancel(self)
             }

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""swipe.py SECONDS: a virtual finger pulling the shade, for a benchmark.
+"""swipe.py SECONDS [scroll]: a virtual finger pulling the shade, or with
+`scroll` scrolling the window on the right panel, for a benchmark.
 
 The same kind of uinput touchscreen as tap.py (X 0-17709, Y 0-11411 over
 both panels and the hinge, multitouch protocol B), sending a position every
@@ -8,6 +9,8 @@ both panels and the hinge, multitouch protocol B), sending a position every
   the sheet runs open), then a tap on the sheet (it runs closed);
 - a slow pull to half way and a bit, held still, let go (it runs open), then
   a swipe up (it runs closed).
+With `scroll` it drags up and down the middle of the right panel instead,
+0.8 s each way, between y 1500 and 500 (physical px).
 It prints its device node first, for the compositor's TOUCHSCREEN, then
 waits 3 s before it starts.
 """
@@ -15,6 +18,7 @@ import sys, time
 from evdev import UInput, AbsInfo, ecodes as e
 
 seconds = float(sys.argv[1]) if len(sys.argv) > 1 else 20
+scroll = len(sys.argv) > 2 and sys.argv[2] == "scroll"
 X, Y = 17709, 11411
 caps = {
     e.EV_KEY: [e.BTN_TOUCH],
@@ -70,6 +74,11 @@ def drag(x, y0, y1, seconds, hold=0.0):
     lift()
 
 end = time.time() + seconds
+while scroll and time.time() < end:
+    drag(2109, 1500, 500, 0.8)
+    time.sleep(0.3)
+    drag(2109, 500, 1500, 0.8)
+    time.sleep(0.3)
 panel = 0
 while time.time() < end:
     x = [675, 2109][panel]

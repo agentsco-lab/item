@@ -14,7 +14,8 @@ use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::render_elements;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::{Bind, ImportEgl};
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::{Bind, ExportMem, ImportEgl};
 use smithay::desktop::space::{space_render_elements, SpaceRenderElements};
 use smithay::desktop::Window;
 use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
@@ -45,6 +46,9 @@ render_elements! {
     Space=SpaceRenderElements<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>,
 }
 
+/// The rows of the screen's bottom a run of frames keeps: the dock and above.
+const FRAME_ROWS: i32 = 600;
+
 /// The hwcomposer window's buffers.
 const BUFFERS: usize = 3;
 
@@ -52,6 +56,11 @@ pub struct Screen {
     pub output: Output,
     /// Frames swapped so far (the buffer age follows from it).
     frames_drawn: u64,
+    /// A screenshot asked for: the next frame is drawn whole and saved here.
+    pub shot: Option<String>,
+    /// A run of frames asked for: this many more swapped frames are saved as
+    /// they are, not drawn whole, the bottom `FRAME_ROWS` rows only.
+    pub frames_left: u32,
     pub vsync_period_ns: u64,
     /// The output's physical pixels.
     pub pixels: i64,
@@ -78,7 +87,15 @@ impl Screen {
         let pixel_format = context.pixel_format().expect("pixel format");
         let surface = unsafe { EGLSurface::new(&egl_display, pixel_format, context.config_id(), HwcWindow(hwc.window)) }
             .expect("EGLSurface");
-        let mut renderer = unsafe { GlesRenderer::new(context) }.expect("GlesRenderer");
+        // INSTANCING=0 leaves GL instancing out: each damaged rectangle is
+        // drawn on its own, not as an instance of one draw.
+        let mut capabilities = unsafe { GlesRenderer::supported_capabilities(&context) }.expect("capabilities");
+        if std::env::var_os("INSTANCING").is_some_and(|v| v == "0") {
+            capabilities.retain(|c| !matches!(c, smithay::backend::renderer::gles::Capability::Instancing));
+        }
+        tracing::info!("renderer: {capabilities:?}");
+        tracing::info!("EGL: {}", egl_display.extensions().iter().filter(|e| e.contains("age") || e.contains("damage") || e.contains("partial")).cloned().collect::<Vec<_>>().join(" "));
+        let mut renderer = unsafe { GlesRenderer::with_capabilities(context, capabilities) }.expect("GlesRenderer");
 
         // GL clients' buffers (libhybris' android_wlegl) import through EGL.
         match renderer.bind_wl_display(dh) {
@@ -101,40 +118,90 @@ impl Screen {
 
         let damage_tracker = OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180);
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
+        Screen { output, frames_drawn: 0, shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
     ///
-    /// The buffer's age says how many frames old its contents are; the damage
-    /// tracker redraws only what changed since then (everything when the age
-    /// is 0, unknown). Nothing changed: no swap. `frame_ns` is when the frame
+    /// Nothing changed since the last frame: no frame, no swap. Else the frame
+    /// is drawn whole. `frame_ns` is when the frame
     /// will be on screen: the shade's runs are drawn where they will be then.
     pub fn render(&mut self, state: &State, frame_ns: u64) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
-        // EGL says 2 here, but libhybris' hwcomposer window hands out its
-        // BUFFERS in strict turn: a buffer last held the frame BUFFERS frames
-        // ago, and nothing before it had been drawn at all. Trusting EGL
-        // left the undamaged parts of a buffer three frames old, not two: an
-        // empty panel flickered.
-        let age = if self.frames_drawn < BUFFERS as u64 { 0 } else { BUFFERS };
+        // The shade over the dock over the windows.
         let mut elements: Vec<FrameElement> = state.shade.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        elements.extend(state.dock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(
             space_render_elements::<_, Window, _>(&mut self.renderer, [&state.space], &self.output, 1.0)
                 .expect("render elements")
                 .into_iter()
                 .map(FrameElement::from),
         );
+        // Every frame is drawn whole (age 0). Drawing only the damage on top
+        // of the buffer's old contents (its age: BUFFERS, the window's strict
+        // turn) left garbage on Adreno through libhybris: the driver does not
+        // load a buffer's contents into its tiles, so around a partial redraw
+        // each tile drawn in kept whatever the GPU last had there - pieces of
+        // other icons, a neighbour icon gone (log/2026-09-30-step-6-dock.md).
+        // Asking EGL for the age, which makes some drivers load them, made it
+        // worse. The damage tracker still says whether anything changed:
+        // nothing, and there is no frame. PARTIAL=1 draws the damage only, for
+        // tests.
+        let partial = std::env::var_os("PARTIAL").is_some_and(|v| v == "1");
+        let primed = self.frames_drawn >= BUFFERS as u64;
+        if !partial && primed && self.shot.is_none() {
+            let changed = self.damage_tracker.damage_output(1, &elements).map(|(d, _)| d.is_some()).unwrap_or(true);
+            if !changed {
+                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, swap_ns: 0, age: 0, damaged_px: 0, swapped: false };
+            }
+        }
+        let age = if partial && primed && self.shot.is_none() { BUFFERS } else { 0 };
+        let mut shot = None;
         let damaged_px: i64 = {
             let mut target = self.renderer.bind(&mut self.surface).expect("bind");
             let result = self
                 .damage_tracker
                 .render_output(&mut self.renderer, &mut target, age, &elements, [0.08, 0.1, 0.14, 1.0])
                 .expect("render_output");
-            result
+            if std::env::var_os("LOG_DAMAGE").is_some() {
+                use smithay::backend::renderer::element::Element;
+                let geos: Vec<String> = elements
+                    .iter()
+                    .take(12)
+                    .map(|e| {
+                        let g = e.geometry(smithay::utils::Scale::from(SCALE as f64));
+                        format!("{},{} {}x{}", g.loc.x, g.loc.y, g.size.w, g.size.h)
+                    })
+                    .collect();
+                let rects: Vec<String> = result
+                    .damage
+                    .map(|r| r.iter().map(|r| format!("{},{} {}x{}", r.loc.x, r.loc.y, r.size.w, r.size.h)).collect())
+                    .unwrap_or_default();
+                tracing::info!("damage: frame {} age {age}: {} | elements: {}", self.frames_drawn, rects.join("; "), geos.join("; "));
+            }
+            let damaged = result
                 .damage
                 .map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum())
-                .unwrap_or(0)
+                .unwrap_or(0);
+            // The frame as it goes to the screen, copied before the swap and
+            // read after it: reading makes the context current without the
+            // surface, and a swap then fails (BadSurface).
+            let run = damaged > 0 && self.frames_left > 0 && self.shot.is_none();
+            if run {
+                self.frames_left -= 1;
+                self.shot = Some(format!("/tmp/item-frame-{:03}-{}.rgba", self.frames_drawn, hybris_hwc::now_ns() / 1_000_000 % 100_000));
+            }
+            if let Some(path) = self.shot.take() {
+                let size = self.output.current_mode().unwrap().size;
+                // GL's rows are bottom-up: the first rows are the screen's bottom.
+                let size = if run { (size.w, FRAME_ROWS).into() } else { size };
+                let region = smithay::utils::Rectangle::from_size((size.w, size.h).into());
+                match self.renderer.copy_framebuffer(&target, region, Fourcc::Abgr8888) {
+                    Ok(mapping) => shot = Some((path, mapping, size)),
+                    Err(e) => tracing::warn!("screenshot: {e}"),
+                }
+            }
+            damaged
         };
         let t1 = hybris_hwc::now_ns();
         let swapped = damaged_px > 0;
@@ -142,6 +209,26 @@ impl Screen {
             self.surface.swap_buffers(None).expect("swap_buffers");
             // Only a swapped frame uses up a buffer.
             self.frames_drawn += 1;
+        }
+        if std::env::var_os("LOG_BUFFERS").is_some() && swapped {
+            let order = hybris_hwc::presented_buffers(12);
+            let mut ids: Vec<usize> = order.clone();
+            ids.sort();
+            ids.dedup();
+            let names: String = order.iter().map(|b| (b'A' + ids.iter().position(|x| x == b).unwrap() as u8) as char).collect();
+            tracing::info!("buffers: frame {} age {age}: {names} ({} seen)", self.frames_drawn, ids.len());
+        }
+        if let Some((path, mapping, size)) = shot {
+            let saved = self
+                .renderer
+                .map_texture(&mapping)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
+            match saved {
+                // Rows bottom-up, as GL has them.
+                Ok(()) => tracing::info!("screenshot: {path} ({}x{}, RGBA, bottom-up)", size.w, size.h),
+                Err(e) => tracing::warn!("screenshot: {e}"),
+            }
         }
         FrameCost {
             draw_ns: t1 - t0,
@@ -152,10 +239,15 @@ impl Screen {
         }
     }
 
+    /// Whether every buffer of the window has had a frame.
+    pub fn primed(&self) -> bool {
+        self.frames_drawn >= BUFFERS as u64
+    }
+
     /// Uploads the shell's textures before they are first needed.
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
-        let n = state.shade.warm_up(&mut self.renderer);
+        let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }
 

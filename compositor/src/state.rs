@@ -32,6 +32,7 @@ use smithay::{
 };
 
 use crate::layout;
+use crate::dock::Dock;
 use crate::shade::Shade;
 
 pub struct State {
@@ -62,6 +63,12 @@ pub struct State {
     /// Stop after this many seconds (for tests).
     pub stop_after: Option<u64>,
     pub shade: Shade,
+    pub dock: Dock,
+    /// The panel the next window goes to, asked for by a launch from the
+    /// dock, and when (CLOCK_MONOTONIC ns).
+    pub launch_to: Option<(usize, u64)>,
+    /// The socket clients are given.
+    pub socket_name: std::ffi::OsString,
 }
 
 impl State {
@@ -93,7 +100,46 @@ impl State {
             touch_answered: None,
             stop_after: None,
             shade: Shade::new(),
+            dock: Dock::new(),
+            launch_to: None,
+            socket_name: Default::default(),
         }
+    }
+
+    /// Runs a command as a client of ours: libhybris' Wayland EGL platform, not
+    /// the compositor's hwcomposer one, and our desktop name. A login shell,
+    /// so the client has the port's environment from /etc/profile.d as under
+    /// phosh (WebKit without its DMA-BUF renderer, GTK on GLES). CLIENT_ENV
+    /// adds "KEY=VALUE ..." for tests.
+    pub fn spawn(&self, command: &str) {
+        let child = std::process::Command::new("sh")
+            .arg(if std::env::var_os("NO_LOGIN_SHELL").is_some() { "-c" } else { "-lc" })
+            .arg(command)
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .env("EGL_PLATFORM", "wayland")
+            .env("XDG_CURRENT_DESKTOP", "item")
+            .envs(std::env::var("CLIENT_ENV").ok().iter().flat_map(|e| {
+                e.split_whitespace().filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_owned(), v.to_owned())).collect::<Vec<_>>()
+            }))
+            .spawn();
+        match child {
+            Ok(_) => tracing::info!("spawned: {command}"),
+            Err(e) => tracing::warn!("could not spawn {command}: {e}"),
+        }
+    }
+
+    /// Which panels a window has.
+    pub fn panels_taken(&self) -> [bool; 2] {
+        let panels = layout::panels();
+        let mut taken = [false; 2];
+        for window in self.space.elements() {
+            if let Some(loc) = self.space.element_location(window) {
+                if let Some(p) = panels.iter().position(|p| p.contains(loc)) {
+                    taken[p] = true;
+                }
+            }
+        }
+        taken
     }
 
     /// The surface under a point of the layout, and where that surface starts.
@@ -192,8 +238,16 @@ impl XdgShellHandler for State {
         // Each new window takes the next panel, maximized to it, as item tiles
         // a window to the panel it was launched from.
         let panels = layout::panels();
-        let panel = panels[self.next_panel % panels.len()];
-        self.next_panel += 1;
+        // The panel a launch from the dock asked for, if it was lately;
+        // else the next in turn.
+        let asked = self.launch_to.take().filter(|&(_, at)| hybris_hwc::now_ns() - at < 10_000_000_000).map(|(p, _)| p);
+        let panel = match asked {
+            Some(p) => panels[p],
+            None => {
+                self.next_panel += 1;
+                panels[(self.next_panel - 1) % panels.len()]
+            }
+        };
         surface.with_pending_state(|state| {
             state.size = Some(panel.size);
             state.states.set(xdg_toplevel::State::Maximized);
@@ -207,6 +261,12 @@ impl XdgShellHandler for State {
             if panel.loc.x == 0 { "left" } else { "right" },
             self.started.elapsed().as_secs_f64()
         );
+    }
+
+    fn toplevel_destroyed(&mut self, _: ToplevelSurface) {
+        // The space drops the window at its next refresh; the dock may come
+        // back onto its panel.
+        self.needs_redraw = true;
     }
 
     fn new_popup(&mut self, surface: PopupSurface, _: PositionerState) {

@@ -224,6 +224,16 @@ pub fn last_present_detail() -> PresentDetail {
     *DETAIL.lock().unwrap()
 }
 
+/// The buffers presented, in order (the window's own pointers), the latest
+/// last: which buffer each frame was drawn into.
+static PRESENTED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// The buffers of the last `n` frames presented, oldest first.
+pub fn presented_buffers(n: usize) -> Vec<usize> {
+    let p = PRESENTED.lock().unwrap();
+    p[p.len().saturating_sub(n)..].to_vec()
+}
+
 static LAST_PRESENT_NS: AtomicU64 = AtomicU64::new(0);
 static LAST_PRESENT_TOOK_NS: AtomicU64 = AtomicU64::new(0);
 
@@ -258,6 +268,14 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
     let (h, w) = (p.hwc, p.win);
 
     let t_start = now_ns();
+    {
+        let mut presented = PRESENTED.lock().unwrap();
+        presented.push(buffer as usize);
+        // Enough to see the order the window hands its buffers out in.
+        if presented.len() > 64 {
+            presented.drain(..32);
+        }
+    }
     let acquire = (w.get_fence)(buffer);
     let mut detail = PresentDetail { gpu_pending: fence_pending(acquire), ..Default::default() };
     (h.set_client_target)(p.display, 0, buffer, acquire, HAL_DATASPACE_UNKNOWN);

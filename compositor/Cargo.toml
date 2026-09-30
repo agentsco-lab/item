@@ -12,5 +12,6 @@ smithay = { version = "0.7", default-features = false, features = ["renderer_gl"
 wayland-sys = { version = "0.31", features = ["dlopen"] }
 fontdue = "0.9"
 libc = "0.2"
+resvg = "0.45"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
