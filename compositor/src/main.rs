@@ -14,6 +14,7 @@
 //! it logs frames drawn, vsyncs, time between presents, windows, touches, and
 //! the time from a touch to the first frame showing a client's answer to it.
 
+mod boost;
 mod dock;
 mod input;
 mod layout;
@@ -65,13 +66,44 @@ struct Pacing {
     last_swap_ns: u64,
     /// Draw a client's new frame at once (`ASAP=0` waits for the vsync).
     asap: bool,
+    /// When clients hear their frame was taken (`CALLBACKS`).
+    callbacks: Callbacks,
+    /// A frame went to hwcomposer; its clients hear of it at the vsync that
+    /// puts it on screen (`Callbacks::Vsync`).
+    callbacks_due: bool,
+}
+
+/// When frame callbacks go out.
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum Callbacks {
+    /// As the frame is drawn (`draw`, the default): a client starts its
+    /// next frame while ours waits for the vsync, as under phoc. Settings
+    /// scrolls at 60 fps with the GPU boosted (43 without). A client quicker
+    /// than a frame commits while ours still waits, and its frame shows a
+    /// vsync later: with the boost the calculator answers a tap in 36-37 ms,
+    /// 28 without.
+    Draw,
+    /// At the vsync that puts the frame on screen (`vsync`): the client
+    /// draws right after it, and its frame is drawn at once for the next.
+    /// Taps 34 ms with the boost, but Settings, which needs 12-14 ms a frame
+    /// even boosted, scrolls at 39-48 fps (26 without the boost).
+    Vsync,
+    /// After the frame is drawn and presented (`after`).
+    After,
 }
 
 impl Pacing {
     fn from_env() -> Pacing {
         let late = std::env::var("LATE").map(|v| v != "0").unwrap_or(true);
         let margin_ms: f64 = std::env::var("LATE_MARGIN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
-        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true) }
+        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
+            callbacks: match std::env::var("CALLBACKS").as_deref() {
+                Ok("vsync") => Callbacks::Vsync,
+                Ok("after") => Callbacks::After,
+                _ => Callbacks::Draw,
+            },
+            callbacks_due: false,
+        }
     }
 
     fn budget_ns(&self) -> u64 {
@@ -136,6 +168,13 @@ impl Data {
         let vsync = hybris_hwc::last_vsync_ns();
         let period = self.screen.vsync_period_ns;
         self.pacing.target_ns = vsync + period;
+        // The frame presented before this vsync is on screen now.
+        if self.pacing.callbacks_due && hybris_hwc::last_present_ns() < vsync {
+            self.pacing.callbacks_due = false;
+            let time = std::time::Duration::from_nanos(vsync.saturating_sub(self.screen.clock_origin_ns));
+            self.screen.send_frames(&self.state, time);
+            let _ = self.state.display_handle.flush_clients();
+        }
         // The first frame after a pause is drawn at once: the GPU wakes slowly,
         // and drawn late such a frame missed its vsync.
         let idle = vsync.saturating_sub(self.pacing.last_swap_ns) > period * 3 / 2;
@@ -161,6 +200,7 @@ impl Data {
     /// draw anyway.
     fn on_watchdog(&mut self) {
         let now = hybris_hwc::now_ns();
+        self.state.boost.tick(now);
         if now.saturating_sub(hybris_hwc::last_vsync_ns()) > 50_000_000 {
             self.pacing.target_ns = now + self.screen.vsync_period_ns;
             self.draw_if_needed();
@@ -201,13 +241,13 @@ impl Data {
         // The dock stands on the panels no window has.
         let taken = self.state.panels_taken();
         self.state.dock.follow(taken, started);
-        // Frame callbacks go out before the frame is drawn, not after: the
+        // Callbacks::Draw: frame callbacks before the frame is drawn: the
         // clients' buffers for it are already taken, and a client starts on
         // its next frame while this one is drawn and presented (8-9 ms).
         // Sent after, a GTK app had 7 ms left before the next vsync, missed
         // it, and scrolled at 28 fps. Their time is the vsync the frame aims
         // for.
-        if std::env::var_os("LATE_CALLBACKS").is_none() {
+        if self.pacing.callbacks == Callbacks::Draw {
             let time = std::time::Duration::from_nanos(self.pacing.target_ns.saturating_sub(self.screen.clock_origin_ns));
             self.screen.send_frames(&self.state, time);
             let _ = self.state.display_handle.flush_clients();
@@ -279,14 +319,20 @@ impl Data {
         }
         if self.state.dock.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
+            self.state.boost.kick(hybris_hwc::now_ns());
         }
         if self.state.shade.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
+            self.state.boost.kick(hybris_hwc::now_ns());
         }
-        if std::env::var_os("LATE_CALLBACKS").is_some() {
+        // Nothing went to hwcomposer (nothing changed): no vsync will show
+        // it, so the clients hear now.
+        if self.pacing.callbacks == Callbacks::After || (self.pacing.callbacks == Callbacks::Vsync && !cost.swapped) {
             let time = std::time::Duration::from_nanos(shown_at.saturating_sub(self.screen.clock_origin_ns));
             self.screen.send_frames(&self.state, time);
             let _ = self.state.display_handle.flush_clients();
+        } else if self.pacing.callbacks == Callbacks::Vsync {
+            self.pacing.callbacks_due = true;
         }
     }
 
@@ -303,11 +349,12 @@ impl Data {
             format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
         };
         tracing::info!(
-            "drawn {:3} of {:3}  missed {:2}  commits {:3} (at once {})  draw {} (elements {}) swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  errors {}",
+            "drawn {:3} of {:3}  missed {:2}  commits {:3} (at once {})  draw {} (elements {}) swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  GPU boost {:.0}%  errors {}",
             r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits), r.asap,
             mean_max(&r.draw_ms), mean_max(&r.elements_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), st.fast, mean_max(&r.damaged_share),
             r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text,
-            mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms), st.errors
+            mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms),
+            self.state.boost.take_share(hybris_hwc::now_ns(), 1_000_000_000), st.errors
         );
         self.report.vsyncs_at_last = v;
     }
@@ -416,10 +463,11 @@ fn main() {
 
     let pacing = Pacing::from_env();
     tracing::info!(
-        "pacing: {}, margin {:.1} ms, clients' frames {}",
+        "pacing: {}, margin {:.1} ms, clients' frames {}, frame callbacks {:?}",
         if pacing.late { "late in the frame" } else { "at the vsync" },
         pacing.margin_ns as f64 / 1e6,
-        if pacing.asap { "at once" } else { "at the vsync" }
+        if pacing.asap { "at once" } else { "at the vsync" },
+        pacing.callbacks
     );
     let mut data = Data { state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing };
     data.report.vsyncs_at_last = vsyncs();

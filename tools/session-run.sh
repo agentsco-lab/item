@@ -40,11 +40,20 @@ session_env_restore() {
     log "session environment restored: $(echo $SAVED)"
 }
 
+# The GPU's minimum clock: the compositor's boost writes it (boost.rs). The
+# user may for the run; the file's user and the old value come back after.
+KG=/sys/class/kgsl/kgsl-3d0/devfreq/min_freq
+KG_OLD=$(cat $KG 2>/dev/null)
+
 rollback() {
     log "rollback"
     systemctl stop item-compositor 2>/dev/null
     pkill -9 -x item-compositor 2>/dev/null
     session_env_restore
+    if [ -n "$KG_OLD" ]; then
+        chown root $KG; echo $KG_OLD > $KG
+        log "GPU min clock restored: $(cat $KG)"
+    fi
     sleep 1
     hwc stop
     systemctl unmask --runtime phosh >/dev/null 2>&1
@@ -62,6 +71,7 @@ hwc start
 for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
 log "composer up: $(composers)"
 session_env
+[ -n "$KG_OLD" ] && chown $USER_NAME $KG
 
 chmod 755 /tmp/item-compositor
 rm -f /tmp/item-compositor.log   # systemd writes a file: output from its start, not truncating
@@ -77,7 +87,7 @@ systemd-run --wait --collect --unit=item-compositor \
     ${CLIENT_ENV:+-p "Environment=CLIENT_ENV=$CLIENT_ENV"} \
     ${LATE:+-p "Environment=LATE=$LATE"} ${LATE_MARGIN_MS:+-p "Environment=LATE_MARGIN_MS=$LATE_MARGIN_MS"} \
     ${HWC_PRESENT_OR_VALIDATE:+-p "Environment=HWC_PRESENT_OR_VALIDATE=$HWC_PRESENT_OR_VALIDATE"} \
-    ${TOUCHSCREEN:+-p "Environment=TOUCHSCREEN=$TOUCHSCREEN"} ${LOG_BUFFERS:+-p "Environment=LOG_BUFFERS=$LOG_BUFFERS"} ${INSTANCING:+-p "Environment=INSTANCING=$INSTANCING"} ${LOG_DAMAGE:+-p "Environment=LOG_DAMAGE=$LOG_DAMAGE"} ${PARTIAL:+-p "Environment=PARTIAL=$PARTIAL"} ${NO_LOGIN_SHELL:+-p "Environment=NO_LOGIN_SHELL=$NO_LOGIN_SHELL"} ${LATE_CALLBACKS:+-p "Environment=LATE_CALLBACKS=$LATE_CALLBACKS"} ${SERVER_DEBUG:+-p "Environment=WAYLAND_DEBUG=server"} \
-    ${ASAP:+-p "Environment=ASAP=$ASAP"} \
+    ${TOUCHSCREEN:+-p "Environment=TOUCHSCREEN=$TOUCHSCREEN"} ${LOG_BUFFERS:+-p "Environment=LOG_BUFFERS=$LOG_BUFFERS"} ${INSTANCING:+-p "Environment=INSTANCING=$INSTANCING"} ${LOG_DAMAGE:+-p "Environment=LOG_DAMAGE=$LOG_DAMAGE"} ${PARTIAL:+-p "Environment=PARTIAL=$PARTIAL"} ${NO_LOGIN_SHELL:+-p "Environment=NO_LOGIN_SHELL=$NO_LOGIN_SHELL"} ${SERVER_DEBUG:+-p "Environment=WAYLAND_DEBUG=server"} \
+    ${ASAP:+-p "Environment=ASAP=$ASAP"} ${GPU_BOOST:+-p "Environment=GPU_BOOST=$GPU_BOOST"} ${CALLBACKS:+-p "Environment=CALLBACKS=$CALLBACKS"} \
     /tmp/item-compositor "$@"
 log "session ended"

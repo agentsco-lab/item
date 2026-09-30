@@ -32,6 +32,7 @@ use smithay::{
 };
 
 use crate::layout;
+use crate::boost::GpuBoost;
 use crate::dock::Dock;
 use crate::shade::Shade;
 
@@ -66,6 +67,7 @@ pub struct State {
     /// A client committed a new buffer since the loop last looked.
     pub client_frame: bool,
     pub dock: Dock,
+    pub boost: GpuBoost,
     /// The panel the next window goes to, asked for by a launch from the
     /// dock, and when (CLOCK_MONOTONIC ns).
     pub launch_to: Option<(usize, u64)>,
@@ -104,6 +106,7 @@ impl State {
             shade: Shade::new(),
             client_frame: false,
             dock: Dock::new(),
+            boost: GpuBoost::new(),
             launch_to: None,
             socket_name: Default::default(),
         }

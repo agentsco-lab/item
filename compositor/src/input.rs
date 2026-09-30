@@ -73,6 +73,10 @@ pub fn init(handle: &LoopHandle<'static, Data>) {
 impl State {
     fn on_input(&mut self, event: InputEvent<LibinputInputBackend>) {
         let Some(touch) = self.seat.get_touch() else { return };
+        // Anything the finger does wakes the GPU's clock (boost.rs).
+        if matches!(event, InputEvent::TouchDown { .. } | InputEvent::TouchMotion { .. } | InputEvent::TouchUp { .. }) {
+            self.boost.kick(hybris_hwc::now_ns());
+        }
         match event {
             InputEvent::TouchDown { event } => {
                 let pos = event.position_transformed(LAYOUT.into());

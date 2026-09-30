@@ -32,6 +32,7 @@ item, which keep running the phone day to day.
 | the session | the user's, on tty7 as phosh runs; our desktop name, a gtk portals configuration | GTK apps map in under 2 s |
 | the shade | a sheet per panel, pulled from the top edge by the finger, drawn in the compositor's own pass; the time, the date, the battery as text (fontdue, the system's fonts) | finger to screen 22-26 ms, no frames missed |
 | the dock | item's two halves at the panels' outer corners, apps from item's dock.json, a tap launches onto the panel tapped; the halves cross the hinge to the free panel and join, as item's do | launches in under 2 s; frames drawn whole (partial redraws left garbage on Adreno) |
+| the GPU's clock | raised to the top on touch and while the shell moves, 1.5 s after (the governor leaves it at 257 of 585 MHz) | Settings scrolls at 60 fps (43) |
 | frame pacing | hwcomposer's vsync wakes the loop; a frame only when something changed, a client's frame drawn at once, the shell's motion late in the frame; never two frames waiting in hwcomposer; drawn whole | 0 frames when still; a GL client's frame about 5 ms; touch to screen about 39 ms through GTK |
 
 What it does not do yet: cheaper shm frames, `wp_presentation`, the rest of the shell (the shade's quick settings and notifications, the dock, gestures between panels), the
@@ -57,6 +58,7 @@ Settings interface.
 | 6 | the dock; screenshots and frame runs | first frame not shown by hwcomposer; clients need the port's profile.d environment; partial redraws leave garbage in Adreno's tiles: frames drawn whole; Settings scrolls at 30 fps on its own side (`log/2026-09-30-step-6-dock.md`) |
 | 6b | the dock's modes and moves; clients' frames drawn at once | Settings scrolls at 40-43 fps (phosh 38-43, before 28-30), tap to screen 32 ms (before 45-48) (`log/2026-09-30-step-6b-dock-moves-and-pacing.md`) |
 | 7 | where a frame's time goes; the minimum clocks raised by hand | the GPU sits at 257 of 585 MHz half busy; at 585 Settings scrolls at 60 fps (43), the shade 23 ms; the CPUs change nothing (`log/2026-09-30-step-7-clocks.md`) |
+| 7b | the GPU boost on touch and shell motion (boost.rs) | Settings scrolls at 60 fps; a quick client's tap answer a vsync later (36 ms, 28 without); callbacks kept as the frame is drawn (`log/2026-09-30-step-7b-gpu-boost.md`) |
 | A | smithay's anvil on the Lindroid chain | not needed: the chain is not the path |
 
 The seams between smithay and libhybris, which the probes answered:
@@ -115,7 +117,7 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 ## Layout
 
 - `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `text` (fonts and labels), `output` (hwcomposer,
+  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `text` (fonts and labels), `output` (hwcomposer,
   EGL, the renderer)
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences
