@@ -13,7 +13,7 @@ use smithay::backend::egl::{EGLContext, EGLDisplay, EGLSurface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::render_elements;
-use smithay::backend::renderer::gles::{GlesRenderbuffer, GlesRenderer};
+use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::{Bind, Blit, ExportMem, ImportEgl, Offscreen, Renderer};
 use smithay::reexports::wayland_server::Resource;
@@ -96,7 +96,8 @@ pub enum Group {
 /// Our own buffer, with its own damage tracker: it keeps every pixel between
 /// frames, so only what changed is drawn into it.
 struct Canvas {
-    buffer: GlesRenderbuffer,
+    /// A texture, so that night light can draw it to the screen warmed.
+    buffer: smithay::backend::renderer::gles::GlesTexture,
     tracker: OutputDamageTracker,
 }
 
@@ -131,6 +132,13 @@ pub struct Screen {
     wave_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     orb_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
     wave_id: smithay::backend::renderer::element::Id,
+    /// The screen under the shade, blurred (glass.rs), and which opening of
+    /// the shade it was taken for.
+    glass: Option<crate::glass::Glass>,
+    glass_for: u64,
+    /// Night light's shader (night.frag), and the colour it last warmed to.
+    night_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
+    night_was: Option<[f32; 3]>,
     _hwc: HwcOutput,
 }
 
@@ -182,12 +190,12 @@ impl Screen {
         let canvas = if std::env::var_os("CANVAS").is_some_and(|v| v == "0") {
             None
         } else {
-            let buffer: GlesRenderbuffer = renderer.create_buffer(Fourcc::Abgr8888, (width, height).into()).expect("the canvas");
+            let buffer: smithay::backend::renderer::gles::GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, (width, height).into()).expect("the canvas");
             Some(Canvas { buffer, tracker: OutputDamageTracker::new((width, height), SCALE as f64, Transform::Flipped180) })
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -198,6 +206,26 @@ impl Screen {
     pub fn render(&mut self, state: &State, frame_ns: u64) -> FrameCost {
         let t0 = hybris_hwc::now_ns();
         let c0 = cpu_ns();
+        // Night light, as its setting says; NIGHT=K forces it, for tests
+        // that leave the user's settings alone.
+        let night = match std::env::var("NIGHT").ok().and_then(|k| k.parse().ok()) {
+            Some(k) => Some(warm_white(k)),
+            None => {
+                let sys = state.shade.quick.sys.lock().unwrap();
+                sys.night.then(|| warm_white(sys.night_k))
+            }
+        };
+        // The shade coming out of a closed screen: the glass under it from
+        // the frame on screen now, which it is not in yet.
+        if state.shade.opened != self.glass_for {
+            self.glass_for = state.shade.opened;
+            if let (Some(glass), Some(canvas), true) = (self.glass.as_mut(), self.canvas.as_mut(), self.canvas_ready) {
+                let size = self.output.current_mode().unwrap().size;
+                if let Err(e) = glass.take(&mut self.renderer, &mut canvas.buffer, size) {
+                    tracing::warn!("glass: {e}");
+                }
+            }
+        }
         // The shade over the launch curtain over the dock over the windows.
         // The lock screen over everything.
         // The volume bar over everything, the lock screen next.
@@ -232,13 +260,40 @@ impl Screen {
         }
         elements.extend(state.back.elements(&mut self.renderer).into_iter().map(FrameElement::from));
         let rows: Vec<crate::quick::Row> = if state.shade.visible() { state.shade_rows() } else { Vec::new() };
-        // A new notification's banner, on top of everything.
+        // A new notification's banner, on top of everything; none while
+        // do not disturb is on.
         state.shade.quick.banner_at.set(None);
-        if let Some(note) = state.notes.banner(frame_ns) {
+        let dnd = state.shade.quick.sys.lock().unwrap().dnd;
+        if let Some(note) = state.notes.banner(frame_ns).filter(|_| !dnd) {
             let (_, banner) = state.shade.quick.banner(&mut self.renderer, &note, frame_ns.saturating_sub(note.at_ns));
             elements.extend(banner.into_iter().map(FrameElement::from));
         }
-        elements.extend(state.shade.elements(&mut self.renderer, frame_ns, &rows).into_iter().map(FrameElement::from));
+        let glass = self.glass.is_some() && self.canvas.is_some();
+        elements.extend(state.shade.elements(&mut self.renderer, frame_ns, &rows, glass).into_iter().map(FrameElement::from));
+        if let (Some(g), true) = (&self.glass, state.shade.visible()) {
+            // Under each sheet, the glass cut to it: half the output's size,
+            // so at scale 1 its logical px are the output's; bottom-up, as
+            // the canvas it came from.
+            for (panel, h) in crate::layout::panels().into_iter().zip(state.shade.heights(frame_ns)) {
+                if h <= 0 {
+                    continue;
+                }
+                let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((panel.loc.x as f64, 0.0).into(), (panel.size.w as f64, h as f64).into());
+                elements.push(FrameElement::Snapshot(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
+                    g.id.clone(),
+                    self.renderer.context_id(),
+                    ((panel.loc.x * SCALE) as f64, 0.0),
+                    g.texture().clone(),
+                    1,
+                    Transform::Flipped180,
+                    None,
+                    Some(src),
+                    Some((panel.size.w, h).into()),
+                    None,
+                    smithay::backend::renderer::element::Kind::Unspecified,
+                )));
+            }
+        }
         elements.extend(state.curtain.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The keyboard and other layer surfaces, over the windows and the dock.
         elements.extend(state.layers.elements(&mut self.renderer).into_iter().map(FrameElement::Window));
@@ -323,6 +378,8 @@ impl Screen {
             // keeps everything. Drawing the whole scene cost about 4.5 ms of
             // GPU from rest; the copy costs a fraction of it.
             let age = if self.canvas_ready { 1 } else { 0 };
+            // Night light changed: the frame goes out again, warmed or not.
+            let night_now = night;
             let tb = hybris_hwc::now_ns();
             let cb = cpu_ns();
             let mut target = self.renderer.bind(&mut canvas.buffer).expect("bind the canvas");
@@ -333,10 +390,12 @@ impl Screen {
                 .render_output(&mut self.renderer, &mut target, age, &elements, [0.08, 0.1, 0.14, 1.0])
                 .expect("render_output");
             self.canvas_ready = true;
+            let changed_night = night_now != self.night_was;
+            self.night_was = night_now;
             let damaged: i64 = result.damage.map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum()).unwrap_or(0);
             // hwcomposer's buffers still need a frame each after a start or a
             // power-on, changed or not.
-            if damaged == 0 && primed && self.shot.is_none() {
+            if damaged == 0 && primed && self.shot.is_none() && !changed_night {
                 return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age, damaged_px: 0, swapped: false };
             }
             // Screenshots come from our buffer, copied before the swap (a read
@@ -348,11 +407,25 @@ impl Screen {
             let shot = Self::take_shot(&mut self.renderer, &mut self.shot, &mut self.frames_left, self.frames_drawn, size, &target, damaged);
             drop(target);
             let whole = smithay::utils::Rectangle::from_size((size.w, size.h).into());
-            let from = self.renderer.bind(&mut canvas.buffer).expect("bind the canvas");
-            let mut to = self.renderer.bind(&mut self.surface).expect("bind the window");
-            self.renderer
-                .blit(&from, &mut to, whole, whole, smithay::backend::renderer::TextureFilter::Nearest)
-                .expect("blit");
+            match (night, &self.night_program) {
+                // Night light: the canvas drawn to the screen warmed.
+                (Some(warm), Some(program)) => {
+                    use smithay::backend::renderer::Frame;
+                    let mut to = self.renderer.bind(&mut self.surface).expect("bind the window");
+                    let mut frame = self.renderer.render(&mut to, size, Transform::Normal).expect("night light");
+                    let src = smithay::utils::Rectangle::<f64, smithay::utils::Buffer>::from_size((size.w as f64, size.h as f64).into());
+                    let uniforms = [smithay::backend::renderer::gles::Uniform::new("warm", (warm[0], warm[1], warm[2]))];
+                    frame.render_texture_from_to(&canvas.buffer, src, whole, &[whole], &[whole], Transform::Normal, 1.0, Some(program), &uniforms).expect("night light");
+                    let _ = frame.finish().expect("night light");
+                }
+                _ => {
+                    let from = self.renderer.bind(&mut canvas.buffer).expect("bind the canvas");
+                    let mut to = self.renderer.bind(&mut self.surface).expect("bind the window");
+                    self.renderer
+                        .blit(&from, &mut to, whole, whole, smithay::backend::renderer::TextureFilter::Nearest)
+                        .expect("blit");
+                }
+            }
             if std::env::var_os("LOG_TIMES").is_some() {
                 let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 / 1e6;
                 let now = hybris_hwc::now_ns();
@@ -640,6 +713,16 @@ impl Screen {
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
         let _ = self.wave_program();
+        if self.night_program.is_none() {
+            match self.renderer.compile_custom_texture_shader(include_str!("night.frag"), &[smithay::backend::renderer::gles::UniformName::new("warm", smithay::backend::renderer::gles::UniformType::_3f)]) {
+                Ok(p) => self.night_program = Some(p),
+                Err(e) => tracing::warn!("night light's shader: {e}"),
+            }
+        }
+        if self.glass.is_none() && self.canvas.is_some() {
+            let size = self.output.current_mode().unwrap().size;
+            self.glass = crate::glass::Glass::new(&mut self.renderer, size);
+        }
         let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4], print: 0.0, lit: 0.0, flash: 0.0 });
         let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer) + state.pen.warm_up(&mut self.renderer) + state.setup.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
@@ -690,4 +773,14 @@ impl Screen {
         }
         any
     }
+}
+
+/// The white of a colour temperature (K), as factors for red, green and blue
+/// (Tanner Helland's fit to the black body's colours), for night light.
+fn warm_white(kelvin: u32) -> [f32; 3] {
+    let t = (kelvin.clamp(1700, 6500) as f64) / 100.0;
+    let red = 1.0;
+    let green = ((99.470_802_586_1 * t.ln() - 161.119_568_166_1) / 255.0).clamp(0.0, 1.0);
+    let blue = if t <= 19.0 { 0.0 } else { ((138.517_731_223_1 * (t - 10.0).ln() - 305.044_792_730_7) / 255.0).clamp(0.0, 1.0) };
+    [red, green as f32, blue as f32]
 }

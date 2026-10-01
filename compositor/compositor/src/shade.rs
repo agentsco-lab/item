@@ -6,8 +6,10 @@
 //! the sheet and never reaches a client. While the finger holds it, the sheet's
 //! bottom edge follows the finger; let go, it runs to open or closed by the
 //! finger's speed, or by how far it was pulled. A tap on an open sheet closes
-//! it. The sheet carries the time, the date and the battery, as text
-//! (`text.rs`).
+//! it. The sheet carries the time, the date and a status line (the network
+//! and the battery, icons and words, as the lock screen's), as text
+//! (`text.rs`); the network as an icon alone. Under it, glass (glass.rs); its content comes up as the
+//! sheet nears the bottom.
 
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
@@ -41,6 +43,8 @@ const FLING: f64 = 0.3;
 const TAP: f64 = 8.0;
 
 const SHEET: [f32; 4] = premultiplied([0.06, 0.08, 0.12], 0.97);
+/// Over glass (glass.rs): the screen under it shows, blurred.
+const SHEET_ON_GLASS: [f32; 4] = premultiplied([0.04, 0.05, 0.08], 0.62);
 const TEXT: [f32; 4] = [0.93, 0.95, 0.97, 1.0];
 const DIM: [f32; 4] = [0.62, 0.66, 0.72, 1.0];
 const HANDLE: [f32; 4] = [0.45, 0.48, 0.52, 1.0];
@@ -135,6 +139,7 @@ pub enum ShadeAsk {
     Row(usize),
     /// Open Settings on this panel.
     Settings(usize),
+    Lock,
 }
 
 pub struct Shade {
@@ -149,7 +154,14 @@ pub struct Shade {
     fonts: Option<(Font, Font)>,
     time: Label,
     date: Label,
+    /// The status line: the network's icon, the battery's icon and words.
     battery: Label,
+    net_icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
+    battery_icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
+    icons: (String, &'static str),
+    /// How many times the shade came out of a closed screen: the glass under
+    /// it is taken anew each time.
+    pub opened: u64,
 }
 
 impl Shade {
@@ -170,6 +182,10 @@ impl Shade {
             time: Label::new(64.0, TEXT),
             date: Label::new(18.0, TEXT),
             battery: Label::new(15.0, DIM),
+            net_icon: None,
+            battery_icon: None,
+            icons: (String::new(), ""),
+            opened: 0,
         };
         shade.refresh_text();
         shade
@@ -182,11 +198,23 @@ impl Shade {
         let now = local_time();
         let time = format!("{}:{:02}", now.tm_hour, now.tm_min);
         let date = date_line(&now);
-        let battery = battery();
         let mut changed = self.time.set(light, &time);
         changed |= self.date.set(regular, &date);
-        changed |= self.battery.set(regular, &battery);
         changed
+    }
+
+    /// The status line's facts (status.rs).
+    pub fn set_status(&mut self, f: &crate::status::Facts) {
+        let Some((_, regular)) = &self.fonts else { return };
+        let battery = if f.charging { format!("{}% · charging", f.battery) } else { format!("{}%", f.battery) };
+        self.battery.set(regular, &battery);
+        let icons = (f.battery_icon(), f.net_icon);
+        if icons != self.icons {
+            let path = |n: &str| format!("/usr/share/icons/Adwaita/symbolic/status/{n}.svg");
+            self.battery_icon = crate::quick::symbolic(&path(&icons.0), 16);
+            self.net_icon = crate::quick::symbolic(&path(icons.1), 16);
+            self.icons = icons;
+        }
     }
 
     /// Whether a sheet is out, and its text worth keeping up to date.
@@ -219,6 +247,9 @@ impl Shade {
                 return true;
             }
         }
+        if !self.visible() {
+            self.opened += 1;
+        }
         let sheet = &mut self.sheets[p];
         // Caught mid-run: it stops under the finger.
         sheet.run = None;
@@ -238,10 +269,13 @@ impl Shade {
     /// follows it from there.
     pub fn grab_from(&mut self, slot: TouchSlot, x: f64, start_y: f64, time_us: u64) {
         let Some(p) = layout::panel_at((x, start_y).into()) else { return };
-        let sheet = &mut self.sheets[p];
-        if sheet.grab.is_some() {
+        if self.sheets[p].grab.is_some() {
             return;
         }
+        if !self.visible() {
+            self.opened += 1;
+        }
+        let sheet = &mut self.sheets[p];
         let height = sheet.height_at(hybris_hwc::now_ns());
         sheet.run = None;
         sheet.height = height;
@@ -305,6 +339,23 @@ impl Shade {
                 }
                 Control::Close(i) => Some(ShadeAsk::Close(i)),
                 Control::Row(i) => Some(ShadeAsk::Row(i)),
+                Control::Lock => Some(ShadeAsk::Lock),
+                Control::Power => {
+                    self.quick.ask_power();
+                    None
+                }
+                Control::PowerOff => {
+                    self.quick.power(false);
+                    None
+                }
+                Control::Restart => {
+                    self.quick.power(true);
+                    None
+                }
+                Control::Media(b) => {
+                    self.quick.media_button(b);
+                    None
+                }
                 _ => None,
             };
         }
@@ -332,6 +383,16 @@ impl Shade {
             tracing::debug!("shade {p}: released at {:.0}, {:.2} px/ms, to {to:.0}", sheet.height, grab.velocity);
             sheet.run = Some(Run::new(sheet.height, to, grab.velocity));
             sheet.height = to;
+        }
+    }
+
+    /// Both sheets closed at once (the lock screen comes over them).
+    pub fn fold(&mut self) {
+        self.press = None;
+        for sheet in &mut self.sheets {
+            sheet.grab = None;
+            sheet.run = None;
+            sheet.height = 0.0;
         }
     }
 
@@ -386,33 +447,59 @@ impl Shade {
             .join(" / ")
     }
 
-    /// What the sheets draw for a frame shown at `frame_ns`, topmost first.
-    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, rows: &[Row]) -> Vec<ShellElement> {
+    /// Each sheet's height for a frame shown at `frame_ns`, whole logical
+    /// px (the glass under it is cut to the same).
+    pub fn heights(&self, frame_ns: u64) -> [i32; 2] {
+        [0, 1].map(|i| self.sheets[i].height_at(frame_ns).round() as i32)
+    }
+
+    /// What the sheets draw for a frame shown at `frame_ns`, topmost first;
+    /// over glass, the sheets let it show.
+    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, rows: &[Row], glass: bool) -> Vec<ShellElement> {
         let mut out = Vec::new();
         self.rows.set(rows.len());
-        for (i, (sheet, panel)) in self.sheets.iter().zip(layout::panels()).enumerate() {
-            let height = sheet.height_at(frame_ns);
-            // In physical px, whole ones, so an edge does not shimmer.
-            let h = (height * SCALE as f64).round() as i32;
+        let heights = self.heights(frame_ns);
+        for (i, panel) in layout::panels().into_iter().enumerate() {
+            let sheet = &self.sheets[i];
+            // In physical px, whole logical ones, so an edge does not shimmer
+            // and the glass under it is cut alike.
+            let h = heights[i] * SCALE;
             if h <= 0 {
                 continue;
             }
             let panel = panel.to_physical(SCALE);
+            // The content comes up over the last part of the way down.
+            let k = ((heights[i] as f64 / layout::LAYOUT.1 as f64 - 0.4) / 0.5).clamp(0.0, 1.0);
+            let alpha = (k * k * (3.0 - 2.0 * k)) as f32;
             // The settings (left) or the open windows (right), over the head.
-            out.extend(self.quick.elements(renderer, i, panel.loc.x, h, rows));
+            out.extend(self.quick.elements(renderer, i, panel.loc.x, h, rows, alpha));
             // The sheet's content hangs from its bottom edge: `y` is logical
             // px from it, and a label is centred on the panel.
-            for (label, y) in [(&self.time, -760), (&self.date, -668), (&self.battery, -632)] {
-                if label.extent.w == 0 {
-                    continue;
-                }
-                let x = panel.loc.x + (panel.size.w - label.extent.w * SCALE) / 2;
-                let loc = (x as f64, (h + y * SCALE) as f64);
-                match MemoryRenderBufferRenderElement::from_buffer(renderer, loc, &label.buffer, None, None, None, Kind::Unspecified) {
+            let mut put = |out: &mut Vec<ShellElement>, buffer: &smithay::backend::renderer::element::memory::MemoryRenderBuffer, x: i32, y: i32| {
+                match MemoryRenderBufferRenderElement::from_buffer(renderer, (x as f64, (h + y * SCALE) as f64), buffer, Some(alpha), None, None, Kind::Unspecified) {
                     Ok(e) => out.push(ShellElement::Text(e)),
                     Err(e) => tracing::warn!("shade: text: {e}"),
                 }
+            };
+            for (label, y) in [(&self.time, -760), (&self.date, -668)] {
+                if label.extent.w > 0 {
+                    put(&mut out, &label.buffer, panel.loc.x + (panel.size.w - label.extent.w * SCALE) / 2, y);
+                }
             }
+            // The status line, centred: the network's icon, then the
+            // battery's with its words.
+            let icons = [&self.net_icon, &self.battery_icon].iter().filter(|i| i.is_some()).count() as i32;
+            let width = icons * 22 + 10 + self.battery.extent.w;
+            let mut x = panel.loc.x + (panel.size.w - width * SCALE) / 2;
+            if let Some(ic) = &self.net_icon {
+                put(&mut out, ic, x, -628);
+                x += 32 * SCALE;
+            }
+            if let Some(ic) = &self.battery_icon {
+                put(&mut out, ic, x, -628);
+                x += 22 * SCALE;
+            }
+            put(&mut out, &self.battery.buffer, x, -630);
             let mut ids = sheet.ids.iter();
             let handle = Rectangle::<i32, Physical>::new(
                 (panel.loc.x + panel.size.w / 2 - 30 * SCALE, h - 16 * SCALE).into(),
@@ -427,7 +514,7 @@ impl Shade {
             // above it.
             let id = ids.next().expect("enough ids").clone();
             let sheet_rect = Rectangle::new(panel.loc, (panel.size.w, h).into());
-            out.push(ShellElement::Solid(SolidColorRenderElement::new(id, sheet_rect, CommitCounter::default(), SHEET, Kind::Unspecified)));
+            out.push(ShellElement::Solid(SolidColorRenderElement::new(id, sheet_rect, CommitCounter::default(), if glass { SHEET_ON_GLASS } else { SHEET }, Kind::Unspecified)));
         }
         out
     }
@@ -449,16 +536,5 @@ pub fn local_time() -> libc::tm {
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&now, &mut tm);
         tm
-    }
-}
-
-/// The battery's charge and whether it charges, from the kernel.
-fn battery() -> String {
-    let read = |f: &str| std::fs::read_to_string(format!("/sys/class/power_supply/battery/{f}")).map(|s| s.trim().to_owned());
-    match (read("capacity"), read("status")) {
-        (Ok(c), Ok(s)) if s == "Charging" => format!("{c}% · charging"),
-        (Ok(c), Ok(s)) if s == "Full" => format!("{c}% · charged"),
-        (Ok(c), _) => format!("{c}%"),
-        _ => String::new(),
     }
 }

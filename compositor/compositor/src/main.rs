@@ -26,6 +26,7 @@ mod clock;
 mod curtain;
 mod dock;
 mod gesture;
+mod glass;
 mod grid;
 mod input;
 mod layers;
@@ -336,6 +337,7 @@ impl Data {
         self.state.keyring.service(self.state.lock.locked || self.state.setup.holds_screen());
         if let Some(facts) = self.state.status.take() {
             self.state.lock.set_status(&facts);
+            self.state.shade.set_status(&facts);
             self.state.needs_redraw = true;
         }
         if self.state.lock.notice_done(hybris_hwc::now_ns()) {

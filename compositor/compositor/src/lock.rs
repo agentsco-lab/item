@@ -231,7 +231,8 @@ impl Lock {
     pub fn set_status(&mut self, f: &crate::status::Facts) {
         let Some((_, regular)) = &self.fonts else { return };
         self.battery_label.set(regular, &format!("{}%", f.battery));
-        self.net_label.set(regular, &f.net);
+        // The network as its icon alone, as in the shade.
+        self.net_label.set(regular, "");
         let icons = (f.battery_icon(), f.net_icon);
         if icons != self.status_icons {
             let path = |n: &str| format!("/usr/share/icons/Adwaita/symbolic/status/{n}.svg");
@@ -641,7 +642,7 @@ impl Lock {
         let mut y = top + 4.0 + self.time.extent.h as f64;
         put(&mut out, &self.date.buffer, cx(&self.date, left), y + rise, left_dx, 1.0);
         y += self.date.extent.h as f64 + 14.0;
-        // The status line: [battery] 84%   [network] its name, centred.
+        // The status line: [battery] 84%   [network], centred.
         let gap = 6.0;
         let item = |icon: &Option<MemoryRenderBuffer>, l: &Label| if icon.is_some() { 16.0 + gap } else { 0.0 } + l.extent.w as f64;
         let (bw, nw) = (item(&self.battery_icon, &self.battery_label), item(&self.net_icon, &self.net_label));

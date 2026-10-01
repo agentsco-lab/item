@@ -306,6 +306,11 @@ impl State {
                     window.toplevel().unwrap().send_close();
                 }
             }
+            crate::shade::ShadeAsk::Lock => {
+                tracing::info!("shade: lock");
+                self.shade.fold();
+                self.lock.lock_now();
+            }
             crate::shade::ShadeAsk::Settings(panel) => {
                 if let Some(e) = crate::apps::entry("org.sfduo.Settings.desktop").or_else(|| crate::apps::entry("org.gnome.Settings.desktop")) {
                     let icon = e.icon.as_deref().and_then(|n| crate::apps::icon(n, crate::curtain::ICON));
