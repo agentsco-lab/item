@@ -57,6 +57,7 @@ mod idle;
 mod sysfacts;
 mod walls;
 mod picker;
+mod privacy;
 mod shade;
 mod state;
 mod sysscreen;
@@ -838,6 +839,10 @@ fn main() {
                 data.state.needs_redraw = true;
             }
             if data.state.clock.refresh() {
+                data.state.needs_redraw = true;
+            }
+            let weather = data.state.system.weather();
+            if data.state.clock.set_weather(weather) {
                 data.state.needs_redraw = true;
             }
             // A call's time talked.

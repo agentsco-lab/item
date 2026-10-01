@@ -657,7 +657,11 @@ fn weather() -> Result<Weather, String> {
 }
 
 /// The worker: samples while lit, reads and draws when asked.
-pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, wake: Ping) {
+/// The weather now for the desktop's clock: the temperature, what it is
+/// called, Adwaita's icon for it.
+pub type Now = Arc<Mutex<Option<(f64, String, String)>>>;
+
+pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake: Ping) {
     let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
     let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
     let Some(fonts) = thin.zip(regular) else { return };
@@ -707,7 +711,10 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, wake: Ping) {
                     weather_cache = Some((Instant::now(), weather()));
                 }
                 match &weather_cache {
-                    Some((_, Ok(w))) => f.weather = Some(w.clone()),
+                    Some((_, Ok(w))) => {
+                        *now.lock().unwrap() = Some(w.now.clone());
+                        f.weather = Some(w.clone());
+                    }
                     Some((_, Err(e))) => f.weather_note = e.clone(),
                     None => {}
                 }

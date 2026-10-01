@@ -137,6 +137,8 @@ pub struct State {
     pub wifi: crate::nm::Wifi,
     /// Calls, from gnome-calls, shown over the lock screen.
     pub calls: crate::calls::Calls,
+    /// The privacy dot: camera, microphone, location in use.
+    pub privacy: crate::privacy::Privacy,
     pub asker: Asker,
     /// When the power key went down, unlocked and lit (input.rs).
     pub power_down_at: Option<u64>,
@@ -230,6 +232,7 @@ impl State {
             dialog: crate::dialog::Dialog::new(),
             wifi: crate::nm::Wifi::new(wake.clone()),
             calls: crate::calls::Calls::new(wake.clone()),
+            privacy: crate::privacy::Privacy::new(wake.clone()),
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),

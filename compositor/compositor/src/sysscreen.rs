@@ -51,6 +51,8 @@ pub enum TouchAsk {
 }
 
 pub struct SystemScreen {
+    /// The weather now, as its thread last read it (the desktop's clock).
+    weather: crate::sysfacts::Now,
     p: f64,
     /// The ribbon may bring it: kept read and drawn.
     wanted: bool,
@@ -68,12 +70,19 @@ pub struct SystemScreen {
 }
 
 impl SystemScreen {
+    /// The weather now: temperature, what it is called, its icon.
+    pub fn weather(&self) -> Option<(f64, String, String)> {
+        self.weather.lock().unwrap().clone()
+    }
+
     pub fn new(wake: Ping) -> SystemScreen {
         let fresh = Arc::new(Mutex::new(None));
         let (tx, rx) = channel();
         let page = fresh.clone();
-        std::thread::Builder::new().name("system screen".into()).spawn(move || crate::sysfacts::worker(rx, page, wake)).expect("system screen thread");
-        SystemScreen { p: 0.0, wanted: false, page: None, page_h: 0.0, fresh, jobs: tx, last_read_ns: 0, minute: -1, scroll: 0.0, touch: None, run: None, id: Id::new() }
+        let weather: crate::sysfacts::Now = Default::default();
+        let w = weather.clone();
+        std::thread::Builder::new().name("system screen".into()).spawn(move || crate::sysfacts::worker(rx, page, w, wake)).expect("system screen thread");
+        SystemScreen { weather, p: 0.0, wanted: false, page: None, page_h: 0.0, fresh, jobs: tx, last_read_ns: 0, minute: -1, scroll: 0.0, touch: None, run: None, id: Id::new() }
     }
 
     fn read(&mut self) {

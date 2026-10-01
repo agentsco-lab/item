@@ -256,6 +256,16 @@ impl Screen {
             let rect = smithay::utils::Rectangle::<i32, smithay::utils::Physical>::from_size((w * SCALE, h * SCALE).into());
             elements.push(FrameElement::Shell(ShellElement::Solid(smithay::backend::renderer::element::solid::SolidColorRenderElement::new(self.dim_id.clone(), rect, smithay::backend::renderer::utils::CommitCounter::default(), [0.0, 0.0, 0.0, 0.55], smithay::backend::renderer::element::Kind::Unspecified))));
         }
+        // The privacy dot, over everything, in the right panel's corner.
+        let camera = state.running().iter().any(|id| id.to_lowercase().contains("camera"));
+        if let Some(dot) = state.privacy.dot(camera) {
+            let right = crate::layout::panels()[1];
+            let x = right.loc.x as f64 + right.size.w as f64 - crate::privacy::INSET - crate::privacy::DOT;
+            let at = ((x * SCALE as f64).round(), (crate::privacy::INSET * SCALE as f64).round());
+            if let Ok(e) = smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement::from_buffer(&mut self.renderer, at, dot, None, None, None, smithay::backend::renderer::element::Kind::Unspecified) {
+                elements.push(FrameElement::Shell(ShellElement::Text(e)));
+            }
+        }
         elements.extend(state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // A window carried: where it would go, lit over the windows.
         if let Some((_, _, _, x)) = &state.carrying {

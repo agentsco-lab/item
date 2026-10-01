@@ -3,7 +3,9 @@
 //! when both are free, none when neither is - where the dock stands. Grey
 //! and thin (the time 88 px at 62 %, the date 20 px at 45 %), 20 % down the
 //! panel, and each minute it steps up to 12 px from its place, so no pixel
-//! of it is lit all day on the OLED. It takes no touches. No weather yet.
+//! of it is lit all day on the OLED. It takes no touches. Under the date,
+//! the weather now (the system screen's, from met.no): its icon, the
+//! temperature, what it is.
 //! On a panel it was not on, it fades in (300 ms); carried along the ribbon
 //! with its desk, it is not faded.
 
@@ -24,6 +26,10 @@ pub struct Clock {
     fonts: Option<(Font, Font)>,
     time: Label,
     date: Label,
+    /// The weather line, its icon, and what they were made from.
+    weather: Label,
+    weather_icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
+    weather_was: Option<(i64, String)>,
     /// The step aside, logical px, and the minute it was taken for.
     step: (i32, i32),
     minute: i32,
@@ -39,6 +45,9 @@ impl Clock {
             fonts: thin.zip(regular),
             time: Label::new(88.0, [1.0, 1.0, 1.0, 0.62]),
             date: Label::new(20.0, [1.0, 1.0, 1.0, 0.45]),
+            weather: Label::new(18.0, [1.0, 1.0, 1.0, 0.45]),
+            weather_icon: None,
+            weather_was: None,
             step: (0, 0),
             minute: -1,
             on: std::cell::Cell::new((None, 0)),
@@ -67,6 +76,27 @@ impl Clock {
             (x % (2 * SHIFT as u32 + 1)) as i32 - SHIFT
         };
         self.step = (next(), next());
+        true
+    }
+
+    /// The weather now; returns whether the line changed.
+    pub fn set_weather(&mut self, now: Option<(f64, String, String)>) -> bool {
+        let Some((_, regular)) = &self.fonts else { return false };
+        let key = now.as_ref().map(|(t, word, _)| (t.round() as i64, word.clone()));
+        if key == self.weather_was {
+            return false;
+        }
+        self.weather_was = key;
+        match now {
+            Some((t, word, icon)) => {
+                self.weather.set(regular, &format!("{}°  {word}", t.round() as i64));
+                self.weather_icon = crate::lock::tinted(&format!("/usr/share/icons/Adwaita/symbolic/status/{icon}-symbolic.svg"), 20, [255, 255, 255]);
+            }
+            None => {
+                self.weather.set(regular, "");
+                self.weather_icon = None;
+            }
+        }
         true
     }
 
@@ -112,6 +142,21 @@ impl Clock {
                 out.push(ShellElement::Text(e));
             }
             y += label.extent.h + GAP;
+        }
+        // The weather, its icon before it, a little below the date.
+        if self.weather.extent.w > 0 {
+            let icon_w = if self.weather_icon.is_some() { 26 } else { 0 };
+            let x = rect.loc.x + (rect.size.w - self.weather.extent.w - icon_w) / 2 + self.step.0;
+            let y = y + 4;
+            let put = |out: &mut Vec<ShellElement>, renderer: &mut GlesRenderer, b: &smithay::backend::renderer::element::memory::MemoryRenderBuffer, x: i32, y: i32, a: f32| {
+                if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * SCALE) as f64, (y * SCALE) as f64), b, Some(a), None, None, Kind::Unspecified) {
+                    out.push(ShellElement::Text(e));
+                }
+            };
+            if let Some(icon) = &self.weather_icon {
+                put(&mut out, renderer, icon, x, y + (self.weather.extent.h - 20) / 2, alpha * 0.5);
+            }
+            put(&mut out, renderer, &self.weather.buffer, x + icon_w, y, alpha);
         }
         out
     }
