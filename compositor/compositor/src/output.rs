@@ -143,6 +143,9 @@ pub struct Screen {
     night_was: Option<[f32; 3]>,
     /// The ribbon's dot.
     dot: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
+    /// The wallpaper (wall.frag), its element and the shift it was drawn at.
+    wall_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
+    wall: Option<(smithay::backend::renderer::gles::element::PixelShaderElement, f32)>,
     _hwc: HwcOutput,
 }
 
@@ -199,7 +202,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dot: None, _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dot: None, wall_program: None, wall: None, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -435,6 +438,11 @@ impl Screen {
                 }
             }
         }
+        // The wallpaper, under everything; it moves a little with the ribbon.
+        let shift = crate::state::wallpaper_shift(state.ribbon.position(frame_ns)) as f32;
+        if let Some(e) = self.wallpaper(shift) {
+            elements.push(FrameElement::Pixel(e));
+        }
         let elements_ns = hybris_hwc::now_ns() - t0;
         let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
         self.reprime = self.reprime.saturating_sub(1);
@@ -585,6 +593,38 @@ impl Screen {
                 None
             }
         }
+    }
+
+    /// The wallpaper's element at `shift` (wall.frag, wallpaper.glsl), its
+    /// uniform set again only when the shift changes.
+    fn wallpaper(&mut self, shift: f32) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        if self.wall_program.is_none() {
+            let source = include_str!("wall.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
+            match self.renderer.compile_custom_pixel_shader(&source, &[UniformName::new("shift", UniformType::_1f)]) {
+                Ok(p) => self.wall_program = Some(p),
+                Err(e) => {
+                    tracing::warn!("the wallpaper's shader: {e}");
+                    return None;
+                }
+            }
+        }
+        match self.wall.as_mut() {
+            Some((e, last)) => {
+                if *last != shift {
+                    e.update_uniforms(vec![Uniform::new("shift", shift)]);
+                    *last = shift;
+                }
+            }
+            None => {
+                let (w, h) = crate::layout::LAYOUT;
+                let area = smithay::utils::Rectangle::<i32, smithay::utils::Logical>::from_size((w, h).into());
+                let program = self.wall_program.clone()?;
+                let e = smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, Some(vec![area]), 1.0, vec![Uniform::new("shift", shift)], smithay::backend::renderer::element::Kind::Unspecified);
+                self.wall = Some((e, shift));
+            }
+        }
+        self.wall.as_ref().map(|(e, _)| e.clone())
     }
 
     /// The first setup's circle (orb.frag).
@@ -781,6 +821,7 @@ impl Screen {
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
         let _ = self.wave_program();
+        let _ = self.wallpaper(0.0);
         if self.night_program.is_none() {
             match self.renderer.compile_custom_texture_shader(include_str!("night.frag"), &[smithay::backend::renderer::gles::UniformName::new("warm", smithay::backend::renderer::gles::UniformType::_3f)]) {
                 Ok(p) => self.night_program = Some(p),

@@ -165,6 +165,15 @@ impl Ribbon {
         Some(x - panel as f64 * PAGE)
     }
 
+    /// Where the window onto the row stands at `frame_ns`, pages (the left
+    /// panel's page), moving or not.
+    pub fn position(&self, frame_ns: u64) -> f64 {
+        if !self.moving() {
+            return self.view as f64;
+        }
+        self.xs(frame_ns).first().map(|(_, x)| -x / PAGE).unwrap_or(self.view as f64)
+    }
+
     /// The pages on the panels with the window onto the row at `view`.
     pub fn at(&self, view: usize) -> [Option<&Page>; 2] {
         [self.pages.get(view), self.pages.get(view + 1)]

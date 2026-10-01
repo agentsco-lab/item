@@ -285,6 +285,9 @@ impl State {
     /// stands for the panels now.
     pub fn place_dock(&mut self, frame_ns: u64) {
         let view = self.ribbon.view;
+        // The drops: alive after a touch; what they see moves with the row.
+        self.dock.touched = self.lock.last_touch_ns;
+        self.dock.shift = wallpaper_shift(self.ribbon.position(frame_ns));
         if let Some((v, k)) = self.ribbon.scrolling(frame_ns) {
             let (from, to) = (self.dock_taken(v), self.dock_taken(v + 1));
             self.dock.scrub(from, to, k);
@@ -604,6 +607,12 @@ impl ClientData for ClientState {
 }
 
 /// A window's app id, as its client set it ("" before it does).
+/// The wallpaper's shift for the ribbon at `position` (pages): it moves a
+/// little with the row, behind it (wallpaper.glsl).
+pub fn wallpaper_shift(position: f64) -> f64 {
+    (position - 1.0) * crate::ribbon::PAGE * 0.12
+}
+
 pub fn app_id(window: &Window) -> String {
     with_states(window.toplevel().unwrap().wl_surface(), |states| {
         states.data_map.get::<XdgToplevelSurfaceData>().and_then(|d| d.lock().unwrap().app_id.clone())

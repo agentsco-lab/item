@@ -17,11 +17,14 @@ uniform float tint;
 // near (a smooth union, as drops do), each squashed as jelly is
 // (`squash*`: its width and height scaled about its bottom middle).
 //
-// `metal` 0, water: a clear body faintly tinted; a thin light ring along
-// the edge, where the surface reflects (brighter along the top); light
-// gathered inside along the bottom, as a drop focuses it; a small sharp
-// highlight above left; a soft shadow under it. `metal` 1: soft silver.
-// Logical px of the area (smithay's `size`).
+// `metal` 0, water: the wallpaper seen through it, bent as a lens bends
+// it (wallpaper.glsl, at the screen point `origin` + the area's); a thin
+// light ring along the edge, where the surface reflects (brighter along the
+// top); light gathered inside along the bottom, as a drop focuses it; a
+// small sharp highlight above left; a soft shadow under it. Alive (`life`
+// 0 to 1, `time` s): a ripple along the edge, a slow breath, the highlight
+// drifting. `metal` 1: soft silver. Logical px of the area (smithay's
+// `size`).
 uniform vec4 half0;     // x, y, w, h
 uniform vec4 half1;
 uniform vec2 squash0;   // width, height scales
@@ -31,6 +34,11 @@ uniform float melt;     // the smooth union's reach, px
 uniform vec4 body;      // premultiplied
 uniform float shine;
 uniform float metal;
+uniform vec2 origin;
+uniform float time;
+uniform float life;
+
+//_WALLPAPER_
 
 float box(vec2 p, vec4 r, vec2 s) {
     vec2 half_size = 0.5 * r.zw * s;
@@ -42,10 +50,16 @@ float box(vec2 p, vec4 r, vec2 s) {
 }
 
 float field(vec2 p) {
-    float a = box(p, half0, squash0);
-    float b = box(p, half1, squash1);
+    // Breathing: a little taller and back, each drop in its own time.
+    vec2 b0 = squash0 * vec2(1.0, 1.0 + life * 0.018 * sin(time * 1.3));
+    vec2 b1 = squash1 * vec2(1.0, 1.0 + life * 0.018 * sin(time * 1.3 + 2.1));
+    float a = box(p, half0, b0);
+    float b = box(p, half1, b1);
     float h = clamp(0.5 + 0.5 * (b - a) / melt, 0.0, 1.0);
-    return mix(b, a, h) - melt * h * (1.0 - h);
+    float d = mix(b, a, h) - melt * h * (1.0 - h);
+    // The surface trembling along the edge, slowly.
+    d += life * 0.9 * sin(p.x * 0.05 + time * 1.9) * sin(p.y * 0.11 - time * 1.4 + p.x * 0.013);
+    return d;
 }
 
 void main() {
@@ -65,7 +79,7 @@ void main() {
     float t = clamp(-d / depth, 0.0, 1.0);
     float slope = 1.0 - t;
     vec3 n = normalize(vec3(g * slope * 1.6, 1.0));
-    vec3 l = normalize(vec3(-0.45, -0.7, 0.55));
+    vec3 l = normalize(vec3(-0.45 + life * 0.08 * sin(time * 0.7), -0.7, 0.55));
     vec3 h = normalize(l + vec3(0.0, 0.0, 1.0));
     float inside = max(-d, 0.0);
 
@@ -74,7 +88,12 @@ void main() {
     float gather = exp(-pow((inside - 6.0) / 4.0, 2.0)) * pow(max(g.y, 0.0), 1.5) * 0.45;
     float spark = pow(max(dot(n, h), 0.0), 140.0) * 1.1 + pow(max(dot(n, h), 0.0), 24.0) * 0.12;
     float light = (ring + gather + spark) * shine;
-    vec4 water = body + vec4(0.93, 0.97, 1.0, 1.0) * light;
+    // What is behind, bent: towards the edge it is pulled in from further
+    // out, as through a lens.
+    vec2 sp = p + origin;
+    vec2 bent = sp - g * slope * 26.0;
+    vec3 seen = wallpaper(bent) * 1.12 + body.rgb * 0.35;
+    vec4 water = vec4(seen, 1.0) + vec4(0.93, 0.97, 1.0, 1.0) * light;
 
     // Soft silver.
     float across = clamp((p.y - min(half0.y, half1.y)) / max(max(half0.w, half1.w), 1.0), 0.0, 1.0);

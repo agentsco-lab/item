@@ -139,8 +139,10 @@ struct Move {
 
 /// The jelly: how flat a half goes under the hinge (its height, and its
 /// width a little wider), and its wobble to rest after a move.
-const FLATTEN: f64 = 0.4;
-const WIDEN: f64 = 0.12;
+const FLATTEN: f64 = 0.72;
+const WIDEN: f64 = 0.38;
+/// Out from under the hinge, a drop gathers up with a bounce.
+const POP: f64 = 0.14;
 const WOBBLE_NS: u64 = 650_000_000;
 const WOBBLE: f64 = 0.07;
 const WOBBLE_PERIOD_NS: f64 = 260e6;
@@ -157,6 +159,9 @@ const STRETCH_MAX: f64 = 0.16;
 const STRETCH_FOLLOW: f64 = 0.35;
 /// The icons seen through the water: a little larger.
 const LENS: f64 = 1.04;
+/// Alive after a touch: so long, then calming over the last part.
+const ALIVE_NS: u64 = 15_000_000_000;
+const CALM_NS: u64 = 2_000_000_000;
 
 /// The halves coming in from the sides after an unlock (item's RISE_MS).
 const RISE_NS: u64 = 360_000_000;
@@ -177,6 +182,13 @@ pub struct Dock {
     /// Each half's x as last drawn and when, and its stretch from moving.
     last_x: std::cell::Cell<Option<(u64, [f64; 2])>>,
     stretch: std::cell::Cell<[f64; 2]>,
+    /// Each half: whether it was flat under the hinge, and when it came out.
+    flat: std::cell::Cell<[bool; 2]>,
+    popped: std::cell::Cell<[u64; 2]>,
+    /// The last touch on the screen: the drops are alive for a while after.
+    pub touched: u64,
+    /// The wallpaper's parallax (wallpaper.glsl), for what the drops see.
+    pub shift: f64,
     /// The drops' shader (dock.frag) and its element, its uniforms as last
     /// set (set again only when they change).
     program: std::cell::RefCell<Option<smithay::backend::renderer::gles::GlesPixelProgram>>,
@@ -213,7 +225,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), program: Default::default(), drops: Default::default() }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flat: Default::default(), popped: Default::default(), touched: 0, shift: 0.0, program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -444,9 +456,26 @@ impl Dock {
                 true
             }
             Some(_) => true,
-            // Wobbling, or still stretched from moving.
-            None => self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS) || self.stretch.get().iter().any(|s| s.abs() > 0.003),
+            // Wobbling, still stretched from moving, gathering up after the
+            // hinge, or alive after a touch.
+            None => {
+                self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS)
+                    || self.stretch.get().iter().any(|s| s.abs() > 0.003)
+                    || self.popped.get().iter().any(|&t| t != 0 && frame_ns < t + WOBBLE_NS)
+                    || (self.mode != Mode::Hidden && self.life(frame_ns) > 0.0)
+            }
         }
+    }
+
+    /// How alive the drops are at `frame_ns`: 1 after a touch, calming to 0.
+    fn life(&self, frame_ns: u64) -> f64 {
+        let since = frame_ns.saturating_sub(self.touched);
+        if self.touched == 0 || since >= ALIVE_NS {
+            return 0.0;
+        }
+        let left = (ALIVE_NS - since) as f64 / CALM_NS as f64;
+        let k = left.min(1.0);
+        k * k * (3.0 - 2.0 * k)
     }
 
     /// Icon `i` of a half at `place`, logical px.
@@ -556,7 +585,7 @@ impl Dock {
             // Squashed about its anchor (the bump), then as jelly about its
             // bottom middle.
             let (bx, by, bw, bh) = boxes[h];
-            let (sx, sy) = jelly[h];
+            let (sx, sy, flat) = jelly[h];
             let mid = bx + bw / 2.0;
             let foot = by + bh;
             let tx = |x: f64| mid + (p.anchor + (x - p.anchor) * p.scale - mid) * sx;
@@ -569,10 +598,17 @@ impl Dock {
                     push(&mut out, &self.dot, tx(c.loc.x + (c.size.w - d) / 2.0), ty(c.loc.y + c.size.h + (PAD as f64 - d) / 2.0), None, None, 1.0);
                 }
                 if let Some(icon) = &app.icon {
-                    // A pressed icon dims under the finger.
-                    let alpha = if half.pressed.is_some_and(|(q, _, _)| q == i) { 0.55 } else { 1.0 };
-                    // Through the water, a little larger, about its middle.
-                    let (iw, ih) = (ICON as f64 * p.scale * sx * LENS, ICON as f64 * sy * LENS);
+                    // A pressed icon dims under the finger; in a drop gone
+                    // flat it sinks and fades.
+                    let pressed = if half.pressed.is_some_and(|(q, _, _)| q == i) { 0.55 } else { 1.0 };
+                    let alpha = pressed * ((1.0 - flat) * (1.0 - flat)) as f32;
+                    if alpha < 0.01 {
+                        continue;
+                    }
+                    // Through the water, a little larger, about its middle;
+                    // squashed with the drop, but not flattened with it.
+                    let sink = 1.0 - 0.45 * flat;
+                    let (iw, ih) = (ICON as f64 * p.scale * sx * LENS * sink / (1.0 + WIDEN * flat), ICON as f64 * (sy + FLATTEN * flat) * LENS * sink);
                     let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
                     let src = Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into());
                     push(&mut out, icon, cx - iw / 2.0, cy - ih / 2.0, Some((iw, ih)), Some(src), alpha);
@@ -580,15 +616,17 @@ impl Dock {
             }
         }
         // The drops under the icons.
-        if let Some(e) = self.drops(renderer, &boxes, &jelly) {
+        let squash = [(jelly[0].0, jelly[0].1), (jelly[1].0, jelly[1].1)];
+        if let Some(e) = self.drops(renderer, &boxes, &squash, frame_ns) {
             out.push(ShellElement::Pixel(e));
         }
         out
     }
 
     /// Each half's jelly at `frame_ns`: its width and height scales -
-    /// flattened as it goes under the hinge, wobbling after a move.
-    fn jelly(&self, places: &[Place; 2], frame_ns: u64) -> [(f64, f64); 2] {
+    /// spread flat as it goes under the hinge, gathering up with a bounce
+    /// out of it, wobbling after a move - and how flat it is (0 to 1).
+    fn jelly(&self, places: &[Place; 2], frame_ns: u64) -> [(f64, f64, f64); 2] {
         let panels = layout::panels();
         let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
         let wobble = self.landed.map(|t| {
@@ -616,25 +654,40 @@ impl Dock {
             self.last_x.set(Some((frame_ns, xs)));
             self.stretch.set(stretch);
         }
-        [0, 1].map(|h| {
+        let (mut flat, mut popped) = (self.flat.get(), self.popped.get());
+        let out = [0, 1].map(|h| {
             let w = self.halves[h].size.0 as f64;
             let (x0, x1) = (places[h].x, places[h].x + w);
-            // How much of it is under the hinge, or near it: the slot.
-            let reach = 34.0;
+            // How much of it is under the hinge, or near it: the slot. A
+            // drop spreads flat as it nears, under it a puddle.
+            let reach = 70.0;
             let under = ((x1.min(h1 + reach) - x0.max(h0 - reach)).max(0.0) / (h1 - h0 + 2.0 * reach).min(w)).min(1.0);
             let f = under * under * (3.0 - 2.0 * under);
-            let mut s = (1.0 + WIDEN * f + stretch[h], 1.0 - FLATTEN * f - 0.6 * stretch[h]);
-            if let Some(wb) = wobble {
-                s.1 *= 1.0 + wb;
-                s.0 *= 1.0 - 0.6 * wb;
+            // Out of it: it gathers up again, with a bounce.
+            if f > 0.4 {
+                flat[h] = true;
+            } else if flat[h] && f < 0.05 {
+                flat[h] = false;
+                popped[h] = frame_ns;
             }
-            s
-        })
+            let pop = if popped[h] != 0 {
+                let u = frame_ns.saturating_sub(popped[h]) as f64;
+                if u >= WOBBLE_NS as f64 { 0.0 } else { POP * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
+            } else {
+                0.0
+            };
+            let wb = wobble.unwrap_or(0.0) + pop;
+            let s = (1.0 + WIDEN * f + stretch[h], 1.0 - FLATTEN * f - 0.6 * stretch[h]);
+            (s.0 * (1.0 - 0.6 * wb), s.1 * (1.0 + wb), f)
+        });
+        self.flat.set(flat);
+        self.popped.set(popped);
+        out
     }
 
     /// The drops, through dock.frag: an element over the screen's bottom,
     /// its uniforms set again only when they change.
-    fn drops(&self, renderer: &mut GlesRenderer, boxes: &[(f64, f64, f64, f64)], jelly: &[(f64, f64); 2]) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
+    fn drops(&self, renderer: &mut GlesRenderer, boxes: &[(f64, f64, f64, f64)], jelly: &[(f64, f64); 2], frame_ns: u64) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
         use smithay::backend::renderer::gles::element::PixelShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         if self.program.borrow().is_none() {
@@ -648,8 +701,13 @@ impl Dock {
                 UniformName::new("body", UniformType::_4f),
                 UniformName::new("shine", UniformType::_1f),
                 UniformName::new("metal", UniformType::_1f),
+                UniformName::new("origin", UniformType::_2f),
+                UniformName::new("time", UniformType::_1f),
+                UniformName::new("life", UniformType::_1f),
+                UniformName::new("shift", UniformType::_1f),
             ];
-            match renderer.compile_custom_pixel_shader(include_str!("dock.frag"), &names) {
+            let source = include_str!("dock.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
+            match renderer.compile_custom_pixel_shader(&source, &names) {
                 Ok(p) => *self.program.borrow_mut() = Some(p),
                 Err(e) => {
                     tracing::warn!("dock: the drops' shader: {e}");
@@ -679,6 +737,10 @@ impl Dock {
             b1.0 as f32, y(b1.1), b1.2 as f32, b1.3 as f32,
             j0.0 as f32, j0.1 as f32, j1.0 as f32, j1.1 as f32,
             melt as f32,
+            ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0,
+            self.life(frame_ns) as f32,
+            self.shift as f32,
+            top as f32,
         ];
         let uniforms = |v: &[f32]| {
             vec![
@@ -691,6 +753,10 @@ impl Dock {
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
+                Uniform::new("origin", (0.0f32, v[16])),
+                Uniform::new("time", v[13]),
+                Uniform::new("life", v[14]),
+                Uniform::new("shift", v[15]),
             ]
         };
         let mut drops = self.drops.borrow_mut();
