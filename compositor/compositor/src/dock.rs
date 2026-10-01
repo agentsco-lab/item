@@ -14,9 +14,9 @@
 //! The halves are drops of mercury (dock.frag), the mercury dock: as they
 //! near they melt into one, as drops do, and part again with a thread
 //! between them; going under the hinge a half is squashed flat, as jelly
-//! through a slot, and after a move it wobbles to rest. Mercury: a mirror
-//! of a bright sky over a dark horizon, a hard highlight (DOCK_WATER=1:
-//! water instead). The icons are squashed with it.
+//! through a slot, and after a move it wobbles to rest. Mercury, kept
+//! quiet: soft silver, a clean edge, a light line along its top
+//! (DOCK_WATER=1: water instead). The icons are squashed with it.
 //!
 //! The dock is the screen's, not a page's: while the ribbon moves under a
 //! finger (ribbon.rs), the same move follows it, between where the halves

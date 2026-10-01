@@ -131,6 +131,12 @@ impl Grid {
         }
     }
 
+    /// While it moves (under a finger, or running): its panel and how far
+    /// up it is, for the dock to follow.
+    pub fn moving(&self, frame_ns: u64) -> Option<(usize, f64)> {
+        (self.grab.is_some() || self.run.is_some()).then(|| (self.panel, self.at(frame_ns)))
+    }
+
     /// The panel it holds while up: the dock leaves it.
     pub fn panel(&self) -> Option<usize> {
         (self.p > 0.0 || self.grab.is_some() || self.run.is_some()).then_some(self.panel)

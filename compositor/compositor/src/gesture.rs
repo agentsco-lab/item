@@ -150,6 +150,15 @@ impl Gestures {
         self.runs.iter().find(|r| &r.window == window).map(|r| r.at(frame_ns))
     }
 
+    /// A window moving away or back (under a finger, or running): it and
+    /// how far away it is, for the dock to follow.
+    pub fn moving_window(&self, frame_ns: u64) -> Option<(Window, f64)> {
+        if let Some(g) = &self.grab {
+            return Some((g.window.clone(), g.p));
+        }
+        self.runs.first().map(|r| (r.window.clone(), r.at(frame_ns)))
+    }
+
     /// Whether a window is on its way away: its panel counts as free, so the
     /// dock sets off as the window goes, not after.
     pub fn leaving(&self, window: &Window) -> bool {

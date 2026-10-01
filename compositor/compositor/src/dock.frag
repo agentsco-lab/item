@@ -15,10 +15,9 @@ uniform float tint;
 // The dock as two drops of mercury (dock.rs): each half a rounded box,
 // the two melting into one as they near (a smooth union, as drops do),
 // each squashed as jelly is (`squash*`: its width and height scaled about
-// its bottom middle). Mercury (`metal` 1): an opaque mirror, its dome
-// reflecting a bright sky above a dark horizon and a dim floor, a hard
-// highlight from above left; water (`metal` 0): a clear body, a lit rim, a
-// soft highlight. Logical px of the area (smithay's `size`).
+// its bottom middle). Mercury (`metal` 1), kept quiet: soft silver with a
+// clean edge, a light line along its top; water (`metal` 0): a clear body,
+// a lit rim, a soft highlight. Logical px of the area (smithay's `size`).
 uniform vec4 half0;     // x, y, w, h
 uniform vec4 half1;
 uniform vec2 squash0;   // width, height scales
@@ -54,8 +53,8 @@ void main() {
     // The surface: a dome rising from the edge over `depth` px.
     float e = 0.75;
     vec2 g = vec2(field(p + vec2(e, 0.0)) - field(p - vec2(e, 0.0)), field(p + vec2(0.0, e)) - field(p - vec2(0.0, e))) / (2.0 * e);
-    // Water a thin film over its edge; mercury a drop, round all over.
-    float depth = mix(14.0, 30.0, metal);
+    // The rounding over the edge, px.
+    float depth = mix(14.0, 9.0, metal);
     float t = clamp(-d / depth, 0.0, 1.0);
     float slope = 1.0 - t;
     vec3 n = normalize(vec3(g * slope * 1.6, 1.0));
@@ -69,21 +68,16 @@ void main() {
     vec4 water = body * (1.0 - 0.25 * low);
     water.rgb += vec3(0.75, 0.9, 0.95) * rim * 0.55 * shine;
     water += vec4(1.0) * spec * 0.55 * shine;
-    // Mercury: what the mirror sees along the reflected ray (screen y
-    // down: a ray going up sees the sky).
-    vec3 r = reflect(vec3(0.0, 0.0, -1.0), n);
-    float up = -r.y;
-    float sky = smoothstep(-0.05, 0.6, up);
-    float horizon = 1.0 - smoothstep(0.0, 0.18, abs(up - 0.02));
-    float env = mix(0.28, 0.97, sky) - 0.22 * horizon;
-    // The floor's glow under the bottom edge, and the flat top a soft grey.
-    env += 0.12 * smoothstep(0.2, 0.9, -up);
-    env = mix(env, 0.7, t * t * 0.3);
-    vec3 silver = vec3(0.93, 0.95, 1.0) * env;
-    float hard = pow(max(dot(n, h), 0.0), 90.0);
-    silver += vec3(1.0) * hard * 0.9 * shine;
-    // A darker line where the mirror turns away, at the very edge.
-    silver *= 1.0 - 0.35 * pow(rim, 3.0);
-    vec4 mercury = vec4(silver, 1.0);
+    // Mercury, kept quiet: soft silver, lighter above than below, a thin
+    // light line along the top edge and a faint one along the bottom, a
+    // small soft highlight; the edge clean.
+    float across = clamp((p.y - min(half0.y, half1.y)) / max(max(half0.w, half1.w), 1.0), 0.0, 1.0);
+    float tone = mix(0.84, 0.62, across);
+    float edge = 1.0 - t;
+    float top_line = edge * edge * max(-n.y, 0.0) * 1.6;
+    float low_line = edge * edge * max(n.y, 0.0) * 0.7;
+    float soft = pow(max(dot(n, h), 0.0), 18.0);
+    vec3 silver = vec3(0.94, 0.95, 0.97) * (tone + 0.16 * top_line - 0.1 * low_line) + vec3(0.12) * soft * shine;
+    vec4 mercury = vec4(min(silver, vec3(1.0)), 1.0);
     gl_FragColor = mix(water, mercury, metal) * cover * alpha;
 }

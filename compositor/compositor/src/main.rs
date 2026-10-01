@@ -370,16 +370,8 @@ impl Data {
         // The dock stands on the panels whose pages are desks, nor under a
         // launch curtain or the grid; while the ribbon moves under a finger,
         // it moves with it between the pages on either side (dock.rs).
-        match self.state.ribbon.scrolling(self.pacing.target_ns) {
-            Some((view, k)) => {
-                let (from, to) = (self.state.dock_taken(view), self.state.dock_taken(view + 1));
-                self.state.dock.scrub(from, to, k);
-            }
-            None => {
-                let taken = self.state.dock_taken(self.state.ribbon.view);
-                self.state.dock.follow(taken, started);
-            }
-        }
+        let _ = started;
+        self.state.place_dock(self.pacing.target_ns);
         // Callbacks::Draw: frame callbacks before the frame is drawn: the
         // clients' buffers for it are already taken, and a client starts on
         // its next frame while this one is drawn and presented (8-9 ms).

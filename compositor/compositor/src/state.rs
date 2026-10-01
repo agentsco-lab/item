@@ -255,20 +255,58 @@ impl State {
     /// those whose page is not a desk, but for a window on its way away;
     /// and those under the launch curtain or the grid.
     pub fn dock_taken(&self, view: usize) -> [bool; 2] {
+        let mut taken = self.pages_taken(view, None);
+        if let Some(p) = self.grid.panel() {
+            taken[p] = true;
+        }
+        taken
+    }
+
+    /// The panels whose pages are not desks at `view`, and those under the
+    /// launch curtain; a window on its way away frees its panel, unless it
+    /// is `but` (whose motion the dock follows itself).
+    fn pages_taken(&self, view: usize, but: Option<&Window>) -> [bool; 2] {
         use crate::ribbon::Page;
         let pages = self.ribbon.at(view);
         let mut taken = [0, 1].map(|k| match pages[k] {
             Some(Page::Desk(_)) | None => false,
-            Some(Page::App(w)) => !self.gestures.leaving(w),
+            Some(Page::App(w)) => Some(w) == but || !self.gestures.leaving(w),
             Some(_) => true,
         });
         if let Some(p) = self.curtain.panel() {
             taken[p] = true;
         }
-        if let Some(p) = self.grid.panel() {
-            taken[p] = true;
-        }
         taken
+    }
+
+    /// Where the dock goes, and how: under a finger (the ribbon moving
+    /// along, the grid coming up, a window going away) it follows the
+    /// motion between the two ends; else it moves on its own to where it
+    /// stands for the panels now.
+    pub fn place_dock(&mut self, frame_ns: u64) {
+        let view = self.ribbon.view;
+        if let Some((v, k)) = self.ribbon.scrolling(frame_ns) {
+            let (from, to) = (self.dock_taken(v), self.dock_taken(v + 1));
+            self.dock.scrub(from, to, k);
+        } else if let Some((panel, k)) = self.grid.moving(frame_ns) {
+            let from = self.pages_taken(view, None);
+            let mut to = from;
+            to[panel] = true;
+            self.dock.scrub(from, to, k);
+        } else if let Some((window, k)) = self.gestures.moving_window(frame_ns).filter(|(w, _)| self.ribbon.find(w).is_some()) {
+            let from = self.pages_taken(view, Some(&window));
+            let mut to = from;
+            if let Some(panel) = (0..2).find(|&p| self.ribbon.on(p) == Some(&crate::ribbon::Page::App(window.clone()))) {
+                to[panel] = false;
+            }
+            if let Some(p) = self.grid.panel() {
+                to[p] = true;
+            }
+            self.dock.scrub(from, to, k);
+        } else {
+            let taken = self.dock_taken(view);
+            self.dock.follow(taken, frame_ns);
+        }
     }
 
     /// Which panels a window has. A window on its way away no longer has
