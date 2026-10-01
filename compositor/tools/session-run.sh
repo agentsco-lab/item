@@ -77,6 +77,10 @@ session_env_restore() {
 # user may for the run; the file's user and the old value come back after.
 KG=/sys/class/kgsl/kgsl-3d0/devfreq/min_freq
 KG_OLD=$(cat $KG 2>/dev/null)
+# The big cores' minimum clocks, as the GPU's (boost.rs).
+CPU_MINS="/sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq"
+CPU_OLD=""
+for f in $CPU_MINS; do CPU_OLD="$CPU_OLD $(cat $f 2>/dev/null)"; done
 
 rollback() {
     log "rollback"
@@ -84,6 +88,12 @@ rollback() {
     pkill -9 -x item-compositor 2>/dev/null
     [ -n "$SESSION" ] && session_files_restore
     session_env_restore
+    set -- $CPU_OLD
+    for f in $CPU_MINS; do
+        [ -n "$1" ] && { chown root $f; echo $1 > $f; }
+        shift
+    done
+    log "CPU min clocks restored: $(cat $CPU_MINS | tr '\n' ' ')"
     if [ -n "$KG_OLD" ]; then
         chown root $KG; echo $KG_OLD > $KG
         log "GPU min clock restored: $(cat $KG)"
@@ -107,13 +117,14 @@ log "composer up: $(composers)"
 session_env
 [ -n "$SESSION" ] && session_files
 [ -n "$KG_OLD" ] && chown $USER_NAME $KG
+for f in $CPU_MINS; do chown $USER_NAME $f 2>/dev/null; done
 
 chmod 755 /tmp/item-compositor
 START="/tmp/item-compositor"
 [ -n "$SESSION" ] && { chmod 755 /tmp/item-session.sh; START="/tmp/item-session.sh"; }
 rm -f /tmp/item-compositor.log   # systemd writes a file: output from its start, not truncating
 systemd-run --wait --collect --unit=item-compositor \
-    -p User=$USER_NAME -p PAMName=phosh -p TTYPath=/dev/tty7 -p StandardInput=tty-fail \
+    -p User=$USER_NAME -p PAMName=phosh -p TTYPath=/dev/tty7 -p StandardInput=tty-fail -p LimitRTPRIO=10 \
     -p StandardOutput=file:/tmp/item-compositor.log -p StandardError=file:/tmp/item-compositor.log \
     -p RuntimeMaxSec=$T -p WorkingDirectory=/tmp -p ExecStartPre=+/usr/bin/chvt\ 7 \
     -p Environment=EGL_PLATFORM=hwcomposer \

@@ -220,7 +220,16 @@ impl State {
         // "Phosh:GNOME": GNOME's apps still see GNOME, and NotShowIn=item and
         // item's portal configuration apply.
         let command = format!("export XDG_CURRENT_DESKTOP=item:GNOME XDG_SESSION_DESKTOP=item; {command}");
-        let child = std::process::Command::new("sh")
+        use std::os::unix::process::CommandExt;
+        let mut command_line = std::process::Command::new("sh");
+        // An app gets every core, not the loop's own (sched.rs).
+        unsafe {
+            command_line.pre_exec(|| {
+                crate::sched::unpin();
+                Ok(())
+            });
+        }
+        let child = command_line
             .arg(if std::env::var_os("NO_LOGIN_SHELL").is_some() { "-c" } else { "-lc" })
             .arg(&command)
             .env("WAYLAND_DISPLAY", &self.socket_name)
@@ -307,7 +316,10 @@ impl State {
             self.dock.scrub(from, to, k);
         } else {
             let taken = self.dock_taken(view);
-            self.dock.follow(taken, frame_ns);
+            // A move begins: the clocks up now, before its first frame.
+            if self.dock.follow(taken, frame_ns) {
+                self.boost.kick(hybris_hwc::now_ns());
+            }
         }
     }
 
@@ -728,6 +740,8 @@ impl XdgShellHandler for State {
             self.curtain.adopt(p, surface.wl_surface());
         }
         let window = Window::new_wayland_window(surface);
+        // The pages move for it: the clocks up before they do.
+        self.boost.kick(hybris_hwc::now_ns());
         let p = panels.iter().position(|r| *r == panel).unwrap_or(0);
         self.ribbon.open(window.clone(), p);
         self.space.map_element(window.clone(), panel.loc, true);
@@ -743,6 +757,7 @@ impl XdgShellHandler for State {
         // The space drops the window at its next refresh; the dock may come
         // back onto its panel. Its last frame is seen closing.
         self.closing.push((surface.wl_surface().id(), hybris_hwc::now_ns()));
+        self.boost.kick(hybris_hwc::now_ns());
         // Its page leaves the row.
         let page = self.ribbon.pages.iter().find_map(|p| match p {
             crate::ribbon::Page::App(w) if w.toplevel().unwrap().wl_surface() == surface.wl_surface() => Some(w.clone()),

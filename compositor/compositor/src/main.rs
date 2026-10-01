@@ -47,6 +47,7 @@ mod pensheet;
 mod protocols;
 mod quick;
 mod ribbon;
+mod sched;
 mod shade;
 mod state;
 mod sysscreen;
@@ -613,6 +614,8 @@ fn main() {
         )
         .init();
     let args = args();
+    // This thread is the loop: on the big cores, ahead of the apps.
+    sched::favour_this_thread();
 
     let mut event_loop: EventLoop<Data> = EventLoop::try_new().expect("event loop");
     let display: Display<State> = Display::new().expect("display");
