@@ -69,7 +69,10 @@ void main() {
     if (print > 0.001) {
         // A whorl a little taller than wide, its middle a little high, the
         // ridges not quite round.
-        vec2 q = vec2(p.x * 1.1, p.y + 0.04) / PRINT;
+        // Seen through the drop it is in: larger in the middle, where the
+        // water is deepest.
+        float dome = 1.0 - d * d;
+        vec2 q = vec2(p.x * 1.1, p.y + 0.04) / PRINT * (1.0 - 0.14 * dome);
         float qa = atan(q.x, -q.y) / TAU;
         if (qa < 0.0) qa += 1.0;
         // Rounder in the middle, a little uneven further out.
@@ -98,7 +101,9 @@ void main() {
         float glow = clamp((k - qa) * 30.0, 0.0, 1.0);
         vec4 dim = vec4(0.22, 0.22, 0.22, 0.22);
         vec4 ridge = mix(dim, accent * (1.0 + 0.45 * flash), glow);
-        color += ridge * line * shown * (1.0 - ring);
+        // Fainter towards the drop's edge.
+        float edge = 1.0 - smoothstep(0.82, 1.0, d);
+        color += ridge * line * shown * edge * (1.0 - ring);
     }
     gl_FragColor = color * alpha;
 }

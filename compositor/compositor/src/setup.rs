@@ -95,7 +95,7 @@ const POKE_NS: f64 = 1.4e9;
 /// How dark the wallpaper is under the setup.
 const SHADE: f32 = 0.5;
 const PIN_MARK_Y: f64 = 120.0;
-const PRINT_R: f64 = 104.0;
+const PRINT_R: f64 = 92.0;
 /// The reader, under the power key (lock.rs's POWER_Y).
 const READER_Y: f64 = 455.0;
 const ARROW_ICON: &str = "/usr/share/icons/Adwaita/symbolic/actions/go-next-symbolic.svg";
@@ -507,12 +507,13 @@ impl Setup {
                 Orb { x: middle(1), y: PIN_MARK_Y, r: PIN_DROP_R, fill, ..orb }
             }
             Step::Finger => {
-                // A touch: the ring swells a little and lets go.
+                // A drop by the reader with the print inside; a touch
+                // swells it a little, and it lets go.
                 let flash = self.flash(frame_ns);
                 // The whole finger taken: the print turns green.
                 let green = self.last_at.map(|t| ease(frame_ns.saturating_sub(t) as f64 / 300_000_000.0) as f32).unwrap_or(0.0);
                 let accent = std::array::from_fn(|i| ACCENT[i] + (GREEN[i] - ACCENT[i]) * green);
-                Orb { x: middle(1), y: READER_Y, r: PRINT_R + 5.0 * flash, thickness: 0.022, base: dim(0.2), accent, print: 1.0, flash, ..orb }
+                Orb { x: middle(1), y: READER_Y, r: PRINT_R + 6.0 * flash, base: dim(0.2), accent, print: 1.0, flash, ..orb }
             }
             // A drop again, the dock's size: it goes on to be the dock.
             Step::Done => Orb { r: LAST_DROP_R, ..orb },
@@ -535,7 +536,7 @@ impl Setup {
         let since = |t: u64| if t == 0 { f64::MAX } else { frame_ns.saturating_sub(t) as f64 };
         let poke = (-since(self.poked) / (POKE_NS / 3.0)).exp();
         let moved = (-since(self.moved_at) / (POKE_NS / 2.0)).exp() * 0.7;
-        base.max(poke).max(moved)
+        base.max(poke).max(moved).max(self.flash(frame_ns))
     }
 
     /// A touch's flash, 1 fading to 0.

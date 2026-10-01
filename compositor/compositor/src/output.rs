@@ -790,8 +790,14 @@ impl Screen {
                 }
             }
         }
-        if water < 0.999 || self.wall.is_none() {
-            out.extend(self.orb_element(orb, if self.wall.is_none() { 1.0 } else { 1.0 - water }));
+        // Over a drop, only the print in it (no ring), bright over the
+        // setup's dark; the rings where the drop is not.
+        if self.wall.is_none() {
+            out.extend(self.orb_element(orb, 1.0));
+        } else if water < 0.999 {
+            out.extend(self.orb_element(orb, 1.0 - water));
+        } else if orb.print > 0.001 {
+            out.extend(self.orb_element(&crate::setup::Orb { thickness: 0.0, ..*orb }, 1.0));
         }
         (drop, out)
     }

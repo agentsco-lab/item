@@ -1083,7 +1083,7 @@ impl Dock {
         // The level of what it holds: from the drop's foot up.
         let level_y = centre.1 + r - d * sy * fill.0;
         let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(sx, sy); 2], drops, melt: APART_MELT, one: None, trail };
-        self.drops(renderer, &shape, frame_ns, wall, life, r.min(DROP_RADIUS as f64 * 1.6) as f32, alpha, (level_y, fill.1, fill.0), &self.lone)
+        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (level_y, fill.1, fill.0), &self.lone)
     }
 
     /// Up to four round drops drawn as one (melting together `melt` px

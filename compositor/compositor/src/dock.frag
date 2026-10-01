@@ -147,7 +147,7 @@ void main() {
     // the drop is flat.
     // How deep the curve goes in: 12 px for the dock's drops, deeper for a
     // larger one (the first setup's), a dome rather than a puddle.
-    float depth = max(12.0, radius - 24.0);
+    float depth = clamp(radius - 24.0, 12.0, 44.0);
     vec2 g = vec2(0.0);
     if (d < 1.5 && d > -depth - 4.0) {
         float e = 0.75;
