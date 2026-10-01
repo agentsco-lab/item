@@ -290,8 +290,11 @@ impl Dock {
         MOVE_NS + if Self::bumps(m) { SPRING_NS } else { 0 }
     }
 
-    fn bumps(m: &Move) -> bool {
-        m.from == Mode::Both && matches!(m.to, Mode::On(_))
+    /// item's bump on arriving beside the other half: not for drops of
+    /// water, whose meeting is its own (the waist filling, the join
+    /// swelling and settling); its rebound parted them again for a moment.
+    fn bumps(_m: &Move) -> bool {
+        false
     }
 
     /// The halves off the screen's sides, coming in from `at` over RISE_NS,
