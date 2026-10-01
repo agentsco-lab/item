@@ -245,6 +245,29 @@ impl State {
             self.needs_redraw = true;
             return;
         }
+        // Choosing the wallpaper: every touch is the picker's.
+        let count = self.walls.names.len();
+        match &contact {
+            Contact::Down(slot, pos, t) if self.picker.is_open() => {
+                self.picker.down(*slot, *pos, *t, count);
+                self.needs_redraw = true;
+                return;
+            }
+            Contact::Motion(slot, pos, t) if self.picker.holds(*slot) => {
+                self.picker.motion(*slot, *pos, *t);
+                self.needs_redraw = true;
+                return;
+            }
+            Contact::Up(slot, _) if self.picker.holds(*slot) => {
+                if let Some(i) = self.picker.up(*slot, count) {
+                    let name = self.walls.names[i].clone();
+                    self.walls.choose(&name, true);
+                }
+                self.needs_redraw = true;
+                return;
+            }
+            _ => {}
+        }
         // Locked: every touch is the lock screen's.
         match &contact {
             Contact::Down(slot, pos, t) if self.lock.holds_screen() => {

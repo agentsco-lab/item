@@ -225,12 +225,12 @@ pub struct Dock {
     trail: std::cell::Cell<Option<([f64; 4], u64)>>,
     /// When a finger was last on a drop: they are alive for a while after.
     touched: std::cell::Cell<u64>,
-    /// The wallpaper's parallax (wallpaper.glsl), for what the drops see.
-    pub shift: f64,
     /// The drops' shader (dock.frag) and its element, its uniforms as last
     /// set (set again only when they change).
-    program: std::cell::RefCell<Option<smithay::backend::renderer::gles::GlesPixelProgram>>,
-    drops: std::cell::RefCell<Option<(smithay::backend::renderer::gles::element::PixelShaderElement, Vec<f32>)>>,
+    program: std::cell::RefCell<Option<smithay::backend::renderer::gles::GlesTexProgram>>,
+    /// The drops' element id and the uniforms it was drawn with: a new id
+    /// when they change, so the frame takes it again.
+    drops: std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>,
 }
 
 /// What a touch on the dock asks for.
@@ -263,7 +263,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -614,7 +614,9 @@ impl Dock {
     }
 
     /// What the dock draws for a frame shown at `frame_ns`, topmost first.
-    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, running: &[String]) -> Vec<ShellElement> {
+    /// `wall`: the wallpaper's texture, its size (logical px) and where the
+    /// screen's left edge is in it, which the drops see through themselves.
+    pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, running: &[String], wall: Option<(&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)>) -> Vec<ShellElement> {
         let mut out = Vec::new();
         let places = self.places(frame_ns);
         let bottom = layout::LAYOUT.1 as f64;
@@ -666,8 +668,8 @@ impl Dock {
             }
         }
         // The drops under the icons.
-        if let Some(e) = self.drops(renderer, &shape, frame_ns) {
-            out.push(ShellElement::Pixel(e));
+        if let Some(e) = wall.and_then(|w| self.drops(renderer, &shape, frame_ns, w)) {
+            out.push(ShellElement::Shaded(e));
         }
         out
     }
@@ -868,15 +870,16 @@ impl Dock {
 
     /// The drops, through dock.frag: an element over the screen's bottom,
     /// its uniforms set again only when they change.
-    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
-        use smithay::backend::renderer::gles::element::PixelShaderElement;
+    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        use smithay::backend::renderer::gles::element::TextureShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        use smithay::backend::renderer::Renderer;
         if self.program.borrow().is_none() {
             let mut names: Vec<UniformName> = ["b0", "b1", "b2", "b3", "s01", "s23", "one", "meet", "body", "trail"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)).collect();
-            names.extend(["radius", "melt", "shine", "metal", "time", "life", "shift", "wet"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
-            names.push(UniformName::new("origin", UniformType::_2f));
-            let source = include_str!("dock.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
-            match renderer.compile_custom_pixel_shader(&source, &names) {
+            names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["origin", "texl", "src0"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)));
+            match renderer.compile_custom_texture_shader(include_str!("dock.frag"), &names) {
                 Ok(p) => *self.program.borrow_mut() = Some(p),
                 Err(e) => {
                     tracing::warn!("dock: the drops' shader: {e}");
@@ -936,7 +939,9 @@ impl Dock {
         v.extend([meet[0] as f32, meet[1] as f32, x(meet[2]), meet[3] as f32]);
         let t = shape.trail.0;
         v.extend([x(t[0]), y(t[1]), t[2] as f32, t[3] as f32, shape.trail.1 as f32]);
-        v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, self.life(frame_ns) as f32, self.shift as f32, top as f32, left as f32]);
+        let (texture, texl, woff) = wall;
+        v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, self.life(frame_ns) as f32, woff as f32, top as f32, left as f32]);
+        v.extend([texl.0 as f32, texl.1 as f32, (woff + left as f64) as f32, top as f32]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -952,33 +957,44 @@ impl Dock {
                 Uniform::new("melt", v[37]),
                 Uniform::new("time", v[38]),
                 Uniform::new("life", v[39]),
-                Uniform::new("shift", v[40]),
+                Uniform::new("woff", v[40]),
                 Uniform::new("origin", (v[42], v[41])),
+                Uniform::new("texl", (v[43], v[44])),
+                Uniform::new("src0", (v[45], v[46])),
                 Uniform::new("radius", DROP_RADIUS),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
             ]
         };
+        // A new id when anything changed: the frame takes the area again.
         let mut drops = self.drops.borrow_mut();
-        match drops.as_mut() {
-            Some((e, last)) => {
-                use smithay::backend::renderer::element::Element;
-                if e.geometry(1.0.into()).to_logical(1) != area {
-                    e.resize(area, None);
-                }
-                if *last != v {
-                    e.update_uniforms(uniforms(&v));
-                    *last = v;
-                }
+        let id = match drops.as_mut() {
+            Some((id, last)) if *last == v => id.clone(),
+            _ => {
+                let id = smithay::backend::renderer::element::Id::new();
+                *drops = Some((id.clone(), v.clone()));
+                id
             }
-            None => {
-                let program = self.program.borrow().clone()?;
-                let e = PixelShaderElement::new(program, area, None, 1.0, uniforms(&v), Kind::Unspecified);
-                *drops = Some((e, v));
-            }
-        }
-        drops.as_ref().map(|(e, _)| e.clone())
+        };
+        let program = self.program.borrow().clone()?;
+        // The wallpaper's part under the area: the drops' shader samples the
+        // texture wherever the water bends what is behind it.
+        let src = Rectangle::<f64, Logical>::new((woff + left as f64, top as f64).into(), (area.size.w as f64, area.size.h as f64).into());
+        let inner = TextureRenderElement::from_static_texture(
+            id,
+            renderer.context_id(),
+            ((area.loc.x * SCALE) as f64, (area.loc.y * SCALE) as f64),
+            texture.clone(),
+            SCALE,
+            Transform::Normal,
+            None,
+            Some(src),
+            Some(area.size),
+            None,
+            Kind::Unspecified,
+        );
+        Some(TextureShaderElement::new(inner, program, uniforms(&v)))
     }
 }
 

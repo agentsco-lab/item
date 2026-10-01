@@ -143,10 +143,12 @@ pub struct Screen {
     night_was: Option<[f32; 3]>,
     /// The ribbon's dot.
     dot: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
-    /// The wallpaper (wall.frag) drawn once into a texture at half the
-    /// output's scale, wider than the screen by its parallax; and the id
-    /// it is drawn under, new as it moves, and at which shift.
+    /// The wallpaper (walls.rs): a texture the output's scale, wider than
+    /// the screen by its parallax; the one before, fading out under it, and
+    /// since when; the id it is drawn under, new as it moves, and at which
+    /// shift.
     wall: Option<smithay::backend::renderer::gles::GlesTexture>,
+    wall_old: Option<(smithay::backend::renderer::gles::GlesTexture, u64, smithay::backend::renderer::element::Id)>,
     wall_at: (smithay::backend::renderer::element::Id, f32),
     _hwc: HwcOutput,
 }
@@ -204,7 +206,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dot: None, wall: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -279,6 +281,9 @@ impl Screen {
         }
         let glass = self.glass.is_some() && self.canvas.is_some();
         elements.extend(state.shade.elements(&mut self.renderer, frame_ns, &rows, glass).into_iter().map(FrameElement::from));
+        // The wallpaper's choosing, over the desktop.
+        let current = state.walls.names.iter().position(|n| *n == state.walls.current).unwrap_or(0);
+        elements.extend(state.picker.elements(&mut self.renderer, frame_ns, &state.walls.thumbs, current).into_iter().map(FrameElement::from));
         if let (Some(g), true) = (&self.glass, state.shade.visible()) {
             // Under each sheet, the glass cut to it: half the output's size,
             // so at scale 1 its logical px are the output's; bottom-up, as
@@ -354,8 +359,12 @@ impl Screen {
         elements.extend(state.grid.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
         // The dock is the screen's: where it stands (it follows the ribbon
         // itself, dock.rs). The clock is its desk's: carried with it.
-        elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
+        let shift_now = crate::state::wallpaper_shift(state.ribbon.position(frame_ns));
+        let wall_for_drops = self.wall.as_ref().map(|t| (t, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT + shift_now));
+        elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running, wall_for_drops).into_iter().map(FrameElement::from));
         let clock_panel = state.ribbon.clock_panel().or(state.dock.home_panel());
+        // Choosing the wallpaper: no clock over it.
+        let clock_panel = if state.picker.visible(frame_ns) { None } else { clock_panel };
         let carried = state.ribbon.clock_panel().is_some();
         let clock = state.clock.elements(&mut self.renderer, clock_panel, frame_ns, carried);
         match clock_panel.and_then(|k| state.ribbon.carried(k, frame_ns)) {
@@ -442,9 +451,8 @@ impl Screen {
         }
         // The wallpaper, under everything; it moves a little with the ribbon.
         let shift = crate::state::wallpaper_shift(state.ribbon.position(frame_ns)) as f32;
-        if let Some(e) = self.wallpaper(shift) {
-            elements.push(FrameElement::Snapshot(e));
-        }
+        let wall = self.wallpaper(shift, frame_ns);
+        elements.extend(wall.into_iter().map(FrameElement::Snapshot));
         let elements_ns = hybris_hwc::now_ns() - t0;
         let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
         self.reprime = self.reprime.saturating_sub(1);
@@ -599,58 +607,90 @@ impl Screen {
         }
     }
 
-    /// The wallpaper at `shift`: its texture (drawn once, wall.frag) seen
-    /// through a window the screen's size moved by the shift. Its gradients
-    /// are soft: half the output's scale shows no less, and a frame copies
-    /// it instead of working it out for every pixel.
-    fn wallpaper(&mut self, shift: f32) -> Option<smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>> {
-        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
-        let (w, h) = crate::layout::LAYOUT;
-        let (left, right) = (crate::state::WALL_LEFT as i32, crate::state::WALL_RIGHT as i32);
-        let full_w = w + left + right;
-        if self.wall.is_none() {
-            let t = hybris_hwc::now_ns();
-            let source = include_str!("wall.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
-            let program = match self.renderer.compile_custom_pixel_shader(&source, &[UniformName::new("shift", UniformType::_1f)]) {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::warn!("the wallpaper's shader: {e}");
-                    return None;
-                }
-            };
-            let area = smithay::utils::Rectangle::<i32, smithay::utils::Logical>::from_size((full_w, h).into());
-            // The texture's left edge is WALL_LEFT left of the screen's.
-            let e = smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, Some(vec![area]), 1.0, vec![Uniform::new("shift", -(left as f32))], smithay::backend::renderer::element::Kind::Unspecified);
-            let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from((full_w / 2, h / 2));
-            let mut texture: smithay::backend::renderer::gles::GlesTexture = self.renderer.create_buffer(Fourcc::Abgr8888, size).ok()?;
-            let mut tracker = OutputDamageTracker::new((size.w, size.h), 0.5, Transform::Normal);
-            {
-                let mut target = self.renderer.bind(&mut texture).ok()?;
-                tracker.render_output(&mut self.renderer, &mut target, 0, &[FrameElement::Pixel(e)], [0.0, 0.0, 0.0, 1.0]).ok()?;
-            }
-            tracing::info!("wallpaper: drawn in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
-            self.wall = Some(texture);
+    /// A wallpaper decoded (walls.rs) to the GPU, fading in over the one
+    /// before; Aurora (no rows) drawn by wall.frag.
+    pub fn set_wallpaper(&mut self, picture: crate::walls::Picture) {
+        use smithay::backend::renderer::ImportMem;
+        let (name, rgba, w, h) = picture;
+        let t = hybris_hwc::now_ns();
+        let texture = if rgba.is_empty() {
+            self.aurora()
+        } else {
+            self.renderer.import_memory(&rgba, Fourcc::Abgr8888, (w as i32, h as i32).into(), false).map_err(|e| tracing::warn!("wallpaper: {e}")).ok()
+        };
+        let Some(texture) = texture else { return };
+        tracing::info!("wallpaper: {name} to the GPU in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
+        if let Some(old) = self.wall.replace(texture) {
+            self.wall_old = Some((old, hybris_hwc::now_ns(), smithay::backend::renderer::element::Id::new()));
         }
+        self.wall_at = (smithay::backend::renderer::element::Id::new(), self.wall_at.1);
+    }
+
+    /// Whether a wallpaper is still fading in.
+    pub fn wall_fading(&self, now_ns: u64) -> bool {
+        self.wall_old.as_ref().is_some_and(|(_, at, _)| now_ns < at + WALL_FADE_NS + 20_000_000)
+    }
+
+    /// Aurora: wall.frag (wallpaper.glsl) drawn once into a texture.
+    fn aurora(&mut self) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        let h = crate::layout::LAYOUT.1;
+        let full_w = wall_width();
+        let source = include_str!("wall.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
+        let program = match self.renderer.compile_custom_pixel_shader(&source, &[UniformName::new("shift", UniformType::_1f)]) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("the wallpaper's shader: {e}");
+                return None;
+            }
+        };
+        let area = smithay::utils::Rectangle::<i32, smithay::utils::Logical>::from_size((full_w, h).into());
+        // The texture's left edge is WALL_LEFT left of the screen's.
+        let e = smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, Some(vec![area]), 1.0, vec![Uniform::new("shift", -(crate::state::WALL_LEFT as f32))], smithay::backend::renderer::element::Kind::Unspecified);
+        let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from((full_w * SCALE, h * SCALE));
+        let mut texture: smithay::backend::renderer::gles::GlesTexture = self.renderer.create_buffer(Fourcc::Abgr8888, size).ok()?;
+        let mut tracker = OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Normal);
+        {
+            let mut target = self.renderer.bind(&mut texture).ok()?;
+            tracker.render_output(&mut self.renderer, &mut target, 0, &[FrameElement::Pixel(e)], [0.0, 0.0, 0.0, 1.0]).ok()?;
+        }
+        Some(texture)
+    }
+
+    /// The wallpaper at `shift`: its texture seen through a window the
+    /// screen's size, moved by the shift; the one before under it while the
+    /// new one fades in.
+    fn wallpaper(&mut self, shift: f32, frame_ns: u64) -> Vec<smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        let (w, h) = crate::layout::LAYOUT;
         // Moved: a new id, so the frame takes it all again.
         if self.wall_at.1 != shift {
             self.wall_at = (smithay::backend::renderer::element::Id::new(), shift);
         }
-        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((((left as f32 + shift) / 2.0) as f64, 0.0).into(), ((w / 2) as f64, (h / 2) as f64).into());
-        // All of it opaque, in the texture's own px.
-        let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((full_w / 2, h / 2).into());
-        Some(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
-            self.wall_at.0.clone(),
-            self.renderer.context_id(),
-            (0.0, 0.0),
-            self.wall.clone()?,
-            1,
-            Transform::Normal,
-            None,
-            Some(src),
-            Some((w, h).into()),
-            Some(vec![opaque]),
-            smithay::backend::renderer::element::Kind::Unspecified,
-        ))
+        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new(((crate::state::WALL_LEFT as f32 + shift) as f64, 0.0).into(), (w as f64, h as f64).into());
+        let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((wall_width() * SCALE, h * SCALE).into());
+        let context = self.renderer.context_id();
+        let element = |id: smithay::backend::renderer::element::Id, texture: smithay::backend::renderer::gles::GlesTexture, alpha: Option<f32>| {
+            TextureRenderElement::from_static_texture(id, context.clone(), (0.0, 0.0), texture, SCALE, Transform::Normal, alpha, Some(src), Some((w, h).into()), alpha.is_none().then(|| vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified)
+        };
+        let mut out = Vec::new();
+        let Some(texture) = self.wall.clone() else { return out };
+        match self.wall_old.clone() {
+            Some((old, at, old_id)) if frame_ns < at + WALL_FADE_NS => {
+                let k = (frame_ns.saturating_sub(at) as f32 / WALL_FADE_NS as f32).clamp(0.0, 1.0);
+                let k = k * k * (3.0 - 2.0 * k);
+                // The new one, a new id each frame of the fade.
+                out.push(element(smithay::backend::renderer::element::Id::new(), texture, Some(k.max(0.001))));
+                out.push(element(old_id, old, None));
+            }
+            Some(_) => {
+                self.wall_old = None;
+                self.wall_at.0 = smithay::backend::renderer::element::Id::new();
+                out.push(element(self.wall_at.0.clone(), texture, None));
+            }
+            None => out.push(element(self.wall_at.0.clone(), texture, None)),
+        }
+        out
     }
 
     /// The first setup's circle (orb.frag).
@@ -857,7 +897,7 @@ impl Screen {
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
         let _ = self.wave_program();
-        let _ = self.wallpaper(0.0);
+
         if self.night_program.is_none() {
             match self.renderer.compile_custom_texture_shader(include_str!("night.frag"), &[smithay::backend::renderer::gles::UniformName::new("warm", smithay::backend::renderer::gles::UniformType::_3f)]) {
                 Ok(p) => self.night_program = Some(p),
@@ -928,4 +968,12 @@ fn warm_white(kelvin: u32) -> [f32; 3] {
     let green = ((99.470_802_586_1 * t.ln() - 161.119_568_166_1) / 255.0).clamp(0.0, 1.0);
     let blue = if t <= 19.0 { 0.0 } else { ((138.517_731_223_1 * (t - 10.0).ln() - 305.044_792_730_7) / 255.0).clamp(0.0, 1.0) };
     [red, green as f32, blue as f32]
+}
+
+/// A wallpaper fading in over the one before.
+const WALL_FADE_NS: u64 = 450_000_000;
+
+/// The wallpaper's width, logical px: the screen's and the parallax's room.
+fn wall_width() -> i32 {
+    crate::layout::LAYOUT.0 + (crate::state::WALL_LEFT + crate::state::WALL_RIGHT) as i32
 }

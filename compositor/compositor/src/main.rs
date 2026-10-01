@@ -48,6 +48,8 @@ mod protocols;
 mod quick;
 mod ribbon;
 mod sched;
+mod walls;
+mod picker;
 mod shade;
 mod state;
 mod sysscreen;
@@ -264,6 +266,18 @@ impl Data {
     /// draw anyway.
     fn on_watchdog(&mut self) {
         let now = hybris_hwc::now_ns();
+        // A finger held still on a desk: the wallpaper's choosing.
+        if !self.state.picker.is_open() && !self.state.lock.holds_screen() && !self.state.setup.holds_screen() {
+            if let Some(slot) = self.state.grid.long_press(now) {
+                let current = self.state.walls.names.iter().position(|n| *n == self.state.walls.current).unwrap_or(0);
+                let count = self.state.walls.names.len();
+                self.state.picker.open(slot, current, count);
+                self.state.walls.ask_thumbs();
+                crate::fingerprint::buzz("button-pressed");
+                self.state.boost.kick(now);
+                self.state.needs_redraw = true;
+            }
+        }
         self.state.lock.idle(now);
         self.state.boost.tick(now);
         if now.saturating_sub(hybris_hwc::last_vsync_ns()) > 50_000_000 {
@@ -521,7 +535,12 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
-        if self.state.clock.fading(now) {
+        let count = self.state.walls.names.len();
+        if self.state.picker.settle(self.pacing.target_ns, count) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        if self.state.clock.fading(now) || self.screen.wall_fading(now) {
             self.state.needs_redraw = true;
         }
         if self.state.ribbon.unsettled && !self.state.ribbon.moving() {
@@ -729,6 +748,13 @@ fn main() {
         .insert_source(wake_source, |_, _, data: &mut Data| {
             data.state.lock.poll();
             data.take_logind_asks();
+            // A wallpaper decoded, to the GPU; the picker's small pictures.
+            if let Some(picture) = data.state.walls.take_loaded() {
+                data.screen.set_wallpaper(picture);
+            }
+            if data.state.walls.take_thumbs() {
+                data.state.needs_redraw = true;
+            }
             if !data.state.ribbon.moving() && data.state.system.refresh() {
                 data.screen.warm_pages(&data.state);
             }

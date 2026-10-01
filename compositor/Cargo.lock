@@ -879,6 +879,8 @@ dependencies = [
  "wayland-server",
  "wayland-sys",
  "zbus",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

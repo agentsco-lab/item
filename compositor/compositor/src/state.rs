@@ -125,6 +125,10 @@ pub struct State {
     /// A touch in a panel's bottom band, until it shows which way it goes:
     /// up puts the window away, sideways moves the ribbon.
     pub bottom_start: Option<(smithay::backend::input::TouchSlot, Point<f64, Logical>)>,
+    /// The wallpapers, and which one is on (walls.rs).
+    pub walls: crate::walls::Walls,
+    /// The desktop's editing: choosing the wallpaper (picker.rs).
+    pub picker: crate::picker::Picker,
     /// Every page in one row, the panels a window onto it (ribbon.rs).
     pub ribbon: crate::ribbon::Ribbon,
     /// The panel the next window goes to, asked for by a launch from the
@@ -197,6 +201,8 @@ impl State {
             paces: Default::default(),
             put_away: Vec::new(),
             ribbon: crate::ribbon::Ribbon::new(),
+            walls: crate::walls::Walls::new(wake.clone()),
+            picker: crate::picker::Picker::new(),
             bottom_start: None,
             launch_to: None,
             socket_name: Default::default(),
@@ -264,6 +270,10 @@ impl State {
     /// those whose page is not a desk, but for a window on its way away;
     /// and those under the launch curtain or the grid.
     pub fn dock_taken(&self, view: usize) -> [bool; 2] {
+        // Choosing the wallpaper: the dock away, the wallpaper whole.
+        if self.picker.is_open() {
+            return [true, true];
+        }
         let mut taken = self.pages_taken(view, None);
         if let Some(p) = self.grid.panel() {
             taken[p] = true;
@@ -294,8 +304,6 @@ impl State {
     /// stands for the panels now.
     pub fn place_dock(&mut self, frame_ns: u64) {
         let view = self.ribbon.view;
-        // What the drops see moves with the row.
-        self.dock.shift = wallpaper_shift(self.ribbon.position(frame_ns));
         if let Some((v, k)) = self.ribbon.scrolling(frame_ns) {
             let (from, to) = (self.dock_taken(v), self.dock_taken(v + 1));
             self.dock.scrub(from, to, k);
@@ -626,8 +634,8 @@ pub fn wallpaper_shift(position: f64) -> f64 {
 
 /// How far the wallpaper may move each way (its texture is that much wider
 /// than the screen, output.rs).
-pub const WALL_LEFT: f64 = 100.0;
-pub const WALL_RIGHT: f64 = 200.0;
+pub const WALL_LEFT: f64 = 60.0;
+pub const WALL_RIGHT: f64 = 140.0;
 
 pub fn app_id(window: &Window) -> String {
     with_states(window.toplevel().unwrap().wl_surface(), |states| {

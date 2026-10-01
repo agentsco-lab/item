@@ -1,16 +1,36 @@
+#version 100
+
 //_DEFINES_
+
+#if defined(EXTERNAL)
+#extension GL_OES_EGL_image_external : require
+#endif
 
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
 #else
 precision mediump float;
 #endif
-varying vec2 v_coords;
-uniform vec2 size;
+#if defined(EXTERNAL)
+uniform samplerExternalOES tex;
+#else
+uniform sampler2D tex;
+#endif
 uniform float alpha;
+varying vec2 v_coords;
 #if defined(DEBUG_FLAGS)
 uniform float tint;
 #endif
+
+// Drawn over the wallpaper's texture (`tex`, `texl` logical px; output.rs),
+// the area its part from `src0`: the screen's left edge is `woff` into it.
+uniform vec2 texl;
+uniform vec2 src0;
+uniform float woff;
+
+vec3 wallpaper(vec2 sp) {
+    return texture2D(tex, (sp + vec2(woff, 0.0)) / texl).rgb;
+}
 
 // The mercury dock (dock.rs), seen from above: up to four drops of water,
 // each a capsule (its ends round as surface tension makes them), squashed
@@ -21,13 +41,12 @@ uniform float tint;
 // fills (`meet.x`), the join swelling out and back (`meet.y` at `meet.z`).
 //
 // `metal` 0, water: the wallpaper seen through it, bent as a lens bends it
-// (wallpaper.glsl, at the screen point `origin` + the area's); a thin light
+// (the screen point `origin` + the area's, in the wallpaper's texture); a thin light
 // ring along the edge, brighter along the top; light gathered inside along
 // the bottom; a small sharp highlight above left; a soft shadow under it;
 // wet spots where a drop clung to an edge (`trail`, `wet`). Alive (`life`
 // 0 to 1, `time` s): a ripple along the edge, a slow breath, the highlight
-// drifting. `metal` 1: soft silver. Logical px of the area (smithay's
-// `size`).
+// drifting. `metal` 1: soft silver. Logical px of the area.
 uniform vec4 b0;        // x, y, w, h
 uniform vec4 b1;
 uniform vec4 b2;
@@ -46,8 +65,6 @@ uniform float time;
 uniform float life;
 uniform vec4 trail;     // x, y, w, h
 uniform float wet;
-
-//_WALLPAPER_
 
 float box(vec2 p, vec4 r, vec2 s) {
     vec2 half_size = 0.5 * r.zw * s;
@@ -102,7 +119,7 @@ float near(vec2 p) {
 }
 
 void main() {
-    vec2 p = v_coords * size;
+    vec2 p = v_coords * texl - src0;
     vec2 sp = p + origin;
     float tw = trace(p);
     float wetness = wet * (1.0 - smoothstep(-9.0, 3.0, tw));

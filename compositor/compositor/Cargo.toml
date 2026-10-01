@@ -29,3 +29,6 @@ sha2 = "0.10"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc", "block-padding"] }
 base64 = "0.22"
+# The wallpapers (walls.rs): JPEG, decoded on a thread.
+zune-jpeg = "0.4"
+zune-core = "0.4"

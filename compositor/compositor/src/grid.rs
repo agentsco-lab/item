@@ -50,6 +50,9 @@ const SLIDE_NS: f64 = 220e6;
 const SWIPE: f64 = 12.0;
 
 /// What a touch on the grid, or on an empty panel, asks for.
+/// A finger held this still this long on a desk: the desktop's editing.
+const LONG_PRESS_NS: u64 = 500_000_000;
+
 pub enum Ask {
     Nothing,
     /// Pull the shade: the touch began here.
@@ -67,6 +70,8 @@ struct Pending {
     panel: usize,
     on_grid: bool,
     cell: Option<usize>,
+    /// When the finger came down (ns).
+    at: u64,
 }
 
 struct Grab {
@@ -173,8 +178,17 @@ impl Grid {
         }
         let cell = if up && self.run.is_none() { self.cell_at(pos) } else { None };
         self.pressed = cell;
-        self.pending = Some(Pending { slot, start: pos, panel, on_grid: up, cell });
+        self.pending = Some(Pending { slot, start: pos, panel, on_grid: up, cell, at: hybris_hwc::now_ns() });
         true
+    }
+
+    /// A finger held still on a desk (not on the grid) for LONG_PRESS_NS:
+    /// it is no longer the grid's, and its slot is returned.
+    pub fn long_press(&mut self, now_ns: u64) -> Option<TouchSlot> {
+        let p = self.pending.as_ref().filter(|p| !p.on_grid && now_ns >= p.at + LONG_PRESS_NS)?;
+        let slot = p.slot;
+        self.pending = None;
+        Some(slot)
     }
 
     pub fn holds(&self, slot: TouchSlot) -> bool {
