@@ -137,10 +137,15 @@ pub struct Screen {
     /// over the wallpaper.
     edges: Option<[Vec<smithay::backend::renderer::gles::element::PixelShaderElement>; 2]>,
     wave_id: smithay::backend::renderer::element::Id,
-    /// The screen under the shade, blurred (glass.rs), and which opening of
-    /// the shade it was taken for.
+    /// What is under the shade, blurred (glass.rs).
     glass: Option<crate::glass::Glass>,
-    glass_for: u64,
+    /// While a shade is out: what is under it, drawn into a buffer of its
+    /// own (where it changed), the glass blurred from it each frame it
+    /// changes, and the shade drawn over it into the canvas. Whether it has
+    /// been drawn, and its element's id (new when it changed).
+    scene: Option<Canvas>,
+    scene_ready: bool,
+    scene_id: smithay::backend::renderer::element::Id,
     /// Night light's shader (night.frag), and the colour it last warmed to.
     night_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     night_was: Option<[f32; 3]>,
@@ -217,7 +222,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -237,17 +242,9 @@ impl Screen {
                 sys.night.then(|| warm_white(sys.night_k))
             }
         };
-        // The shade coming out of a closed screen: the glass under it from
-        // the frame on screen now, which it is not in yet.
-        if state.shade.opened != self.glass_for {
-            self.glass_for = state.shade.opened;
-            if let (Some(glass), Some(canvas), true) = (self.glass.as_mut(), self.canvas.as_mut(), self.canvas_ready) {
-                let size = self.output.current_mode().unwrap().size;
-                if let Err(e) = glass.take(&mut self.renderer, &mut canvas.buffer, size) {
-                    tracing::warn!("glass: {e}");
-                }
-            }
-        }
+        // A shade out: the glass is taken live, from what is under it
+        // (below, after the elements).
+        let live_glass = self.glass.is_some() && self.canvas.is_some() && state.shade.visible();
         // The shade over the launch curtain over the dock over the windows.
         // The lock screen over everything.
         // The volume bar over everything, the lock screen next.
@@ -341,15 +338,17 @@ impl Screen {
         // The wallpaper's choosing, over the desktop.
         let current = state.walls.names.iter().position(|n| *n == state.walls.current).unwrap_or(0);
         elements.extend(state.picker.elements(&mut self.renderer, frame_ns, &state.walls.thumbs, current).into_iter().map(FrameElement::from));
+        let glass_start = elements.len();
         if let (Some(g), true) = (&self.glass, state.shade.visible()) {
             // Under each sheet, the glass cut to it: half the output's size,
             // so at scale 1 its logical px are the output's; bottom-up, as
-            // the canvas it came from.
+            // the canvas it came from, so the rows under a sheet of height h
+            // are the texture's last h.
             for (panel, h) in crate::layout::panels().into_iter().zip(state.shade.heights(frame_ns)) {
                 if h <= 0 {
                     continue;
                 }
-                let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((panel.loc.x as f64, 0.0).into(), (panel.size.w as f64, h as f64).into());
+                let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((panel.loc.x as f64, (crate::layout::LAYOUT.1 - h) as f64).into(), (panel.size.w as f64, h as f64).into());
                 elements.push(FrameElement::Snapshot(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
                     g.id.clone(),
                     self.renderer.context_id(),
@@ -365,6 +364,7 @@ impl Screen {
                 )));
             }
         }
+        let over_len = elements.len();
         elements.extend(state.curtain.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The keyboard and other layer surfaces, over the windows and the dock.
         elements.extend(state.layers.elements(&mut self.renderer).into_iter().map(FrameElement::Window));
@@ -517,6 +517,78 @@ impl Screen {
         let elements_ns = hybris_hwc::now_ns() - t0;
         let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
         self.reprime = self.reprime.saturating_sub(1);
+        // A shade out: what is under it into the scene's buffer, the glass
+        // blurred from that if it changed, and in the canvas the shade over
+        // a picture of the scene.
+        let mut elements = elements;
+        if live_glass {
+            let scene_elements = elements.split_off(over_len);
+            let size = self.output.current_mode().unwrap().size;
+            if self.scene.is_none() {
+                let buffer: Option<smithay::backend::renderer::gles::GlesTexture> = self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok();
+                self.scene = buffer.map(|buffer| Canvas { buffer, tracker: OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Flipped180) });
+                self.scene_ready = false;
+            }
+            if let Some(scene) = self.scene.as_mut() {
+                let age = if self.scene_ready { 1 } else { 0 };
+                let mut target = self.renderer.bind(&mut scene.buffer).expect("bind the scene");
+                let result = scene.tracker.render_output(&mut self.renderer, &mut target, age, &scene_elements, [0.08, 0.1, 0.14, 1.0]).expect("render the scene");
+                drop(target);
+                self.scene_ready = true;
+                let changed = result.damage.is_some_and(|d| !d.is_empty()) || age == 0;
+                if changed {
+                    if let Some(glass) = self.glass.as_mut() {
+                        if let Err(e) = glass.take(&mut self.renderer, &mut scene.buffer, size) {
+                            tracing::warn!("glass: {e}");
+                        }
+                    }
+                    self.scene_id = smithay::backend::renderer::element::Id::new();
+                }
+                // The glass under the sheets again, with its new id.
+                elements.truncate(glass_start);
+                if let Some(g) = &self.glass {
+                    for (panel, h) in crate::layout::panels().into_iter().zip(state.shade.heights(frame_ns)) {
+                        if h <= 0 {
+                            continue;
+                        }
+                        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((panel.loc.x as f64, (crate::layout::LAYOUT.1 - h) as f64).into(), (panel.size.w as f64, h as f64).into());
+                        elements.push(FrameElement::Snapshot(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
+                            g.id.clone(),
+                            self.renderer.context_id(),
+                            ((panel.loc.x * SCALE) as f64, 0.0),
+                            g.texture().clone(),
+                            1,
+                            Transform::Flipped180,
+                            None,
+                            Some(src),
+                            Some((panel.size.w, h).into()),
+                            None,
+                            smithay::backend::renderer::element::Kind::Unspecified,
+                        )));
+                    }
+                }
+                let (w, h) = crate::layout::LAYOUT;
+                let whole = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((size.w, size.h).into());
+                elements.push(FrameElement::Snapshot(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
+                    self.scene_id.clone(),
+                    self.renderer.context_id(),
+                    (0.0, 0.0),
+                    scene.buffer.clone(),
+                    SCALE,
+                    Transform::Flipped180,
+                    None,
+                    None,
+                    Some((w, h).into()),
+                    Some(vec![whole]),
+                    smithay::backend::renderer::element::Kind::Unspecified,
+                )));
+            } else {
+                elements.extend(scene_elements);
+            }
+        } else if self.scene.is_some() {
+            // Folded: the scene's buffer is drawn again from nothing next time.
+            self.scene_ready = false;
+        }
         let (damaged_px, age, shot) = if let Some(canvas) = self.canvas.as_mut() {
             // The frame is drawn into a buffer of our own, only where it
             // changed, and copied whole into the window's buffer: the window's

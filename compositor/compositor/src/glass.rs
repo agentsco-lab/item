@@ -1,12 +1,12 @@
 //! Glass: the screen under a sheet, blurred, for the shade to be laid over.
 //!
-//! The picture is the frame on screen as a sheet starts out of a panel's
-//! top, taken from our canvas (output.rs) before the sheet is in it: no
-//! scene drawn again. A blit takes it to half the size; the dual Kawase
-//! blur (blur.frag) halves it three times more and doubles it back, each
-//! pass a few taps on a small texture. The result, half the output's size,
-//! is drawn under the sheets, which tint it. It is not taken again while a
-//! sheet is out: what moves under an open shade stays as it was.
+//! The picture is what is under the sheets: while a shade is out the
+//! output draws that into a buffer of its own (output.rs's scene), and the
+//! glass is taken from it each frame it changed - what moves under an open
+//! shade moves in its glass. A blit takes it to half the size; the dual
+//! Kawase blur (blur.frag) halves it three times more and doubles it back,
+//! each pass a few taps on a small texture. The result, half the output's
+//! size, is drawn under the sheets, which tint it.
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType};
