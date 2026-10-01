@@ -624,6 +624,11 @@ impl Lock {
                 self.locked = false;
                 self.fading = None;
                 self.lift = 0.0;
+                if self.after_boot {
+                    // Opened with the PIN since the phone booted: a session
+                    // again (the compositor restarted) locks as any lock.
+                    let _ = std::fs::write(boot_marker(), "");
+                }
                 self.after_boot = false;
                 self.entering = false;
                 self.fails = 0;
@@ -860,4 +865,17 @@ fn cut(text: &str, n: usize) -> String {
     } else {
         format!("{}…", text.chars().take(n - 1).collect::<String>())
     }
+}
+
+/// Kept in the user's runtime directory (memory, gone at a reboot) once the
+/// phone has been opened with the PIN since it booted.
+fn boot_marker() -> std::path::PathBuf {
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    std::path::Path::new(&dir).join("item-opened")
+}
+
+/// Whether the phone has been opened with the PIN since it booted: if so,
+/// a new session locks as any lock (the reader on), not as after a boot.
+pub fn opened_since_boot() -> bool {
+    boot_marker().exists()
 }

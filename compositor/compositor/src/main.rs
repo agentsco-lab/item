@@ -926,8 +926,12 @@ fn main() {
     // after a boot.
     if args.session.is_some() && setup::wanted() {
         state.setup.start(fingers);
-    } else if args.session.is_some() {
+    } else if args.session.is_some() && !lock::opened_since_boot() {
         state.lock.after_boot();
+    } else if args.session.is_some() {
+        // A session again since the phone was opened with the PIN: locked,
+        // the reader there as for any lock.
+        state.lock.lock_now();
     } else if std::env::var_os("SETUP").is_some() || std::env::var_os("SETUP_DRY").is_some() {
         state.setup.start(fingers);
     }
