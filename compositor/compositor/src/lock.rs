@@ -71,6 +71,8 @@ pub struct Lock {
     pressed: Option<usize>,
     /// A check running on its thread, and its answer when it comes.
     checking: std::sync::Arc<std::sync::Mutex<Option<Option<bool>>>>,
+    /// The PIN that unlocked, for the keyring's prompts (keyring.rs).
+    verified: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     wake: smithay::reexports::calloop::ping::Ping,
     message: Label,
     keys: Vec<Label>,
@@ -198,6 +200,7 @@ impl Lock {
             pin: String::new(),
             pressed: None,
             checking: Default::default(),
+            verified: Default::default(),
             wake,
             message: Label::new(16.0, [1.0, 1.0, 1.0, 0.7]),
             keys: KEYS.iter().map(|_| Label::new(28.0, [1.0, 1.0, 1.0, 0.95])).collect(),
@@ -386,13 +389,23 @@ impl Lock {
         let pin = std::mem::take(&mut self.pin);
         *self.checking.lock().unwrap() = Some(None);
         self.say("Checking…");
-        let (slot, wake) = (self.checking.clone(), self.wake.clone());
+        let (slot, wake, verified) = (self.checking.clone(), self.wake.clone(), self.verified.clone());
         std::thread::spawn(move || {
             let ok = crate::pam::check(&pin);
-            drop(pin);
+            if ok {
+                *verified.lock().unwrap() = Some(pin);
+            } else {
+                let mut pin = pin;
+                unsafe { pin.as_bytes_mut().fill(0) };
+            }
             *slot.lock().unwrap() = Some(Some(ok));
             wake.ping();
         });
+    }
+
+    /// The PIN that has just unlocked, once.
+    pub fn take_verified_pin(&self) -> Option<String> {
+        self.verified.lock().unwrap().take()
     }
 
     /// A check's answer, if it came: unlocked, or told so.

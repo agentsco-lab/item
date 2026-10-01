@@ -106,6 +106,8 @@ pub struct State {
     pub fingerprint: crate::fingerprint::Fingerprint,
     /// The battery and the network, for the lock screen (status.rs).
     pub status: crate::status::Status,
+    /// gnome-keyring's prompts (keyring.rs).
+    pub keyring: crate::keyring::Keyring,
     pub system: crate::sysscreen::SystemScreen,
     /// The pen's tip is on the screen.
     pub pen_down: bool,
@@ -177,6 +179,7 @@ impl State {
             logind: crate::logind::Logind::new(wake.clone()),
             fingerprint: crate::fingerprint::Fingerprint::new(wake.clone()),
             status: crate::status::Status::new(wake.clone()),
+            keyring: crate::keyring::Keyring::new(wake.clone()),
             system: crate::sysscreen::SystemScreen::new(wake.clone()),
             pen_down: false,
             pen: crate::pensheet::PenSheet::new(),

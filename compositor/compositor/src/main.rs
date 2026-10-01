@@ -34,6 +34,7 @@ mod door;
 mod logind;
 mod fingerprint;
 mod status;
+mod keyring;
 mod layout;
 mod notify;
 mod output;
@@ -307,6 +308,11 @@ impl Data {
             }
             self.state.needs_redraw = true;
         }
+        // The keyring's prompts: the PIN that unlocked answers those waiting.
+        if let Some(pin) = self.state.lock.take_verified_pin() {
+            self.state.keyring.unlocked_with(pin);
+        }
+        self.state.keyring.service(self.state.lock.locked);
         if let Some(facts) = self.state.status.take() {
             self.state.lock.set_status(&facts);
             self.state.needs_redraw = true;

@@ -21,3 +21,11 @@ wayland-scanner = "0.31"
 bitflags = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# The keyring's secret exchange (keyring.rs): gcr's sx-aes-1 - DH in the 1536
+# bit IKE group, HKDF-SHA256, AES-128-CBC.
+num-bigint = "0.4"
+hkdf = "0.12"
+sha2 = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+base64 = "0.22"
