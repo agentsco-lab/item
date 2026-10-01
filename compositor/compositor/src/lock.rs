@@ -420,9 +420,8 @@ impl Lock {
         tracing::info!("lock: doors {:?}, {} ms", self.door.mode, self.door.ns / 1_000_000);
         self.fading = Some(hybris_hwc::now_ns());
         self.unlocked = self.fading;
-        self.after_boot = false;
-        self.fails = 0;
-        self.pin.clear();
+        // The rest is reset when the doors are open: the picture they turn
+        // is the lock screen as it was.
     }
 
     /// The time brought up to the minute; whether it changed.
@@ -488,7 +487,6 @@ impl Lock {
         }
         tracing::info!("lock: unlocked from outside");
         self.mark_flash = Some(hybris_hwc::now_ns());
-        self.entering = false;
         self.open_doors();
     }
 
@@ -579,6 +577,10 @@ impl Lock {
                 self.locked = false;
                 self.fading = None;
                 self.lift = 0.0;
+                self.after_boot = false;
+                self.entering = false;
+                self.fails = 0;
+                self.pin.clear();
             }
             return true;
         }
