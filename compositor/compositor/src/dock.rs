@@ -1027,7 +1027,7 @@ impl Dock {
         }
         // The drops under the icons.
         let life = self.life(frame_ns);
-        if let Some(e) = wall.and_then(|w| self.drops(renderer, &shape, frame_ns, w, life, DROP_RADIUS, 1.0, (0.0, [0.0; 3], 0.0), &self.drops)) {
+        if let Some(e) = wall.and_then(|w| self.drops(renderer, &shape, frame_ns, w, life, DROP_RADIUS, 1.0, (0.0, [0.0; 3], 0.0), 1.0, &self.drops)) {
             out.push(ShellElement::Shaded(e));
         }
         out
@@ -1332,14 +1332,14 @@ impl Dock {
         // The level of what it holds: from the drop's foot up.
         let level_y = centre.1 + r - d * sy * fill.0;
         let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(sx, sy); 2], drops, melt: APART_MELT, one: None, trail };
-        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (level_y, fill.1, fill.0), &self.lone)
+        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (level_y, fill.1, fill.0), 1.0, &self.lone)
     }
 
     /// Up to four round drops drawn as one (melting together `melt` px
     /// where they near), each its middle, radius and squash: the first
     /// setup's PIN keys. `slot` keeps each group's element apart.
     #[allow(clippy::too_many_arguments)]
-    pub fn group(&self, renderer: &mut GlesRenderer, slot: usize, drops: &[((f64, f64), f64, (f64, f64))], melt: f64, frame_ns: u64, life: f64, alpha: f32, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+    pub fn group(&self, renderer: &mut GlesRenderer, slot: usize, drops: &[((f64, f64), f64, (f64, f64))], melt: f64, frame_ns: u64, life: f64, alpha: f32, dim: f32, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
         if drops.is_empty() {
             return None;
         }
@@ -1354,7 +1354,7 @@ impl Dock {
         let b = list[0].0;
         let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(1.0, 1.0); 2], drops: list, melt, one: None, trail: ([-1000.0, 0.0, 10.0, 10.0], 0.0) };
         let groups = self.groups.borrow();
-        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (0.0, [0.0; 3], 0.0), &groups[slot])
+        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (0.0, [0.0; 3], 0.0), dim, &groups[slot])
     }
 
     /// Whether the lone drop still flows on its own (stretch, the hinge's
@@ -1367,7 +1367,7 @@ impl Dock {
     /// The drops, through dock.frag: an element over the screen's bottom,
     /// its uniforms set again only when they change.
     #[allow(clippy::too_many_arguments)]
-    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64), life: f64, radius: f32, alpha: f32, fill: (f64, [f32; 3], f64), cache: &std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64), life: f64, radius: f32, alpha: f32, fill: (f64, [f32; 3], f64), dim: f32, cache: &std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         use smithay::backend::renderer::gles::element::TextureShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
@@ -1375,7 +1375,7 @@ impl Dock {
         if self.program.borrow().is_none() {
             let mut names: Vec<UniformName> = ["b0", "b1", "b2", "b3", "s01", "s23", "one", "meet", "body", "trail"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)).collect();
             names.push(UniformName::new("fill", UniformType::_4f));
-            names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet", "level"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet", "level", "dim"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             names.extend(["origin", "texl", "src0"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)));
             match renderer.compile_custom_texture_shader(include_str!("dock.frag"), &names) {
                 Ok(p) => *self.program.borrow_mut() = Some(p),
@@ -1440,7 +1440,7 @@ impl Dock {
         let (texture, texl, woff) = wall;
         v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, life as f32, woff as f32, top as f32, left as f32]);
         v.extend([texl.0 as f32, texl.1 as f32, (woff + left as f64) as f32, top as f32, alpha, radius]);
-        v.extend([y(fill.0), fill.1[0], fill.1[1], fill.1[2], fill.2 as f32]);
+        v.extend([y(fill.0), fill.1[0], fill.1[1], fill.1[2], fill.2 as f32, dim]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -1463,6 +1463,7 @@ impl Dock {
                 Uniform::new("radius", radius),
                 Uniform::new("fill", (v[49], v[50], v[51], v[52])),
                 Uniform::new("level", v[53]),
+                Uniform::new("dim", v[54]),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),

@@ -27,9 +27,12 @@ uniform float tint;
 uniform vec2 texl;
 uniform vec2 src0;
 uniform float woff;
+// How dark what is behind it is drawn (the lock screen's dark over the
+// wallpaper; 1 elsewhere): the water bends what is seen, as dark.
+uniform float dim;
 
 vec3 wallpaper(vec2 sp) {
-    return texture2D(tex, (sp + vec2(woff, 0.0)) / texl).rgb;
+    return dim * (texture2D(tex, (sp + vec2(woff, 0.0)) / texl).rgb);
 }
 
 // The mercury dock (dock.rs), seen from above: up to four drops of water,

@@ -52,6 +52,8 @@ const FLING: f64 = 0.5;
 /// on the right panel's right edge (logical px).
 const MARK: f64 = 48.0;
 const POWER_Y: f64 = 455.0;
+/// The mark's drop of water, under the icon.
+const MARK_DROP_R: f64 = 34.0;
 /// The mark comes up over this, with a soft glow behind it.
 const MARK_IN_NS: u64 = 400_000_000;
 const GLOW: f64 = 124.0;
@@ -71,6 +73,8 @@ pub struct Lock {
     /// The fingerprint mark, white and red.
     mark: Option<MemoryRenderBuffer>,
     mark_red: Option<MemoryRenderBuffer>,
+    /// The mark a little larger, for a soft shine under it.
+    mark_shine: Option<MemoryRenderBuffer>,
     glow: Option<MemoryRenderBuffer>,
     /// The status line under the date: the battery and the network.
     battery_icon: Option<MemoryRenderBuffer>,
@@ -162,8 +166,9 @@ fn glow(size: f64) -> Option<MemoryRenderBuffer> {
         tiny_skia::Point::from_xy(c, c),
         c,
         vec![
-            tiny_skia::GradientStop::new(0.0, tiny_skia::Color::from_rgba8(255, 255, 255, 46)),
-            tiny_skia::GradientStop::new(0.45, tiny_skia::Color::from_rgba8(255, 255, 255, 18)),
+            tiny_skia::GradientStop::new(0.0, tiny_skia::Color::from_rgba8(255, 255, 255, 120)),
+            tiny_skia::GradientStop::new(0.55, tiny_skia::Color::from_rgba8(255, 255, 255, 70)),
+            tiny_skia::GradientStop::new(0.75, tiny_skia::Color::from_rgba8(255, 255, 255, 22)),
             tiny_skia::GradientStop::new(1.0, tiny_skia::Color::from_rgba8(255, 255, 255, 0)),
         ],
         tiny_skia::SpreadMode::Pad,
@@ -198,6 +203,7 @@ impl Lock {
             wake,
             mark: tinted(MARK_ICON, MARK as i32, [240, 240, 240]),
             mark_red: tinted(MARK_ICON, MARK as i32, [235, 80, 70]),
+            mark_shine: tinted(MARK_ICON, (MARK * 1.18).round() as i32, [255, 255, 255]),
             glow: glow(GLOW),
             battery_icon: None,
             battery_label: Label::new(15.0, [1.0, 1.0, 1.0, 0.65]),
@@ -662,6 +668,39 @@ impl Lock {
     }
 
     /// Where the reader's mark stands, logical px.
+    /// The fingerprint mark's glow: its picture, where it goes (logical
+    /// px, moved with the right half by `dx`) and how strong, breathing with
+    /// the mark.
+    pub fn mark_glow(&self, frame_ns: u64, dx: f64) -> Option<(&MemoryRenderBuffer, (f64, f64), f32)> {
+        let ((x, y), _, _) = self.mark_drop(frame_ns, dx)?;
+        let g = self.glow.as_ref()?;
+        let appear = ease(frame_ns.saturating_sub(self.shown_at) as f64 / MARK_IN_NS as f64);
+        let pulse = if frame_ns < self.shown_at + PULSE_FOR_NS {
+            let u = (frame_ns.saturating_sub(self.shown_at) % PULSE_PERIOD_NS) as f64 / PULSE_PERIOD_NS as f64;
+            0.55 + 0.35 * (0.5 - 0.5 * (u * std::f64::consts::TAU).cos())
+        } else {
+            0.7
+        };
+        let flash = self.mark_flash.map(|t| frame_ns.saturating_sub(t)).filter(|t| *t < FLASH_NS).map(|t| 1.0 - t as f64 / FLASH_NS as f64).unwrap_or(0.0);
+        Some((g, (x - GLOW / 2.0, y - GLOW / 2.0), (appear * (0.6 + 0.4 * pulse).max(flash)) as f32))
+    }
+
+    /// The fingerprint mark's drop: its middle (moved with the right half
+    /// by `dx`), radius and how alive it is - swelling at a known finger,
+    /// shaking with the mark at an unknown one, alive while it pulses.
+    pub fn mark_drop(&self, frame_ns: u64, dx: f64) -> Option<((f64, f64), f64, f64)> {
+        if !self.locked || self.blank || self.entering || self.fingers == 0 || self.after_boot {
+            return None;
+        }
+        let since = |t: Option<u64>| t.map(|t| frame_ns.saturating_sub(t));
+        let sx = since(self.mark_shake).map(shake).unwrap_or(0.0);
+        let flash = since(self.mark_flash).filter(|t| *t < FLASH_NS).map(|t| 1.0 - t as f64 / FLASH_NS as f64).unwrap_or(0.0);
+        let appear = ease(frame_ns.saturating_sub(self.shown_at) as f64 / MARK_IN_NS as f64);
+        let pulsing = frame_ns < self.shown_at + PULSE_FOR_NS;
+        let (x, y) = Self::mark_centre();
+        Some(((x + dx + sx, y), MARK_DROP_R * appear * (1.0 + 0.08 * flash), if pulsing { 0.35f64 } else { 0.0 }.max(flash)))
+    }
+
     fn mark_centre() -> (f64, f64) {
         let right = layout::panels()[1];
         ((right.loc.x + right.size.w) as f64 - 18.0 - MARK / 2.0, POWER_Y)
@@ -732,13 +771,18 @@ impl Lock {
             let alpha = (flash.map(|f| 0.9 + 0.1 * f).unwrap_or(pulse) * appear) as f32;
             let mx = (right.loc.x + right.size.w) as f64 - 18.0 - MARK;
             let my = POWER_Y - MARK / 2.0;
-            if let Some(g) = &self.glow {
-                let glow = (appear * (0.6 + 0.4 * pulse)) as f32;
-                put(&mut out, g, mx + MARK / 2.0 - GLOW / 2.0, POWER_Y - GLOW / 2.0, right_dx + sx, glow);
-            }
+            // Its glow and its drop are under it (the output's: mark_glow,
+            // mark_drop).
             let icon = if shaking { self.mark_red.as_ref() } else { self.mark.as_ref() };
             if let Some(icon) = icon {
                 put(&mut out, icon, mx, my, right_dx + sx, alpha);
+                // A soft shine round its lines: the icon again a little
+                // larger and faint, under it.
+                let s = MARK * 1.18;
+                let d = (s - MARK) / 2.0;
+                if let (Some(shine), false) = (&self.mark_shine, shaking) {
+                    put(&mut out, shine, mx - d, my - d, right_dx + sx, alpha * 0.3);
+                }
             }
         }
 
