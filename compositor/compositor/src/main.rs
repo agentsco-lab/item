@@ -30,6 +30,7 @@ mod grid;
 mod input;
 mod layers;
 mod lock;
+mod pinpad;
 mod door;
 mod logind;
 mod fingerprint;

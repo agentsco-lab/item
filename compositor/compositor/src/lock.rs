@@ -28,12 +28,9 @@ use smithay::utils::{Physical, Rectangle};
 
 use crate::layout::{self, SCALE};
 use crate::shade::{date_line, local_time, ShellElement};
+use crate::pinpad::{ease, shake, PinPad, Press, SHAKE_NS};
 use crate::text::{Font, Label};
 
-/// The PIN pad coming in.
-const PAD_IN_NS: u64 = 200_000_000;
-/// A shake: the pad at a wrong PIN, the mark at an unknown finger.
-const SHAKE_NS: u64 = 420_000_000;
 /// The mark's flash at a known finger.
 const FLASH_NS: u64 = 300_000_000;
 /// The mark pulses this long after the lock screen shows, then rests.
@@ -45,13 +42,6 @@ const FAILS_FOR_PIN: u32 = 5;
 const UNLOCK: f64 = 120.0;
 const FLING: f64 = 0.5;
 
-/// The PIN pad's keys, row by row.
-const KEYS: [&str; 12] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "←", "0", "OK"];
-const KEY: f64 = 76.0;
-const KEY_GAP: f64 = 22.0;
-const PAD_TOP: f64 = 330.0;
-const DOTS_Y: f64 = 220.0;
-const MAX_PIN: usize = 16;
 /// The fingerprint mark: its size, and the height of the power key's middle
 /// on the right panel's right edge (logical px).
 const MARK: f64 = 48.0;
@@ -64,23 +54,14 @@ const TALK_FROM_FOOT: i32 = 170;
 const MARK_ICON: &str = "/usr/share/icons/Adwaita/symbolic/devices/auth-fingerprint-symbolic.svg";
 
 pub struct Lock {
-    /// The PIN pad is up (since when), and what is typed.
+    /// The PIN pad is up (pinpad.rs).
     entering: bool,
-    entering_since: u64,
-    pin: String,
-    pressed: Option<usize>,
+    pad: PinPad,
     /// A check running on its thread, and its answer when it comes.
     checking: std::sync::Arc<std::sync::Mutex<Option<Option<bool>>>>,
     /// The PIN that unlocked, for the keyring's prompts (keyring.rs).
     verified: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     wake: smithay::reexports::calloop::ping::Ping,
-    message: Label,
-    keys: Vec<Label>,
-    key_bg: MemoryRenderBuffer,
-    key_on: MemoryRenderBuffer,
-    dot: MemoryRenderBuffer,
-    /// The backspace key's icon (the fonts have no arrow).
-    erase: Option<MemoryRenderBuffer>,
     /// The fingerprint mark, white and red.
     mark: Option<MemoryRenderBuffer>,
     mark_red: Option<MemoryRenderBuffer>,
@@ -104,8 +85,7 @@ pub struct Lock {
     fading: Option<u64>,
     touched_at: (f64, f64),
     door: crate::door::Style,
-    /// When the pad last shook, the mark last shook or flashed.
-    pad_shake: Option<u64>,
+    /// When the mark last shook or flashed.
     mark_shake: Option<u64>,
     mark_flash: Option<u64>,
     /// When the lock screen last came up or was lit: the mark pulses after.
@@ -170,21 +150,6 @@ fn glow(size: f64) -> Option<MemoryRenderBuffer> {
     Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (px as i32, px as i32), SCALE, smithay::utils::Transform::Normal, None))
 }
 
-/// Ease in and out (cubic).
-fn ease(k: f64) -> f64 {
-    let k = k.clamp(0.0, 1.0);
-    if k < 0.5 { 4.0 * k * k * k } else { 1.0 - (-2.0 * k + 2.0).powi(3) / 2.0 }
-}
-
-/// A damped shake's offset, logical px, `t` ns into it.
-fn shake(t: u64) -> f64 {
-    if t >= SHAKE_NS {
-        return 0.0;
-    }
-    let u = t as f64 / SHAKE_NS as f64;
-    14.0 * (1.0 - u) * (u * std::f64::consts::TAU * 3.5).sin()
-}
-
 impl Lock {
     pub fn new(wake: smithay::reexports::calloop::ping::Ping) -> Lock {
         let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
@@ -198,19 +163,10 @@ impl Lock {
         tracing::info!("lock: idle delay {}", if idle_s == 0 { "never".into() } else { format!("{idle_s} s") });
         let mut lock = Lock {
             entering: false,
-            entering_since: 0,
-            pin: String::new(),
-            pressed: None,
+            pad: PinPad::new(),
             checking: Default::default(),
             verified: Default::default(),
             wake,
-            message: Label::new(16.0, [1.0, 1.0, 1.0, 0.7]),
-            keys: KEYS.iter().map(|_| Label::new(28.0, [1.0, 1.0, 1.0, 0.95])).collect(),
-            key_bg: crate::grid::rounded(KEY, KEY, KEY / 2.0, [30, 30, 30, 30]),
-            key_on: crate::grid::rounded(KEY, KEY, KEY / 2.0, [77, 77, 77, 77]),
-            dot: crate::grid::rounded(12.0, 12.0, 6.0, [240, 240, 240, 240]),
-            erase: crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/ui/edit-clear-symbolic.svg", 28)
-                .or_else(|| crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/actions/edit-clear-symbolic.svg", 28)),
             mark: tinted(MARK_ICON, MARK as i32, [240, 240, 240]),
             mark_red: tinted(MARK_ICON, MARK as i32, [235, 80, 70]),
             glow: glow(GLOW),
@@ -227,7 +183,6 @@ impl Lock {
             fading: None,
             touched_at: (0.0, 0.0),
             door: crate::door::Style::default(),
-            pad_shake: None,
             mark_shake: None,
             mark_flash: None,
             shown_at: 0,
@@ -250,10 +205,6 @@ impl Lock {
             unlocked: None,
         };
         if let Some((_, regular)) = &lock.fonts {
-            for (l, k) in lock.keys.iter_mut().zip(KEYS) {
-                l.set(regular, k);
-            }
-            lock.message.set(regular, "Enter PIN");
             lock.status.set(regular, "Enter your PIN after a restart");
         }
         lock.refresh();
@@ -265,7 +216,7 @@ impl Lock {
     pub fn after_boot(&mut self) {
         self.after_boot = true;
         self.lock_now();
-        self.entering_since = hybris_hwc::now_ns();
+        self.pad.show();
         self.minute = -1;
         self.refresh();
     }
@@ -311,7 +262,7 @@ impl Lock {
     fn pad_in(&mut self) {
         if !self.entering {
             self.entering = true;
-            self.entering_since = hybris_hwc::now_ns();
+            self.pad.show();
         }
     }
 
@@ -347,49 +298,18 @@ impl Lock {
     }
 
     fn say(&mut self, text: &str) {
-        if let Some((_, regular)) = &self.fonts {
-            self.message.set(regular, text);
-        }
-    }
-
-    /// Key `i`'s rect on the right panel, logical px.
-    fn key_rect(i: usize) -> Rectangle<f64, smithay::utils::Logical> {
-        let p = layout::panels()[1];
-        let w = 3.0 * KEY + 2.0 * KEY_GAP;
-        let x0 = p.loc.x as f64 + (p.size.w as f64 - w) / 2.0;
-        let (col, row) = ((i % 3) as f64, (i / 3) as f64);
-        Rectangle::new((x0 + col * (KEY + KEY_GAP), PAD_TOP + row * (KEY + KEY_GAP)).into(), (KEY, KEY).into())
-    }
-
-    fn key_at(x: f64, y: f64) -> Option<usize> {
-        (0..KEYS.len()).find(|&i| Self::key_rect(i).contains((x, y)))
-    }
-
-    /// A key of the pad let go.
-    fn key(&mut self, i: usize) {
-        let checking = self.checking.lock().unwrap().is_some();
-        if checking {
-            return;
-        }
-        match KEYS[i] {
-            "←" => {
-                self.pin.pop();
-            }
-            "OK" => self.submit(),
-            d => {
-                if self.pin.len() < MAX_PIN {
-                    self.pin.push_str(d);
-                }
-            }
-        }
+        self.pad.say(text);
     }
 
     /// The PIN to PAM, on a thread.
     fn submit(&mut self) {
-        if self.pin.is_empty() {
+        if self.checking.lock().unwrap().is_some() {
             return;
         }
-        let pin = std::mem::take(&mut self.pin);
+        let pin = self.pad.take();
+        if pin.is_empty() {
+            return;
+        }
         *self.checking.lock().unwrap() = Some(None);
         self.say("Checking…");
         let (slot, wake, verified) = (self.checking.clone(), self.wake.clone(), self.verified.clone());
@@ -419,12 +339,11 @@ impl Lock {
                 *self.checking.lock().unwrap() = None;
                 if ok {
                     tracing::info!("lock: unlocked");
-                    let ok_key = Self::key_rect(KEYS.len() - 1);
-                    self.touched_at = (ok_key.loc.x + KEY / 2.0, ok_key.loc.y + KEY / 2.0);
+                    self.touched_at = PinPad::ok_centre();
                     self.open_doors();
                 } else {
                     self.say("Wrong PIN");
-                    self.pad_shake = Some(hybris_hwc::now_ns());
+                    self.pad.shake();
                     crate::fingerprint::buzz("bell-terminal");
                 }
                 true
@@ -491,7 +410,7 @@ impl Lock {
         self.fading = None;
         self.lift = 0.0;
         self.entering = self.after_boot;
-        self.pin.clear();
+        self.pad.clear();
         self.fails = 0;
         self.say("Enter PIN");
         self.refresh();
@@ -546,7 +465,9 @@ impl Lock {
     }
 
     pub fn down(&mut self, slot: TouchSlot, x: f64, y: f64, time_us: u64) {
-        self.pressed = if self.entering { Self::key_at(x, y) } else { None };
+        if self.entering {
+            self.pad.down(x, y);
+        }
         self.grab = Some((slot, y, (time_us, y), 0.0));
     }
 
@@ -562,7 +483,7 @@ impl Lock {
             }
             g.2 = (time_us, y);
             if (g.1 - y).abs() > 12.0 {
-                self.pressed = None;
+                self.pad.slide();
             }
             if !self.entering {
                 self.lift = (g.1 - y).max(0.0);
@@ -575,11 +496,14 @@ impl Lock {
     pub fn up(&mut self, slot: TouchSlot) {
         let Some(g) = self.grab.take_if(|g| g.0 == slot) else { return };
         if self.entering {
-            if let Some(i) = self.pressed.take() {
-                self.key(i);
-            } else if !self.after_boot && (g.2 .1 - g.1 > UNLOCK || g.3 > FLING) {
+            let tapped = self.pad.pressing();
+            if let Some(press) = self.pad.up() {
+                if press == Press::Ok {
+                    self.submit();
+                }
+            } else if !tapped && !self.after_boot && (g.2 .1 - g.1 > UNLOCK || g.3 > FLING) {
                 self.entering = false;
-                self.pin.clear();
+                self.pad.clear();
             }
             return;
         }
@@ -599,7 +523,7 @@ impl Lock {
                 self.after_boot = false;
                 self.entering = false;
                 self.fails = 0;
-                self.pin.clear();
+                self.pad.clear();
             }
             return true;
         }
@@ -609,8 +533,7 @@ impl Lock {
         let moving = |t: Option<u64>, d: u64| t.is_some_and(|t| frame_ns < t + d);
         self.grab.is_some()
             || self.checking.lock().unwrap().is_some()
-            || moving(Some(self.entering_since), PAD_IN_NS)
-            || moving(self.pad_shake, SHAKE_NS)
+            || (self.entering && self.pad.moving(frame_ns))
             || moving(self.mark_shake, SHAKE_NS)
             || moving(self.mark_flash, FLASH_NS)
             || moving(Some(self.shown_at), MARK_IN_NS)
@@ -618,10 +541,10 @@ impl Lock {
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.time, &self.date, &self.hint, &self.message, &self.greeting, &self.status]
+        [&self.time, &self.date, &self.hint, &self.greeting, &self.status]
             .into_iter()
             .map(|l| &l.buffer)
-            .chain(self.keys.iter().map(|l| &l.buffer))
+            .chain(self.pad.buffers())
             .chain(self.mark.iter())
             .chain(self.mark_red.iter())
             .chain(self.glow.iter())
@@ -669,7 +592,8 @@ impl Lock {
         let (w, h) = layout::LAYOUT;
         let left_dx = -middle * open;
         let right_dx = (w as f64 - middle) * open;
-        let mut out = Vec::new();
+        // The pad, with the right half.
+        let mut out = if self.entering { self.pad.elements(renderer, frame_ns, right_dx) } else { Vec::new() };
         // One way to put a texture: logical px, moved with its half.
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, dx: f64, alpha: f32| {
             if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (((x + dx) * SCALE as f64).round(), (y * SCALE as f64).round()), b, Some(alpha), None, None, Kind::Unspecified) {
@@ -681,26 +605,7 @@ impl Lock {
 
         // The right half: where you act.
         if self.entering {
-            let k = (frame_ns.saturating_sub(self.entering_since) as f64 / PAD_IN_NS as f64).clamp(0.0, 1.0);
-            let alpha = ease(k) as f32;
-            let rise = 40.0 * (1.0 - ease(k));
-            let sx = since(self.pad_shake).map(shake).unwrap_or(0.0);
-            let dx = right_dx + sx;
-            // What is typed, as dots; what is going on, under them.
-            let n = self.pin.len() as f64;
-            let dots_w = n * 12.0 + (n - 1.0).max(0.0) * 10.0;
-            for i in 0..self.pin.len() {
-                put(&mut out, &self.dot, right.loc.x as f64 + (right.size.w as f64 - dots_w) / 2.0 + i as f64 * 22.0, DOTS_Y + rise, dx, alpha);
-            }
-            put(&mut out, &self.message.buffer, cx(&self.message, right), DOTS_Y + 36.0 + rise, dx, alpha);
-            for (i, l) in self.keys.iter().enumerate() {
-                let r = Self::key_rect(i);
-                match (&self.erase, KEYS[i]) {
-                    (Some(e), "←") => put(&mut out, e, r.loc.x + (KEY - 28.0) / 2.0, r.loc.y + (KEY - 28.0) / 2.0 + rise, dx, alpha),
-                    _ => put(&mut out, &l.buffer, r.loc.x + (KEY - l.extent.w as f64) / 2.0, r.loc.y + (KEY - l.extent.h as f64) / 2.0 + rise, dx, alpha),
-                }
-                put(&mut out, if self.pressed == Some(i) { &self.key_on } else { &self.key_bg }, r.loc.x, r.loc.y + rise, dx, alpha);
-            }
+            // Drawn above (pinpad.rs).
         } else if self.fingers > 0 {
             // The mark across from the power key: pulsing a while after it
             // shows, flashing at a known finger, shaking red at an unknown one.
