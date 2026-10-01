@@ -12,12 +12,16 @@ uniform float alpha;
 uniform float tint;
 #endif
 
-// The dock as two drops of mercury (dock.rs): each half a rounded box,
-// the two melting into one as they near (a smooth union, as drops do),
-// each squashed as jelly is (`squash*`: its width and height scaled about
-// its bottom middle). Mercury (`metal` 1), kept quiet: soft silver with a
-// clean edge, a light line along its top; water (`metal` 0): a clear body,
-// a lit rim, a soft highlight. Logical px of the area (smithay's `size`).
+// The mercury dock (dock.rs): each half a drop - a capsule, its ends
+// round as surface tension makes them - the two melting into one as they
+// near (a smooth union, as drops do), each squashed as jelly is
+// (`squash*`: its width and height scaled about its bottom middle).
+//
+// `metal` 0, water: a clear body faintly tinted; a thin light ring along
+// the edge, where the surface reflects (brighter along the top); light
+// gathered inside along the bottom, as a drop focuses it; a small sharp
+// highlight above left; a soft shadow under it. `metal` 1: soft silver.
+// Logical px of the area (smithay's `size`).
 uniform vec4 half0;     // x, y, w, h
 uniform vec4 half1;
 uniform vec2 squash0;   // width, height scales
@@ -32,8 +36,9 @@ float box(vec2 p, vec4 r, vec2 s) {
     vec2 half_size = 0.5 * r.zw * s;
     // About the bottom middle: squashed down, it stays on the ground.
     vec2 c = vec2(r.x + 0.5 * r.z, r.y + r.w - half_size.y);
-    vec2 q = abs(p - c) - half_size + vec2(radius);
-    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
+    float rr = min(radius, min(half_size.x, half_size.y));
+    vec2 q = abs(p - c) - half_size + vec2(rr);
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
 }
 
 float field(vec2 p) {
@@ -46,31 +51,32 @@ float field(vec2 p) {
 void main() {
     vec2 p = v_coords * size;
     float d = field(p);
-    if (d > 1.5) {
+    // Its shadow, a little below and soft.
+    float below = field(p - vec2(0.0, 5.0));
+    float shadow = (1.0 - smoothstep(-4.0, 10.0, below)) * 0.4;
+    if (d > 1.5 && shadow < 0.004) {
         discard;
     }
     float cover = 1.0 - smoothstep(-0.75, 0.75, d);
-    // The surface: a dome rising from the edge over `depth` px.
+    // The surface's slope, from the field.
     float e = 0.75;
     vec2 g = vec2(field(p + vec2(e, 0.0)) - field(p - vec2(e, 0.0)), field(p + vec2(0.0, e)) - field(p - vec2(0.0, e))) / (2.0 * e);
-    // The rounding over the edge, px.
-    float depth = mix(14.0, 9.0, metal);
+    float depth = 12.0;
     float t = clamp(-d / depth, 0.0, 1.0);
     float slope = 1.0 - t;
     vec3 n = normalize(vec3(g * slope * 1.6, 1.0));
-    // Light from above left and in front.
     vec3 l = normalize(vec3(-0.45, -0.7, 0.55));
     vec3 h = normalize(l + vec3(0.0, 0.0, 1.0));
-    float spec = pow(max(dot(n, h), 0.0), 36.0);
-    float rim = pow(1.0 - n.z, 1.6);
-    // Darker inside the drop at its bottom: light through water.
-    float low = smoothstep(0.35, 1.0, (p.y - half0.y) / max(half0.w, 1.0));
-    vec4 water = body * (1.0 - 0.25 * low);
-    water.rgb += vec3(0.75, 0.9, 0.95) * rim * 0.55 * shine;
-    water += vec4(1.0) * spec * 0.55 * shine;
-    // Mercury, kept quiet: soft silver, lighter above than below, a thin
-    // light line along the top edge and a faint one along the bottom, a
-    // small soft highlight; the edge clean.
+    float inside = max(-d, 0.0);
+
+    // Water.
+    float ring = exp(-inside / 1.6) * (0.28 + 0.55 * max(-g.y, 0.0));
+    float gather = exp(-pow((inside - 6.0) / 4.0, 2.0)) * pow(max(g.y, 0.0), 1.5) * 0.45;
+    float spark = pow(max(dot(n, h), 0.0), 140.0) * 1.1 + pow(max(dot(n, h), 0.0), 24.0) * 0.12;
+    float light = (ring + gather + spark) * shine;
+    vec4 water = body + vec4(0.93, 0.97, 1.0, 1.0) * light;
+
+    // Soft silver.
     float across = clamp((p.y - min(half0.y, half1.y)) / max(max(half0.w, half1.w), 1.0), 0.0, 1.0);
     float tone = mix(0.84, 0.62, across);
     float edge = 1.0 - t;
@@ -79,5 +85,9 @@ void main() {
     float soft = pow(max(dot(n, h), 0.0), 18.0);
     vec3 silver = vec3(0.94, 0.95, 0.97) * (tone + 0.16 * top_line - 0.1 * low_line) + vec3(0.12) * soft * shine;
     vec4 mercury = vec4(min(silver, vec3(1.0)), 1.0);
-    gl_FragColor = mix(water, mercury, metal) * cover * alpha;
+
+    vec4 drop = clamp(mix(water, mercury, metal), 0.0, 1.0) * cover;
+    // The shadow only where the drop is not.
+    vec4 under = vec4(0.0, 0.0, 0.0, shadow * (1.0 - cover));
+    gl_FragColor = (drop + under) * alpha;
 }

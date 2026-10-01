@@ -14,9 +14,11 @@
 //! The halves are drops of mercury (dock.frag), the mercury dock: as they
 //! near they melt into one, as drops do, and part again with a thread
 //! between them; going under the hinge a half is squashed flat, as jelly
-//! through a slot, and after a move it wobbles to rest. Mercury, kept
-//! quiet: soft silver, a clean edge, a light line along its top
-//! (DOCK_WATER=1: water instead). The icons are squashed with it.
+//! through a slot; moving it stretches along its way, and after a move it
+//! wobbles to rest. They are water: clear, a light ring along the edge,
+//! light gathered inside along the bottom, a small sharp highlight, a soft
+//! shadow; the icons seen through it a little larger (DOCK_SILVER=1: soft
+//! silver instead). The icons are squashed with it.
 //!
 //! The dock is the screen's, not a page's: while the ribbon moves under a
 //! finger (ribbon.rs), the same move follows it, between where the halves
@@ -144,7 +146,17 @@ const WOBBLE: f64 = 0.07;
 const WOBBLE_PERIOD_NS: f64 = 260e6;
 /// The drops: how far apart they start to melt together, px; their water.
 const MELT: f64 = 26.0;
-const BODY: [f32; 4] = [0.125, 0.19, 0.205, 0.8];
+/// Water's body: a faint cool tint, mostly clear.
+const BODY: [f32; 4] = [0.82, 0.9, 0.95, 0.14];
+/// A drop's ends: round, half its height.
+const DROP_RADIUS: f32 = 36.0;
+/// How much a moving drop stretches along its way, per logical px per ms,
+/// and at most; how fast the stretch follows the speed.
+const STRETCH: f64 = 0.09;
+const STRETCH_MAX: f64 = 0.16;
+const STRETCH_FOLLOW: f64 = 0.35;
+/// The icons seen through the water: a little larger.
+const LENS: f64 = 1.04;
 
 /// The halves coming in from the sides after an unlock (item's RISE_MS).
 const RISE_NS: u64 = 360_000_000;
@@ -162,6 +174,9 @@ pub struct Dock {
     scrub: Option<(Mode, Mode, f64)>,
     /// When the last move ended: the halves wobble to rest from it.
     landed: Option<u64>,
+    /// Each half's x as last drawn and when, and its stretch from moving.
+    last_x: std::cell::Cell<Option<(u64, [f64; 2])>>,
+    stretch: std::cell::Cell<[f64; 2]>,
     /// The drops' shader (dock.frag) and its element, its uniforms as last
     /// set (set again only when they change).
     program: std::cell::RefCell<Option<smithay::backend::renderer::gles::GlesPixelProgram>>,
@@ -198,7 +213,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, program: Default::default(), drops: Default::default() }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -429,7 +444,8 @@ impl Dock {
                 true
             }
             Some(_) => true,
-            None => self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS),
+            // Wobbling, or still stretched from moving.
+            None => self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS) || self.stretch.get().iter().any(|s| s.abs() > 0.003),
         }
     }
 
@@ -555,10 +571,11 @@ impl Dock {
                 if let Some(icon) = &app.icon {
                     // A pressed icon dims under the finger.
                     let alpha = if half.pressed.is_some_and(|(q, _, _)| q == i) { 0.55 } else { 1.0 };
-                    let squashed = p.scale < 1.0 || (sx - 1.0).abs() > 0.004 || (sy - 1.0).abs() > 0.004;
-                    let size = squashed.then_some((ICON as f64 * p.scale * sx, ICON as f64 * sy));
-                    let src = size.map(|_| Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into()));
-                    push(&mut out, icon, tx(c.loc.x), ty(c.loc.y), size, src, alpha);
+                    // Through the water, a little larger, about its middle.
+                    let (iw, ih) = (ICON as f64 * p.scale * sx * LENS, ICON as f64 * sy * LENS);
+                    let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
+                    let src = Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into());
+                    push(&mut out, icon, cx - iw / 2.0, cy - ih / 2.0, Some((iw, ih)), Some(src), alpha);
                 }
             }
         }
@@ -578,6 +595,27 @@ impl Dock {
             let u = frame_ns.saturating_sub(t) as f64;
             if u >= WOBBLE_NS as f64 { 0.0 } else { WOBBLE * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
         });
+        // Moving, a drop stretches along its way: its speed, smoothed.
+        let xs = [places[0].x, places[1].x];
+        let mut stretch = self.stretch.get();
+        match self.last_x.get() {
+            Some((t, was)) if frame_ns > t => {
+                let ms = (frame_ns - t) as f64 / 1e6;
+                for h in 0..2 {
+                    let v = if ms < 100.0 { (xs[h] - was[h]).abs() / ms } else { 0.0 };
+                    let want = (v * STRETCH).min(STRETCH_MAX);
+                    stretch[h] += (want - stretch[h]) * STRETCH_FOLLOW;
+                    if stretch[h].abs() < 0.002 {
+                        stretch[h] = 0.0;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if self.last_x.get().is_none_or(|(t, _)| frame_ns > t) {
+            self.last_x.set(Some((frame_ns, xs)));
+            self.stretch.set(stretch);
+        }
         [0, 1].map(|h| {
             let w = self.halves[h].size.0 as f64;
             let (x0, x1) = (places[h].x, places[h].x + w);
@@ -585,7 +623,7 @@ impl Dock {
             let reach = 34.0;
             let under = ((x1.min(h1 + reach) - x0.max(h0 - reach)).max(0.0) / (h1 - h0 + 2.0 * reach).min(w)).min(1.0);
             let f = under * under * (3.0 - 2.0 * under);
-            let mut s = (1.0 + WIDEN * f, 1.0 - FLATTEN * f);
+            let mut s = (1.0 + WIDEN * f + stretch[h], 1.0 - FLATTEN * f - 0.6 * stretch[h]);
             if let Some(wb) = wobble {
                 s.1 *= 1.0 + wb;
                 s.0 *= 1.0 - 0.6 * wb;
@@ -648,11 +686,11 @@ impl Dock {
                 Uniform::new("half1", (v[4], v[5], v[6], v[7])),
                 Uniform::new("squash0", (v[8], v[9])),
                 Uniform::new("squash1", (v[10], v[11])),
-                Uniform::new("radius", RADIUS),
+                Uniform::new("radius", DROP_RADIUS),
                 Uniform::new("melt", v[12]),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
-                Uniform::new("metal", if std::env::var_os("DOCK_WATER").is_some() { 0.0f32 } else { 1.0 }),
+                Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
             ]
         };
         let mut drops = self.drops.borrow_mut();
