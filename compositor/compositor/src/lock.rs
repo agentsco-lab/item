@@ -55,7 +55,7 @@ const MAX_PIN: usize = 16;
 /// The fingerprint mark: its size, and the height of the power key's middle
 /// on the right panel's right edge (logical px).
 const MARK: f64 = 48.0;
-const POWER_Y: f64 = 405.0;
+const POWER_Y: f64 = 455.0;
 /// The mark comes up over this, with a soft glow behind it.
 const MARK_IN_NS: u64 = 400_000_000;
 const GLOW: f64 = 124.0;

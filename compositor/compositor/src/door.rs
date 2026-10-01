@@ -44,7 +44,7 @@ pub struct Style {
 
 impl Default for Style {
     fn default() -> Style {
-        Style { mode: Mode::Wave, ns: 600_000_000, camera: 2.0, dim: 0.6 }
+        Style { mode: Mode::Wave, ns: 850_000_000, camera: 2.0, dim: 0.6 }
     }
 }
 
