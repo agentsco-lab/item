@@ -244,6 +244,19 @@ impl Lock {
         self.refresh();
     }
 
+    /// Unlocked from outside (logind's Unlock: the fingerprint reader,
+    /// `loginctl unlock-session`): the lock screen fades as after a PIN.
+    pub fn unlock(&mut self) {
+        if !self.locked || self.fading.is_some() {
+            return;
+        }
+        tracing::info!("lock: unlocked from outside");
+        self.fading = Some(hybris_hwc::now_ns());
+        self.unlocked = self.fading;
+        self.entering = false;
+        self.pin.clear();
+    }
+
     pub fn set_blank(&mut self, blank: bool) {
         if blank == self.blank {
             return;

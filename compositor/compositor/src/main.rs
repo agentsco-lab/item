@@ -30,6 +30,7 @@ mod grid;
 mod input;
 mod layers;
 mod lock;
+mod logind;
 mod layout;
 mod notify;
 mod output;
@@ -281,6 +282,25 @@ impl Data {
         self.draw_if_needed();
     }
 
+    /// What logind and the screen saver's callers asked (logind.rs), done.
+    fn take_logind_asks(&mut self) {
+        for ask in self.state.logind.take_asks() {
+            let lock = &mut self.state.lock;
+            match ask {
+                logind::Ask::Lock => lock.lock_now(),
+                logind::Ask::Unlock => lock.unlock(),
+                logind::Ask::Blank(true) => {
+                    lock.lock_now();
+                    lock.set_blank(true);
+                }
+                logind::Ask::Blank(false) => lock.set_blank(false),
+            }
+            self.state.needs_redraw = true;
+        }
+        let (locked, blank) = (self.state.lock.locked, self.state.lock.blank);
+        self.state.logind.report(locked, blank);
+    }
+
     fn draw_if_needed(&mut self) {
         if !self.state.needs_redraw {
             return;
@@ -466,6 +486,8 @@ impl Data {
         } else if self.pacing.callbacks == Callbacks::Vsync {
             self.pacing.callbacks_due = true;
         }
+        let (locked, blank) = (self.state.lock.locked, self.state.lock.blank);
+        self.state.logind.report(locked, blank);
         self.state.paces.busy_until(hybris_hwc::now_ns());
     }
 
@@ -564,6 +586,9 @@ fn main() {
     handle
         .insert_source(Timer::from_duration(std::time::Duration::from_secs(1)), |_, _, data: &mut Data| {
             data.log_report();
+            // The lock's state to logind, also while the screen is dark (no
+            // frames then).
+            data.take_logind_asks();
             // `touch /tmp/item-shot` asks for a screenshot of the next frame.
             if std::fs::remove_file("/tmp/item-shot").is_ok() {
                 data.screen.shot = Some(format!("/tmp/item-shot-{}.rgba", data.started.elapsed().as_secs()));
@@ -627,6 +652,7 @@ fn main() {
     handle
         .insert_source(wake_source, |_, _, data: &mut Data| {
             data.state.lock.poll();
+            data.take_logind_asks();
             data.state.system.refresh();
             data.state.needs_redraw = true;
             data.on_client_frame();
@@ -650,6 +676,11 @@ fn main() {
     // Under a session manager the keyboard is the session's (its target).
     if std::env::var_os("NO_OSK").is_none() && args.session.is_none() {
         state.spawn("systemctl --user restart mobi.phosh.OSK.service 2>/dev/null || exec phosh-osk-stevia --replace");
+    }
+    // A real session starts locked, as phosh's does after a boot: the first
+    // PIN also opens the login keyring (PAM's phosh service).
+    if args.session.is_some() {
+        state.lock.lock_now();
     }
     // The session's manager: when it ends (a log out, or it failed), so
     // does the compositor, and the unit that started it decides what next.

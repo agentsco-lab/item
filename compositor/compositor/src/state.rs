@@ -100,6 +100,8 @@ pub struct State {
     pub clock: Clock,
     pub back: Back,
     pub lock: crate::lock::Lock,
+    /// The lock as logind and the screen saver's listeners see it (logind.rs).
+    pub logind: crate::logind::Logind,
     pub system: crate::sysscreen::SystemScreen,
     /// The pen's tip is on the screen.
     pub pen_down: bool,
@@ -168,6 +170,7 @@ impl State {
             clock: Clock::new(),
             back: Back::new(),
             lock: crate::lock::Lock::new(wake.clone()),
+            logind: crate::logind::Logind::new(wake.clone()),
             system: crate::sysscreen::SystemScreen::new(wake.clone()),
             pen_down: false,
             pen: crate::pensheet::PenSheet::new(),
