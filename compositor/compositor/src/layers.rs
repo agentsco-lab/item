@@ -32,6 +32,10 @@ pub struct Layers {
     pub names: Vec<(WlSurface, String)>,
     /// The panel the keyboard stands on.
     pub panel: usize,
+    /// Keyboards seen all the way down once since they came: stevia shows
+    /// itself as it starts and slides away, which flashed its keys over the
+    /// right panel's bottom; until it is down once it is not drawn.
+    pub settled: std::cell::RefCell<Vec<WlSurface>>,
 }
 
 /// A layer surface's committed state: its anchor, the size it asks for,
@@ -108,12 +112,29 @@ impl Layers {
     /// The keyboard's height on its panel, as much of it as is on screen,
     /// if it is up: the surface at the bottom of the screen named "osk", or
     /// a stock one across the width.
+    /// Whether a layer surface is a keyboard.
+    fn is_osk(&self, l: &LayerSurface) -> bool {
+        is_keyboard(l) || self.names.iter().any(|(s, n)| s == l.wl_surface() && n == "osk")
+    }
+
+    /// A keyboard not yet down once since it came (see `settled`).
+    fn unsettled(&self, l: &LayerSurface) -> bool {
+        self.is_osk(l) && !self.settled.borrow().contains(l.wl_surface())
+    }
+
     pub fn keyboard_height(&self) -> Option<(usize, i32)> {
         let screen_h = layout::LAYOUT.1;
-        self.surfaces.iter().filter(|l| is_keyboard(l) || self.names.iter().any(|(s, n)| s == l.wl_surface() && n == "osk")).find_map(|l| {
+        self.surfaces.iter().filter(|l| self.is_osk(l)).find_map(|l| {
             let r = self.place(l)?;
             let shown = (screen_h - r.loc.y).min(r.size.h);
             if shown <= 0 {
+                let mut settled = self.settled.borrow_mut();
+                if !settled.contains(l.wl_surface()) {
+                    settled.push(l.wl_surface().clone());
+                }
+                return None;
+            }
+            if self.unsettled(l) {
                 return None;
             }
             let panel = layout::panel_at(r.loc.to_f64() + Point::from((1.0, 1.0))).unwrap_or(self.panel);
@@ -125,7 +146,7 @@ impl Layers {
     pub fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
         self.surfaces.iter().rev().find_map(|l| {
             let at = self.place(l)?;
-            if !at.to_f64().contains(pos) {
+            if self.unsettled(l) || !at.to_f64().contains(pos) {
                 return None;
             }
             under_from_surface_tree(l.wl_surface(), pos, at.loc, WindowSurfaceType::ALL).map(|(s, p)| (s, p.to_f64()))
@@ -136,6 +157,9 @@ impl Layers {
         let mut out = Vec::new();
         for layer in self.surfaces.iter().rev() {
             let Some(at) = self.place(layer) else { continue };
+            if self.unsettled(layer) {
+                continue;
+            }
             out.extend(render_elements_from_surface_tree(
                 renderer,
                 layer.wl_surface(),

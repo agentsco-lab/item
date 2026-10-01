@@ -318,10 +318,15 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
-                // The system screen or the pen's sheet shown: a finger on
-                // them moves the ribbon.
+                // The system screen shown: a finger on it scrolls it, or
+                // moves the ribbon sideways (sysscreen.rs).
+                if self.system.touch_down(slot, pos, time) {
+                    self.needs_redraw = true;
+                    return;
+                }
+                // The pen's sheet shown: a finger on it moves the ribbon.
                 let panel = crate::layout::panel_at(pos);
-                if (self.system.out() && panel == Some(0)) || (self.pen.out() && panel == Some(1)) {
+                if self.pen.out() && panel == Some(1) {
                     self.ribbon_grab(slot, pos.x, time);
                     return;
                 }
@@ -375,6 +380,14 @@ impl State {
             Contact::Motion(slot, pos, time) => {
                 if self.ribbon.holds(slot) {
                     self.ribbon.motion(slot, pos.x, time);
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.system.holds(slot) {
+                    if let crate::sysscreen::TouchAsk::Ribbon(x) = self.system.touch_motion(slot, pos, time) {
+                        self.ribbon_grab(slot, x, time);
+                        self.ribbon.motion(slot, pos.x, time);
+                    }
                     self.needs_redraw = true;
                     return;
                 }
@@ -445,6 +458,11 @@ impl State {
                 }
                 if self.bottom_start.is_some_and(|(s, _)| s == slot) {
                     self.bottom_start = None;
+                }
+                if self.system.holds(slot) {
+                    self.system.touch_up(slot);
+                    self.needs_redraw = true;
+                    return;
                 }
                 if self.shade.holds(slot) {
                     if let Some(ask) = self.shade.up(slot) {

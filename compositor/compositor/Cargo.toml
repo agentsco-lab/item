@@ -32,3 +32,5 @@ base64 = "0.22"
 # The wallpapers (walls.rs): JPEG, decoded on a thread.
 zune-jpeg = "0.4"
 zune-core = "0.4"
+# The system screen's weather (sysscreen.rs): met.no's JSON.
+serde_json = "1"

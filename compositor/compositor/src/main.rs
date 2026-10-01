@@ -48,6 +48,7 @@ mod protocols;
 mod quick;
 mod ribbon;
 mod sched;
+mod sysfacts;
 mod walls;
 mod picker;
 mod shade;
@@ -75,6 +76,8 @@ pub struct Data {
     volume_bar_up: bool,
     /// FRAMES_DOCK's run was taken.
     frames_dock_done: bool,
+    /// Whether the screen was lit, as last told to the system screen.
+    lit_was: bool,
     pub state: State,
     pub screen: Screen,
     started: Instant,
@@ -266,6 +269,12 @@ impl Data {
     /// draw anyway.
     fn on_watchdog(&mut self) {
         let now = hybris_hwc::now_ns();
+        // The system screen samples the load only while the screen is lit.
+        let lit = !self.state.lock.blank;
+        if lit != self.lit_was {
+            self.lit_was = lit;
+            self.state.system.display(lit);
+        }
         // A finger held still on a desk: the wallpaper's choosing.
         if !self.state.picker.is_open() && !self.state.lock.holds_screen() && !self.state.setup.holds_screen() {
             if let Some(slot) = self.state.grid.long_press(now) {
@@ -827,7 +836,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, frames_dock_done: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, lit_was: true, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.

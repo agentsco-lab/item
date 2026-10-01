@@ -342,7 +342,7 @@ impl Screen {
             for (page, x) in &xs {
                 match page {
                     crate::ribbon::Page::System if seen(*x) => {
-                        let parts = state.system.picture(&mut self.renderer);
+                        let parts = state.system.picture(&mut self.renderer, frame_ns);
                         elements.extend(carry(parts, *x));
                     }
                     crate::ribbon::Page::Pen if seen(*x) => {
