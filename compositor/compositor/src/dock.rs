@@ -11,6 +11,13 @@
 //!
 //! A move takes 440 ms, eased in and out. The hinge is crossed as a tunnel
 //! an icon long, so an icon goes all the way in before any of it comes out.
+//! The halves are drops of mercury (dock.frag), the mercury dock: as they
+//! near they melt into one, as drops do, and part again with a thread
+//! between them; going under the hinge a half is squashed flat, as jelly
+//! through a slot, and after a move it wobbles to rest. Mercury: a mirror
+//! of a bright sky over a dark horizon, a hard highlight (DOCK_WATER=1:
+//! water instead). The icons are squashed with it.
+//!
 //! The dock is the screen's, not a page's: while the ribbon moves under a
 //! finger (ribbon.rs), the same move follows it, between where the halves
 //! stand for the pages on either side of the finger, and back if it goes
@@ -65,9 +72,7 @@ const PUSH_MAX: f64 = 8.0;
 const SQUASH_MAX: f64 = 0.12;
 const STICK_PULL: f64 = 1.6;
 /// The gap at which the inner corners are round again (item's MEET_ROUND),
-/// and at which the neck between the halves breaks (half item's MERGE_PX).
 const MEET_ROUND: f64 = 8.0;
-const NECK_BREAK: f64 = 14.0;
 /// The inner corner's radii a slab is drawn with, one texture each.
 const RADII: [f64; 6] = [0.0, 4.0, 8.0, 12.0, 16.0, 20.0];
 /// A touch that travels this far is not a tap.
@@ -130,6 +135,17 @@ struct Move {
     start_ns: u64,
 }
 
+/// The jelly: how flat a half goes under the hinge (its height, and its
+/// width a little wider), and its wobble to rest after a move.
+const FLATTEN: f64 = 0.4;
+const WIDEN: f64 = 0.12;
+const WOBBLE_NS: u64 = 650_000_000;
+const WOBBLE: f64 = 0.07;
+const WOBBLE_PERIOD_NS: f64 = 260e6;
+/// The drops: how far apart they start to melt together, px; their water.
+const MELT: f64 = 26.0;
+const BODY: [f32; 4] = [0.125, 0.19, 0.205, 0.8];
+
 /// The halves coming in from the sides after an unlock (item's RISE_MS).
 const RISE_NS: u64 = 360_000_000;
 
@@ -137,8 +153,6 @@ pub struct Dock {
     /// When the halves start coming in from the sides (an unlock).
     rise: Option<u64>,
     halves: Vec<Half>,
-    /// The neck between the halves as they meet, as last drawn: its size.
-    neck: std::cell::RefCell<Option<((i32, i32, i32), MemoryRenderBuffer)>>,
     dot: MemoryRenderBuffer,
     mode: Mode,
     /// The mode before the last Hidden, whose places Hidden dips from.
@@ -146,6 +160,12 @@ pub struct Dock {
     moving: Option<Move>,
     /// The move scrubbed by the ribbon: from, to, how far.
     scrub: Option<(Mode, Mode, f64)>,
+    /// When the last move ended: the halves wobble to rest from it.
+    landed: Option<u64>,
+    /// The drops' shader (dock.frag) and its element, its uniforms as last
+    /// set (set again only when they change).
+    program: std::cell::RefCell<Option<smithay::backend::renderer::gles::GlesPixelProgram>>,
+    drops: std::cell::RefCell<Option<(smithay::backend::renderer::gles::element::PixelShaderElement, Vec<f32>)>>,
 }
 
 /// What a touch on the dock asks for.
@@ -178,7 +198,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, neck: Default::default(), dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -401,11 +421,15 @@ impl Dock {
         }
         match &self.moving {
             Some(m) if frame_ns >= m.start_ns + Self::duration(m) => {
+                // Arrived (not dipped away): it wobbles to rest.
+                if m.to != Mode::Hidden {
+                    self.landed = Some(frame_ns);
+                }
                 self.moving = None;
-                false
+                true
             }
             Some(_) => true,
-            None => false,
+            None => self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS),
         }
     }
 
@@ -490,67 +514,162 @@ impl Dock {
         let bottom = layout::LAYOUT.1 as f64;
         // Whole physical px, so a slab at rest is sharp.
         let px = |v: f64| (v * SCALE as f64).round();
-        let mut push = |out: &mut Vec<ShellElement>, buffer: &MemoryRenderBuffer, x: f64, y: f64, w: Option<f64>, src: Option<Rectangle<f64, Logical>>, alpha: f32| {
-            let size = w.map(|w| smithay::utils::Size::<i32, Logical>::from((w.round() as i32, src.map(|s| s.size.h).unwrap_or(0.0) as i32)));
+        let mut push = |out: &mut Vec<ShellElement>, buffer: &MemoryRenderBuffer, x: f64, y: f64, dst: Option<(f64, f64)>, src: Option<Rectangle<f64, Logical>>, alpha: f32| {
+            let size = dst.map(|(w, h)| smithay::utils::Size::<i32, Logical>::from((w.round().max(1.0) as i32, h.round().max(1.0) as i32)));
             match MemoryRenderBufferRenderElement::from_buffer(renderer, (px(x), px(y)), buffer, Some(alpha), src, size, Kind::Unspecified) {
                 Ok(e) => out.push(ShellElement::Text(e)),
                 Err(e) => tracing::warn!("dock: {e}"),
             }
         };
-        // The neck between the halves as they meet (phoc's smooth union in
-        // item): it fills the gap and the inner corners' notches, pinching
-        // in the middle as the gap grows, and breaks at NECK_BREAK.
-        let gap = self.gap(&places);
-        let meeting = self.moving.as_ref().is_some_and(|m| matches!(m.to, Mode::On(_)) || matches!(m.from, Mode::On(_)));
-        if meeting && gap > 0.5 && gap < NECK_BREAK && places[0].y < bottom {
-            let (w0, h) = (self.halves[0].size.0 as f64, self.halves[0].size.1 as f64);
-            let right0 = places[0].anchor + (places[0].x + w0 - places[0].anchor) * places[0].scale - places[0].tuck;
-            let o = places[0].radius * (1.0 - gap / NECK_BREAK);
-            let key = ((gap * 2.0).round() as i32, (o * 2.0).round() as i32, h as i32);
-            let mut neck = self.neck.borrow_mut();
-            if neck.as_ref().is_none_or(|(k, _)| *k != key) {
-                *neck = Some((key, neck_texture(gap, o, h)));
-            }
-            if let Some((_, b)) = neck.as_ref() {
-                push(&mut out, b, right0 - o, places[0].y, None, None, 1.0);
-            }
-        }
+        // Each half's box (its bump's squash about its anchor) and its
+        // jelly: flat under the hinge, wobbling after a move.
+        let jelly = self.jelly(&places, frame_ns);
+        let boxes: Vec<(f64, f64, f64, f64)> = (0..2)
+            .map(|h| {
+                let p = places[h];
+                let (w, ht) = (self.halves[h].size.0 as f64, self.halves[h].size.1 as f64);
+                let x = p.anchor + (p.x - p.anchor) * p.scale;
+                (x, p.y, w * p.scale, ht)
+            })
+            .collect();
         for (h, half) in self.halves.iter().enumerate() {
             let p = places[h];
             if p.y >= bottom || half.apps.is_empty() {
                 continue;
             }
-            // Squashed about its anchor: x and widths scaled.
-            let tx = |x: f64| p.anchor + (x - p.anchor) * p.scale;
+            // Squashed about its anchor (the bump), then as jelly about its
+            // bottom middle.
+            let (bx, by, bw, bh) = boxes[h];
+            let (sx, sy) = jelly[h];
+            let mid = bx + bw / 2.0;
+            let foot = by + bh;
+            let tx = |x: f64| mid + (p.anchor + (x - p.anchor) * p.scale - mid) * sx;
+            let ty = |y: f64| foot - (foot - y) * sy;
             for (i, app) in half.apps.iter().enumerate() {
                 let c = self.cell(i, &p);
                 // A dot under a running app, in the slab's bottom padding.
                 if app.ids.iter().any(|id| running.contains(id)) {
                     let d = crate::grid::DOT;
-                    push(&mut out, &self.dot, tx(c.loc.x + (c.size.w - d) / 2.0), c.loc.y + c.size.h + (PAD as f64 - d) / 2.0, None, None, 1.0);
+                    push(&mut out, &self.dot, tx(c.loc.x + (c.size.w - d) / 2.0), ty(c.loc.y + c.size.h + (PAD as f64 - d) / 2.0), None, None, 1.0);
                 }
                 if let Some(icon) = &app.icon {
                     // A pressed icon dims under the finger.
                     let alpha = if half.pressed.is_some_and(|(q, _, _)| q == i) { 0.55 } else { 1.0 };
-                    let size = (p.scale < 1.0).then_some(ICON as f64 * p.scale);
+                    let squashed = p.scale < 1.0 || (sx - 1.0).abs() > 0.004 || (sy - 1.0).abs() > 0.004;
+                    let size = squashed.then_some((ICON as f64 * p.scale * sx, ICON as f64 * sy));
                     let src = size.map(|_| Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into()));
-                    push(&mut out, icon, tx(c.loc.x), c.loc.y, size, src, alpha);
+                    push(&mut out, icon, tx(c.loc.x), ty(c.loc.y), size, src, alpha);
                 }
             }
-            // The arriving half's inner padding is cut off where the two
-            // meet: the left side of the right half, the right of the left.
-            let (w, ht) = (half.size.0 as f64, half.size.1 as f64);
-            // A tucked half reaches 1 px under the other: no seam of the
-            // background between them, the slabs being the same colour.
-            let tuck = if p.tuck > 0.0 { (p.tuck - 1.0).round().max(0.0) } else { 0.0 };
-            let step = (p.radius / 4.0).round().clamp(0.0, (RADII.len() - 1) as f64) as usize;
-            let slab = &half.slabs[step];
-            let (sx, dx) = if h == 1 { (tuck, p.x + tuck) } else { (0.0, p.x) };
-            let src = Rectangle::new((sx, 0.0).into(), (w - tuck, ht).into());
-            let scaled = (p.scale < 1.0 || tuck > 0.0).then_some((w - tuck) * p.scale);
-            push(&mut out, slab, tx(dx), p.y, scaled, scaled.map(|_| src), 1.0);
+        }
+        // The drops under the icons.
+        if let Some(e) = self.drops(renderer, &boxes, &jelly) {
+            out.push(ShellElement::Pixel(e));
         }
         out
+    }
+
+    /// Each half's jelly at `frame_ns`: its width and height scales -
+    /// flattened as it goes under the hinge, wobbling after a move.
+    fn jelly(&self, places: &[Place; 2], frame_ns: u64) -> [(f64, f64); 2] {
+        let panels = layout::panels();
+        let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
+        let wobble = self.landed.map(|t| {
+            let u = frame_ns.saturating_sub(t) as f64;
+            if u >= WOBBLE_NS as f64 { 0.0 } else { WOBBLE * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
+        });
+        [0, 1].map(|h| {
+            let w = self.halves[h].size.0 as f64;
+            let (x0, x1) = (places[h].x, places[h].x + w);
+            // How much of it is under the hinge, or near it: the slot.
+            let reach = 34.0;
+            let under = ((x1.min(h1 + reach) - x0.max(h0 - reach)).max(0.0) / (h1 - h0 + 2.0 * reach).min(w)).min(1.0);
+            let f = under * under * (3.0 - 2.0 * under);
+            let mut s = (1.0 + WIDEN * f, 1.0 - FLATTEN * f);
+            if let Some(wb) = wobble {
+                s.1 *= 1.0 + wb;
+                s.0 *= 1.0 - 0.6 * wb;
+            }
+            s
+        })
+    }
+
+    /// The drops, through dock.frag: an element over the screen's bottom,
+    /// its uniforms set again only when they change.
+    fn drops(&self, renderer: &mut GlesRenderer, boxes: &[(f64, f64, f64, f64)], jelly: &[(f64, f64); 2]) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
+        use smithay::backend::renderer::gles::element::PixelShaderElement;
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        if self.program.borrow().is_none() {
+            let names = [
+                UniformName::new("half0", UniformType::_4f),
+                UniformName::new("half1", UniformType::_4f),
+                UniformName::new("squash0", UniformType::_2f),
+                UniformName::new("squash1", UniformType::_2f),
+                UniformName::new("radius", UniformType::_1f),
+                UniformName::new("melt", UniformType::_1f),
+                UniformName::new("body", UniformType::_4f),
+                UniformName::new("shine", UniformType::_1f),
+                UniformName::new("metal", UniformType::_1f),
+            ];
+            match renderer.compile_custom_pixel_shader(include_str!("dock.frag"), &names) {
+                Ok(p) => *self.program.borrow_mut() = Some(p),
+                Err(e) => {
+                    tracing::warn!("dock: the drops' shader: {e}");
+                    return None;
+                }
+            }
+        }
+        let (width, height) = layout::LAYOUT;
+        // The bottom of the screen, as high as a half and a margin above.
+        let top = height - (self.halves[0].size.1 + MARGIN) - 40;
+        let area = Rectangle::<i32, Logical>::new((0, top).into(), (width, height - top).into());
+        let y = |v: f64| (v - top as f64) as f32;
+        // Apart, they melt together the more the nearer, up to MELT; once
+        // they touch they are one drop (a smooth union of two that overlap
+        // would swell where they meet).
+        let gap = boxes[1].0 - (boxes[0].0 + boxes[0].2);
+        let (b0, b1, j0, j1, melt) = if gap <= 0.0 {
+            let (x0, x1) = (boxes[0].0.min(boxes[1].0), (boxes[0].0 + boxes[0].2).max(boxes[1].0 + boxes[1].2));
+            let one = (x0, boxes[0].1.min(boxes[1].1), x1 - x0, boxes[0].3.max(boxes[1].3));
+            let j = ((jelly[0].0 + jelly[1].0) / 2.0, jelly[0].1.max(jelly[1].1));
+            (one, one, j, j, 1.0)
+        } else {
+            (boxes[0], boxes[1], jelly[0], jelly[1], MELT * (gap / 14.0).clamp(0.3, 1.0))
+        };
+        let values: Vec<f32> = vec![
+            b0.0 as f32, y(b0.1), b0.2 as f32, b0.3 as f32,
+            b1.0 as f32, y(b1.1), b1.2 as f32, b1.3 as f32,
+            j0.0 as f32, j0.1 as f32, j1.0 as f32, j1.1 as f32,
+            melt as f32,
+        ];
+        let uniforms = |v: &[f32]| {
+            vec![
+                Uniform::new("half0", (v[0], v[1], v[2], v[3])),
+                Uniform::new("half1", (v[4], v[5], v[6], v[7])),
+                Uniform::new("squash0", (v[8], v[9])),
+                Uniform::new("squash1", (v[10], v[11])),
+                Uniform::new("radius", RADIUS),
+                Uniform::new("melt", v[12]),
+                Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
+                Uniform::new("shine", 1.0f32),
+                Uniform::new("metal", if std::env::var_os("DOCK_WATER").is_some() { 0.0f32 } else { 1.0 }),
+            ]
+        };
+        let mut drops = self.drops.borrow_mut();
+        match drops.as_mut() {
+            Some((e, last)) => {
+                if *last != values {
+                    e.update_uniforms(uniforms(&values));
+                    *last = values;
+                }
+            }
+            None => {
+                let program = self.program.borrow().clone()?;
+                let e = PixelShaderElement::new(program, area, None, 1.0, uniforms(&values), Kind::Unspecified);
+                *drops = Some((e, values));
+            }
+        }
+        drops.as_ref().map(|(e, _)| e.clone())
     }
 }
 
@@ -565,36 +684,6 @@ fn contact_ease(k: f64, delta: f64) -> f64 {
     }
     let s = k / t1;
     (-2.0 * s.powi(3) + 3.0 * s * s) * (1.0 - delta) + (s.powi(3) - s * s) * v * t1
-}
-
-/// The neck: `gap` wide between the halves, reaching `o` into each under
-/// their inner corners, `h` high, its top and bottom dipping in the middle
-/// the more the wider the gap.
-fn neck_texture(gap: f64, o: f64, h: f64) -> MemoryRenderBuffer {
-    let s = SCALE as f64;
-    let w = gap + 2.0 * o;
-    let (pw, ph) = ((w * s).ceil().max(1.0) as u32, (h * s).round() as u32);
-    let mut pixmap = tiny_skia::Pixmap::new(pw, ph).expect("neck");
-    let d = (h / 2.0) * (gap / NECK_BREAK).powf(1.5) * s;
-    let (fo, fg, fh) = ((o * s) as f32, (gap * s) as f32, ph as f32);
-    let d = d as f32;
-    let mut pb = tiny_skia::PathBuilder::new();
-    pb.move_to(0.0, 0.0);
-    pb.line_to(fo, 0.0);
-    pb.quad_to(fo + fg / 2.0, 2.0 * d, fo + fg, 0.0);
-    pb.line_to(pw as f32, 0.0);
-    pb.line_to(pw as f32, fh);
-    pb.line_to(fo + fg, fh);
-    pb.quad_to(fo + fg / 2.0, fh - 2.0 * d, fo, fh);
-    pb.line_to(0.0, fh);
-    pb.close();
-    if let Some(path) = pb.finish() {
-        let mut paint = tiny_skia::Paint::default();
-        paint.set_color_rgba8(SLAB[0], SLAB[1], SLAB[2], SLAB[3]);
-        paint.anti_alias = true;
-        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
-    }
-    MemoryRenderBuffer::from_slice(pixmap.data(), Fourcc::Abgr8888, (pw as i32, ph as i32), SCALE, Transform::Normal, None)
 }
 
 /// From x0 to x1 at e, through the hinge as through a tunnel TUNNEL long

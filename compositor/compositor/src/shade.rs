@@ -30,6 +30,8 @@ render_elements! {
     pub ShellElement<=GlesRenderer>;
     Solid=SolidColorRenderElement,
     Text=MemoryRenderBufferRenderElement<GlesRenderer>,
+    /// Drawn by a shader of ours: the dock's drops (dock.frag).
+    Pixel=smithay::backend::renderer::gles::element::PixelShaderElement,
 }
 
 /// Touches starting this close to a panel's top pull its sheet (logical px).

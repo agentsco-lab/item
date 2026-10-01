@@ -312,7 +312,7 @@ impl Screen {
             let at = smithay::utils::Point::<i32, smithay::utils::Physical>::from(((dx * SCALE as f64).round() as i32, 0));
             parts.into_iter().map(|e| FrameElement::Carried(RelocateRenderElement::from_element(e, at, Relocate::Relative))).collect()
         };
-        // Its dots, over the bottom of the left panel.
+        // Its dots, at the bottom of the left panel, above the dock.
         if let Some((n, pos, alpha)) = state.ribbon.dots(frame_ns) {
             let dot = self.dot.get_or_insert_with(|| crate::grid::rounded(7.0, 7.0, 3.5, [255, 255, 255, 255])).clone();
             let left = crate::layout::panels()[0];
@@ -322,7 +322,7 @@ impl Screen {
                 // The two pages shown are lit, the rest dim.
                 let near = (1.0 - (i as f64 - pos).abs()).max(0.0).max((1.0 - (i as f64 - pos - 1.0).abs()).max(0.0));
                 let a = alpha * (0.3 + 0.7 * near as f32);
-                let loc = (((x0 + i as f64 * step) * SCALE as f64).round(), ((left.size.h as f64 - 18.0) * SCALE as f64).round());
+                let loc = (((x0 + i as f64 * step) * SCALE as f64).round(), ((left.size.h as f64 - 108.0) * SCALE as f64).round());
                 if let Ok(e) = smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement::from_buffer(&mut self.renderer, loc, &dot, Some(a), None, None, smithay::backend::renderer::element::Kind::Unspecified) {
                     elements.push(FrameElement::Shell(ShellElement::Text(e)));
                 }
