@@ -51,6 +51,8 @@ render_elements! {
     Snapshot=smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>,
     /// A window being put away or brought back: smaller, moved, fading.
     Moving=RelocateRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
+    /// A texture through a shader of ours: the lock screen's wave (wave.frag).
+    Shaded=smithay::backend::renderer::gles::element::TextureShaderElement,
 }
 
 /// The rows of the screen's bottom a run of frames keeps: the dock and above.
@@ -124,6 +126,8 @@ pub struct Screen {
     /// The doors' picture of the lock screen, and since when (door.rs).
     door: Option<(u64, smithay::backend::renderer::gles::GlesTexture)>,
     door_ids: Vec<smithay::backend::renderer::element::Id>,
+    wave_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
+    wave_id: smithay::backend::renderer::element::Id,
     _hwc: HwcOutput,
 }
 
@@ -180,7 +184,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, wave_id: smithay::backend::renderer::element::Id::new(), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -203,7 +207,12 @@ impl Screen {
                 self.door = self.lock_picture(state, start).map(|t| (start, t));
             }
             if let Some((_, texture)) = &self.door {
-                elements.extend(self.door_strips(&style, k, texture.clone()));
+                let texture = texture.clone();
+                if style.mode == crate::door::Mode::Wave {
+                    elements.extend(self.wave(state, frame_ns, start, &style, texture));
+                } else {
+                    elements.extend(self.door_strips(&style, k, texture));
+                }
             }
         } else if self.door.is_some() && !state.lock.locked {
             self.door = None;
@@ -440,6 +449,70 @@ impl Screen {
         Some(texture)
     }
 
+    /// The wave's shader, compiled once (at the warm-up, not on the first
+    /// unlock: that cost a 100 ms frame).
+    fn wave_program(&mut self) -> Option<smithay::backend::renderer::gles::GlesTexProgram> {
+        use smithay::backend::renderer::gles::{UniformName, UniformType};
+        if self.wave_program.is_none() {
+            let names = [
+                UniformName::new("size", UniformType::_2f),
+                UniformName::new("centre", UniformType::_2f),
+                UniformName::new("radius", UniformType::_1f),
+                UniformName::new("edge", UniformType::_1f),
+                UniformName::new("glow", UniformType::_1f),
+            ];
+            match self.renderer.compile_custom_texture_shader(include_str!("wave.frag"), &names) {
+                Ok(p) => self.wave_program = Some(p),
+                Err(e) => tracing::warn!("lock: the wave's shader: {e}"),
+            }
+        }
+        self.wave_program.clone()
+    }
+
+    /// The lock screen's picture going in a wave from where it was touched.
+    fn wave(&mut self, state: &State, frame_ns: u64, start: u64, style: &crate::door::Style, texture: smithay::backend::renderer::gles::GlesTexture) -> Vec<FrameElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        use smithay::backend::renderer::gles::Uniform;
+        let Some(program) = self.wave_program() else { return Vec::new() };
+        let (w, h) = crate::layout::LAYOUT;
+        let (cx, cy) = state.lock.touched_at();
+        // To the farthest corner, and its edge past it.
+        let far = [(0.0, 0.0), (w as f64, 0.0), (0.0, h as f64), (w as f64, h as f64)]
+            .iter()
+            .map(|(x, y)| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt())
+            .fold(0.0, f64::max);
+        let edge = 90.0;
+        // Quick from the touch, slowing as it spreads (ease out, cubic).
+        let t = (frame_ns.saturating_sub(start) as f64 / style.ns as f64).clamp(0.0, 1.0);
+        let k = 1.0 - (1.0 - t).powi(3);
+        let radius = k * (far + 2.0 * edge);
+        let glow = 0.35 * (1.0 - t * 0.6);
+        if std::env::var_os("LOG_WAVE").is_some() {
+            tracing::info!("wave: t {t:.3} radius {radius:.0} of {far:.0}, from {cx:.0},{cy:.0}, frame {} ms after start", frame_ns.saturating_sub(start) / 1_000_000);
+        }
+        let inner = TextureRenderElement::from_static_texture(
+            self.wave_id.clone(),
+            self.renderer.context_id(),
+            (0.0, 0.0),
+            texture,
+            SCALE,
+            Transform::Normal,
+            None,
+            None,
+            Some((w, h).into()),
+            None,
+            smithay::backend::renderer::element::Kind::Unspecified,
+        );
+        let uniforms = vec![
+            Uniform::new("size", (w as f32, h as f32)),
+            Uniform::new("centre", (cx as f32, cy as f32)),
+            Uniform::new("radius", radius as f32),
+            Uniform::new("edge", edge as f32),
+            Uniform::new("glow", glow as f32),
+        ];
+        vec![FrameElement::Shaded(smithay::backend::renderer::gles::element::TextureShaderElement::new(inner, program, uniforms))]
+    }
+
     /// The turning halves as strips of `texture`, each under its shade.
     fn door_strips(&mut self, style: &crate::door::Style, k: f64, texture: smithay::backend::renderer::gles::GlesTexture) -> Vec<FrameElement> {
         use smithay::backend::renderer::element::solid::SolidColorRenderElement;
@@ -499,6 +572,7 @@ impl Screen {
     /// Uploads the shell's textures before they are first needed.
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
+        let _ = self.wave_program();
         let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer) + state.pen.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }

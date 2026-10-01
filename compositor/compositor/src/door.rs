@@ -5,7 +5,11 @@
 //!   inner edges going back first;
 //! - `book`: both halves about the Duo's own hinge, folding back like a book
 //!   closed away from you;
-//! - `slide`: no turn, the halves slide out (lock.rs draws it).
+//! - `slide`: no turn, the halves slide out (lock.rs draws it);
+//! - `wave` (the default): no doors; the lock screen goes in a wave from
+//!   where it was touched - the reader's mark, or the PIN pad's OK - with a
+//!   soft glowing edge (wave.frag), as a Pixel's unlock ripples out of its
+//!   reader.
 //!
 //! The renderer draws flat rectangles, so a turning half is drawn as narrow
 //! upright strips of a picture of it, each as tall as perspective makes its
@@ -21,6 +25,8 @@ pub const STRIPS: usize = 48;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
+    /// The lock screen goes in a wave from where it was touched.
+    Wave,
     Slide,
     Saloon,
     Book,
@@ -38,7 +44,7 @@ pub struct Style {
 
 impl Default for Style {
     fn default() -> Style {
-        Style { mode: Mode::Saloon, ns: 500_000_000, camera: 2.0, dim: 0.6 }
+        Style { mode: Mode::Wave, ns: 600_000_000, camera: 2.0, dim: 0.6 }
     }
 }
 
@@ -52,12 +58,13 @@ impl Style {
         style.mode = match words.next() {
             Some("slide") => Mode::Slide,
             Some("book") => Mode::Book,
+            Some("saloon") => Mode::Saloon,
             // Each unlock the next of the three, to compare them.
             Some("cycle") => {
                 static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                [Mode::Saloon, Mode::Book, Mode::Slide][NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 3]
+                [Mode::Wave, Mode::Saloon, Mode::Book, Mode::Slide][NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 4]
             }
-            _ => Mode::Saloon,
+            _ => Mode::Wave,
         };
         if let Some(ms) = words.next().and_then(|w| w.parse::<u64>().ok()).filter(|m| (50..=3000).contains(m)) {
             style.ns = ms * 1_000_000;

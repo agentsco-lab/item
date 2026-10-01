@@ -99,8 +99,10 @@ pub struct Lock {
     fingers: usize,
     /// Unknown fingers in a row.
     fails: u32,
-    /// When the doors began to open, and how they open (door.rs).
+    /// When the doors began to open, how they open (door.rs), and where the
+    /// unlock was touched (logical px), where a wave starts.
     fading: Option<u64>,
+    touched_at: (f64, f64),
     door: crate::door::Style,
     /// When the pad last shook, the mark last shook or flashed.
     pad_shake: Option<u64>,
@@ -223,6 +225,7 @@ impl Lock {
             fingers: 0,
             fails: 0,
             fading: None,
+            touched_at: (0.0, 0.0),
             door: crate::door::Style::default(),
             pad_shake: None,
             mark_shake: None,
@@ -416,6 +419,8 @@ impl Lock {
                 *self.checking.lock().unwrap() = None;
                 if ok {
                     tracing::info!("lock: unlocked");
+                    let ok_key = Self::key_rect(KEYS.len() - 1);
+                    self.touched_at = (ok_key.loc.x + KEY / 2.0, ok_key.loc.y + KEY / 2.0);
                     self.open_doors();
                 } else {
                     self.say("Wrong PIN");
@@ -500,6 +505,7 @@ impl Lock {
         }
         tracing::info!("lock: unlocked from outside");
         self.mark_flash = Some(hybris_hwc::now_ns());
+        self.touched_at = Self::mark_centre();
         self.open_doors();
     }
 
@@ -621,6 +627,17 @@ impl Lock {
             .chain(self.glow.iter())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
+    }
+
+    /// Where the reader's mark stands, logical px.
+    fn mark_centre() -> (f64, f64) {
+        let right = layout::panels()[1];
+        ((right.loc.x + right.size.w) as f64 - 18.0 - MARK / 2.0, POWER_Y)
+    }
+
+    /// Where the unlock was touched: a wave starts there.
+    pub fn touched_at(&self) -> (f64, f64) {
+        self.touched_at
     }
 
     /// The doors turning in depth (not sliding): their style, how far open
