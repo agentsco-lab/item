@@ -17,7 +17,9 @@
 //! through a slot; moving it stretches along its way, and after a move it
 //! wobbles to rest. They are water: clear, a light ring along the edge,
 //! light gathered inside along the bottom, a small sharp highlight, a soft
-//! shadow; the icons seen through it a little larger (DOCK_SILVER=1: soft
+//! shadow; the icons seen through it a little larger. Touched, a drop
+//! gives under the finger and springs back when let go, and comes alive -
+//! a ripple along its edge, a breath - and calms again (DOCK_SILVER=1: soft
 //! silver instead). The icons are squashed with it.
 //!
 //! The dock is the screen's, not a page's: while the ribbon moves under a
@@ -159,9 +161,10 @@ const STRETCH_MAX: f64 = 0.16;
 const STRETCH_FOLLOW: f64 = 0.35;
 /// The icons seen through the water: a little larger.
 const LENS: f64 = 1.04;
-/// Alive after a touch: so long, then calming over the last part.
-const ALIVE_NS: u64 = 15_000_000_000;
-const CALM_NS: u64 = 2_000_000_000;
+/// Alive while a finger is on a drop and a while after, calming over the
+/// last part.
+const ALIVE_NS: u64 = 4_000_000_000;
+const CALM_NS: u64 = 2_500_000_000;
 
 /// The halves coming in from the sides after an unlock (item's RISE_MS).
 const RISE_NS: u64 = 360_000_000;
@@ -185,8 +188,8 @@ pub struct Dock {
     /// Each half: whether it was flat under the hinge, and when it came out.
     flat: std::cell::Cell<[bool; 2]>,
     popped: std::cell::Cell<[u64; 2]>,
-    /// The last touch on the screen: the drops are alive for a while after.
-    pub touched: u64,
+    /// When a finger was last on a drop: they are alive for a while after.
+    touched: std::cell::Cell<u64>,
     /// The wallpaper's parallax (wallpaper.glsl), for what the drops see.
     pub shift: f64,
     /// The drops' shader (dock.frag) and its element, its uniforms as last
@@ -225,7 +228,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flat: Default::default(), popped: Default::default(), touched: 0, shift: 0.0, program: Default::default(), drops: Default::default() }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flat: Default::default(), popped: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -469,8 +472,13 @@ impl Dock {
 
     /// How alive the drops are at `frame_ns`: 1 after a touch, calming to 0.
     fn life(&self, frame_ns: u64) -> f64 {
-        let since = frame_ns.saturating_sub(self.touched);
-        if self.touched == 0 || since >= ALIVE_NS {
+        // A finger on it: alive, and the time counts from now.
+        if self.halves.iter().any(|h| h.pressed.is_some()) {
+            self.touched.set(frame_ns);
+        }
+        let touched = self.touched.get();
+        let since = frame_ns.saturating_sub(touched);
+        if touched == 0 || since >= ALIVE_NS {
             return 0.0;
         }
         let left = (ALIVE_NS - since) as f64 / CALM_NS as f64;
@@ -502,6 +510,8 @@ impl Dock {
             }
             let icon = (0..self.halves[h].apps.len()).find(|&i| self.cell(i, &p).contains(pos));
             self.halves[h].pressed = icon.map(|i| (i, slot, pos));
+            // Touched, the drops come alive.
+            self.touched.set(hybris_hwc::now_ns());
             return true;
         }
         false
@@ -524,10 +534,15 @@ impl Dock {
 
     /// The finger lets go: a tap launches the app onto the panel it was on.
     pub fn up(&mut self, slot: TouchSlot) -> Option<Tap> {
-        for half in &mut self.halves {
+        let now = hybris_hwc::now_ns();
+        for (h, half) in self.halves.iter_mut().enumerate() {
             if let Some((i, s, at)) = half.pressed {
                 if s == slot {
                     half.pressed = None;
+                    // Let go: it springs back.
+                    let mut popped = self.popped.get();
+                    popped[h] = now;
+                    self.popped.set(popped);
                     let panel = layout::panel_at(at).unwrap_or(0);
                     let app = &half.apps[i];
                     return Some(Tap::Launch(app.exec.clone(), panel, app.large.clone(), app.ids.clone()));
@@ -538,8 +553,13 @@ impl Dock {
     }
 
     pub fn cancel(&mut self) {
-        for half in &mut self.halves {
-            half.pressed = None;
+        let now = hybris_hwc::now_ns();
+        for (h, half) in self.halves.iter_mut().enumerate() {
+            if half.pressed.take().is_some() {
+                let mut popped = self.popped.get();
+                popped[h] = now;
+                self.popped.set(popped);
+            }
         }
     }
 
@@ -677,7 +697,11 @@ impl Dock {
                 0.0
             };
             let wb = wobble.unwrap_or(0.0) + pop;
-            let s = (1.0 + WIDEN * f + stretch[h], 1.0 - FLATTEN * f - 0.6 * stretch[h]);
+            let mut s = (1.0 + WIDEN * f + stretch[h], 1.0 - FLATTEN * f - 0.6 * stretch[h]);
+            // A finger on it: it gives a little under it.
+            if self.halves[h].pressed.is_some() {
+                s = (s.0 * 1.035, s.1 * 0.93);
+            }
             (s.0 * (1.0 - 0.6 * wb), s.1 * (1.0 + wb), f)
         });
         self.flat.set(flat);

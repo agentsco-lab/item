@@ -285,8 +285,7 @@ impl State {
     /// stands for the panels now.
     pub fn place_dock(&mut self, frame_ns: u64) {
         let view = self.ribbon.view;
-        // The drops: alive after a touch; what they see moves with the row.
-        self.dock.touched = self.lock.last_touch_ns;
+        // What the drops see moves with the row.
         self.dock.shift = wallpaper_shift(self.ribbon.position(frame_ns));
         if let Some((v, k)) = self.ribbon.scrolling(frame_ns) {
             let (from, to) = (self.dock_taken(v), self.dock_taken(v + 1));
