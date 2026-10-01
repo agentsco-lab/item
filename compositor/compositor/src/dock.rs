@@ -140,23 +140,32 @@ struct Move {
     start_ns: u64,
 }
 
-/// By the hinge, seen from above: a drop spreads thin, and flows along the
-/// slot - up it (ALONG of its height more) and narrower across it (its
-/// width less by SQUEEZE, a little wider first as it spreads, SPREAD).
-const ALONG: f64 = 0.9;
-const SQUEEZE: f64 = 0.6;
-const SPREAD: f64 = 0.2;
-/// The wet trace a crossing leaves, drying away over WET_NS, shrinking.
-const WET_NS: u64 = 2_200_000_000;
-/// How far the trace reaches out of the hinge on either side.
-const TRACE_SIDE: f64 = 22.0;
-/// Out from under the hinge, a drop gathers up with a bounce.
+/// At the hinge: how far a part reaches into it (unseen, so it ends straight
+/// at the edge); the tail clinging to its edge at least CLING of its height
+/// wide, letting go when it would be less than LET_GO px; the wet spot it
+/// leaves, SPOT wide, drying over WET_NS.
+const INTO: f64 = 12.0;
+const CLING: f64 = 0.42;
+const LET_GO: f64 = 10.0;
+const SPOT: f64 = 18.0;
+const WET_NS: u64 = 1_800_000_000;
+/// A jolt (letting go, the thread breaking): a bounce.
 const POP: f64 = 0.14;
+/// Two drops: apart they do not reach for each other (a px, for a clean
+/// edge); pulled apart they keep a thread, PINCH_MELT wide, until BREAK_GAP
+/// apart; met, the waist fills over MERGE_FILL_NS, the join swelling out
+/// MERGE_BULGE px and back, settling over MERGE_SETTLE_NS.
+const APART_MELT: f64 = 0.8;
+const PINCH_MELT: f64 = 30.0;
+const BREAK_GAP: f64 = 24.0;
+const MERGE_FILL_NS: f64 = 45e6;
+const MERGE_BULGE: f64 = 6.0;
+const MERGE_SETTLE_NS: f64 = 170e6;
+const MERGE_PERIOD_NS: f64 = 260e6;
+const MERGE_NS: u64 = 700_000_000;
 const WOBBLE_NS: u64 = 650_000_000;
 const WOBBLE: f64 = 0.07;
 const WOBBLE_PERIOD_NS: f64 = 260e6;
-/// The drops: how far apart they start to melt together, px; their water.
-const MELT: f64 = 26.0;
 /// Water's body: a faint cool tint, mostly clear.
 const BODY: [f32; 4] = [0.82, 0.9, 0.95, 0.14];
 /// A drop's ends: round, half its height.
@@ -192,10 +201,16 @@ pub struct Dock {
     /// Each half's x as last drawn and when, and its stretch from moving.
     last_x: std::cell::Cell<Option<(u64, [f64; 2])>>,
     stretch: std::cell::Cell<[f64; 2]>,
-    /// Each half: whether it was flat under the hinge, and when it came out.
-    flat: std::cell::Cell<[bool; 2]>,
+    /// Each half: which way it last went, whether its tail clings to the
+    /// hinge's edge, and when it was last jolted.
+    dir: std::cell::Cell<[f64; 2]>,
+    clinging: std::cell::Cell<[bool; 2]>,
     popped: std::cell::Cell<[u64; 2]>,
-    /// The wet trace: its box (screen px) and when it was last wetted.
+    /// The two met (and since when), or pulled apart with a thread.
+    meeting: std::cell::Cell<(bool, u64, bool)>,
+    /// Whether a half is at the hinge now (for FRAMES_DOCK).
+    pub at_hinge: std::cell::Cell<bool>,
+    /// A wet spot: its box (screen px) and when it was left.
     trail: std::cell::Cell<Option<([f64; 4], u64)>>,
     /// When a finger was last on a drop: they are alive for a while after.
     touched: std::cell::Cell<u64>,
@@ -237,7 +252,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flat: Default::default(), popped: Default::default(), trail: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -475,6 +490,7 @@ impl Dock {
                     || self.stretch.get().iter().any(|s| s.abs() > 0.003)
                     || self.popped.get().iter().any(|&t| t != 0 && frame_ns < t + WOBBLE_NS)
                     || self.trail.get().is_some_and(|(_, t)| frame_ns < t + WET_NS)
+                    || self.meeting.get().0 && frame_ns < self.meeting.get().1 + MERGE_NS
                     || (self.mode != Mode::Hidden && self.life(frame_ns) > 0.0)
             }
         }
@@ -596,176 +612,217 @@ impl Dock {
                 Err(e) => tracing::warn!("dock: {e}"),
             }
         };
-        // Each half's box (its bump's squash about its anchor) and its
-        // jelly: flat under the hinge, wobbling after a move.
-        let jelly = self.jelly(&places, frame_ns);
-        let boxes: Vec<(f64, f64, f64, f64)> = (0..2)
-            .map(|h| {
-                let p = places[h];
-                let (w, ht) = (self.halves[h].size.0 as f64, self.halves[h].size.1 as f64);
-                let x = p.anchor + (p.x - p.anchor) * p.scale;
-                (x, p.y, w * p.scale, ht)
-            })
-            .collect();
+        // The drops as they stand: each half's box, its squash, and what
+        // the hinge does to it (Shape).
+        let shape = self.shape(&places, frame_ns);
         for (h, half) in self.halves.iter().enumerate() {
             let p = places[h];
             if p.y >= bottom || half.apps.is_empty() {
                 continue;
             }
-            // Squashed about its anchor (the bump), then as jelly about its
-            // bottom middle.
-            let (bx, by, bw, bh) = boxes[h];
-            let (sx, sy, flat) = jelly[h];
+            let (bx, by, bw, bh) = shape.boxes[h];
+            let (sx, sy) = shape.squash[h];
             let mid = bx + bw / 2.0;
             let foot = by + bh;
             let tx = |x: f64| mid + (p.anchor + (x - p.anchor) * p.scale - mid) * sx;
             let ty = |y: f64| foot - (foot - y) * sy;
             for (i, app) in half.apps.iter().enumerate() {
                 let c = self.cell(i, &p);
-                // A dot under a running app, in the slab's bottom padding.
+                let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
+                // By the hinge an icon goes under with the water: it fades
+                // as it nears the edge, and comes out again past it.
+                let shown = 1.0 - hinge_cover(cx, ICON as f64 / 2.0);
+                if shown <= 0.01 {
+                    continue;
+                }
+                // A dot under a running app, in the drop's bottom padding.
                 if app.ids.iter().any(|id| running.contains(id)) {
                     let d = crate::grid::DOT;
-                    push(&mut out, &self.dot, tx(c.loc.x + (c.size.w - d) / 2.0), ty(c.loc.y + c.size.h + (PAD as f64 - d) / 2.0), None, None, 1.0);
+                    push(&mut out, &self.dot, cx - d / 2.0, ty(c.loc.y + c.size.h + (PAD as f64 - d) / 2.0), None, None, shown as f32);
                 }
                 if let Some(icon) = &app.icon {
-                    // A pressed icon dims under the finger; in a drop gone
-                    // flat it sinks and fades.
+                    // A pressed icon dims under the finger. Through the
+                    // water, a little larger, about its middle.
                     let pressed = if half.pressed.is_some_and(|(q, _, _)| q == i) { 0.55 } else { 1.0 };
-                    let alpha = pressed * ((1.0 - flat) * (1.0 - flat)) as f32;
-                    if alpha < 0.01 {
-                        continue;
-                    }
-                    // Through the water, a little larger, about its middle;
-                    // where the drop spreads thin, sinking.
-                    let sink = 1.0 - 0.45 * flat;
-                    let (iw, ih) = (ICON as f64 * p.scale * LENS * sink, ICON as f64 * LENS * sink);
-                    let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
+                    let (iw, ih) = (ICON as f64 * p.scale * LENS, ICON as f64 * LENS);
                     let src = Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into());
-                    push(&mut out, icon, cx - iw / 2.0, cy - ih / 2.0, Some((iw, ih)), Some(src), alpha);
+                    push(&mut out, icon, cx - iw / 2.0, cy - ih / 2.0, Some((iw, ih)), Some(src), pressed * shown as f32);
                 }
             }
         }
         // The drops under the icons.
-        let squash = [(jelly[0].0, jelly[0].1), (jelly[1].0, jelly[1].1)];
-        let thin = [jelly[0].2, jelly[1].2];
-        if let Some(e) = self.drops(renderer, &boxes, &squash, thin, frame_ns) {
+        if let Some(e) = self.drops(renderer, &shape, frame_ns) {
             out.push(ShellElement::Pixel(e));
         }
         out
     }
 
-    /// Each half's jelly at `frame_ns`: its width and height scales -
-    /// spread flat as it goes under the hinge, gathering up with a bounce
-    /// out of it, wobbling after a move - and how flat it is (0 to 1).
-    fn jelly(&self, places: &[Place; 2], frame_ns: u64) -> [(f64, f64, f64); 2] {
-        let panels = layout::panels();
-        let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
-        let wobble = self.landed.map(|t| {
-            let u = frame_ns.saturating_sub(t) as f64;
-            if u >= WOBBLE_NS as f64 { 0.0 } else { WOBBLE * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
+    /// The drops at `frame_ns` (see Shape): each half's box from its place,
+    /// squashed by its motion; the two met, pulled apart, or apart; a half
+    /// at the hinge in two, its tail clinging to the edge it leaves until it
+    /// lets go, its head coming out round on the other side.
+    fn shape(&self, places: &[Place; 2], frame_ns: u64) -> Shape {
+        let bottom = layout::LAYOUT.1 as f64;
+        let boxes: [(f64, f64, f64, f64); 2] = [0, 1].map(|h| {
+            let p = places[h];
+            let (w, ht) = (self.halves[h].size.0 as f64, self.halves[h].size.1 as f64);
+            (p.anchor + (p.x - p.anchor) * p.scale, p.y, w * p.scale, ht)
         });
-        // Moving, a drop stretches along its way: its speed, smoothed.
+        let shown = [0, 1].map(|h| places[h].y < bottom && !self.halves[h].apps.is_empty());
+
+        // Moving, a drop stretches along its way: its speed, smoothed; and
+        // which way it goes.
         let xs = [places[0].x, places[1].x];
-        let mut stretch = self.stretch.get();
-        match self.last_x.get() {
-            Some((t, was)) if frame_ns > t => {
-                let ms = (frame_ns - t) as f64 / 1e6;
-                for h in 0..2 {
-                    let v = if ms < 100.0 { (xs[h] - was[h]).abs() / ms } else { 0.0 };
-                    let want = (v * STRETCH).min(STRETCH_MAX);
-                    stretch[h] += (want - stretch[h]) * STRETCH_FOLLOW;
-                    if stretch[h].abs() < 0.002 {
-                        stretch[h] = 0.0;
-                    }
+        let (mut stretch, mut dir) = (self.stretch.get(), self.dir.get());
+        if let Some((t, was)) = self.last_x.get().filter(|(t, _)| frame_ns > *t) {
+            let ms = (frame_ns - t) as f64 / 1e6;
+            for h in 0..2 {
+                let dx = xs[h] - was[h];
+                let v = if ms < 100.0 { dx.abs() / ms } else { 0.0 };
+                stretch[h] += ((v * STRETCH).min(STRETCH_MAX) - stretch[h]) * STRETCH_FOLLOW;
+                if stretch[h].abs() < 0.002 {
+                    stretch[h] = 0.0;
+                }
+                if v > 0.02 {
+                    dir[h] = dx.signum();
                 }
             }
-            _ => {}
         }
         if self.last_x.get().is_none_or(|(t, _)| frame_ns > t) {
             self.last_x.set(Some((frame_ns, xs)));
             self.stretch.set(stretch);
+            self.dir.set(dir);
         }
-        let (mut flat, mut popped) = (self.flat.get(), self.popped.get());
-        let out = [0, 1].map(|h| {
-            let w = self.halves[h].size.0 as f64;
-            let (x0, x1) = (places[h].x, places[h].x + w);
-            // How much of it is under the hinge, or near it: the slot. A
-            // drop spreads flat as it nears, under it a puddle.
-            let reach = 70.0;
-            let under = ((x1.min(h1 + reach) - x0.max(h0 - reach)).max(0.0) / (h1 - h0 + 2.0 * reach).min(w)).min(1.0);
-            let f = under * under * (3.0 - 2.0 * under);
-            // Out of it: it gathers up again, with a bounce.
-            if f > 0.4 {
-                flat[h] = true;
-            } else if flat[h] && f < 0.05 {
-                flat[h] = false;
-                popped[h] = frame_ns;
+
+        // Wobbles: after a move, after a jolt (popped), and the finger's
+        // press.
+        let ring = |since: u64, amp: f64| {
+            if since == 0 {
+                return 0.0;
             }
-            let pop = if popped[h] != 0 {
-                let u = frame_ns.saturating_sub(popped[h]) as f64;
-                if u >= WOBBLE_NS as f64 { 0.0 } else { POP * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
-            } else {
-                0.0
-            };
-            let wb = wobble.unwrap_or(0.0) + pop;
-            let mut s = (1.0 + SPREAD * f - SQUEEZE * f * f + stretch[h], 1.0 + ALONG * f - 0.6 * stretch[h]);
-            // A finger on it: it gives a little under it.
+            let u = frame_ns.saturating_sub(since) as f64;
+            if u >= WOBBLE_NS as f64 { 0.0 } else { amp * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
+        };
+        let landed = self.landed.map(|t| ring(t, WOBBLE)).unwrap_or(0.0);
+        let mut popped = self.popped.get();
+        let squash: [(f64, f64); 2] = [0, 1].map(|h| {
+            let wb = landed + ring(popped[h], POP);
+            let mut s = ((1.0 + stretch[h]) * (1.0 - 0.6 * wb), (1.0 - 0.6 * stretch[h]) * (1.0 + wb));
             if self.halves[h].pressed.is_some() {
                 s = (s.0 * 1.035, s.1 * 0.93);
             }
-            (s.0 * (1.0 - 0.6 * wb), s.1 * (1.0 + wb), f)
+            s
         });
-        self.flat.set(flat);
-        self.popped.set(popped);
-        // The wet trace: a strip along the hinge, as high as the drop flowed
-        // up it, gathered over the crossing; a crossing after the last dried
-        // starts a new one.
-        for h in 0..2 {
-            let (sx, sy, f) = out[h];
-            if f < 0.25 {
-                continue;
+
+        // Met, pulled apart, or apart: by the gap between them.
+        let gap = boxes[1].0 - (boxes[0].0 + boxes[0].2);
+        let (mut joined, mut since, mut pinching) = self.meeting.get();
+        if shown[0] && shown[1] && gap <= 0.0 {
+            if !joined {
+                joined = true;
+                since = frame_ns;
+                pinching = false;
             }
-            let (w, ht) = (self.halves[h].size.0 as f64 * sx, self.halves[h].size.1 as f64 * sy);
-            let mid = places[h].x + self.halves[h].size.0 as f64 / 2.0;
-            let foot = places[h].y + self.halves[h].size.1 as f64;
-            let r = [(mid - w / 2.0).max(h0 - TRACE_SIDE), foot - ht, (mid + w / 2.0).min(h1 + TRACE_SIDE), foot];
-            if r[2] <= r[0] {
-                continue;
+        } else {
+            if joined {
+                joined = false;
+                pinching = shown[0] && shown[1];
             }
-            let merged = match self.trail.get() {
-                Some((t, at)) if frame_ns < at + 400_000_000 => [t[0].min(r[0]), t[1].min(r[1]), t[2].max(r[2]), t[3].max(r[3])],
-                _ => r,
-            };
-            self.trail.set(Some((merged, frame_ns)));
+            // The thread breaks: both spring back.
+            if pinching && (gap > BREAK_GAP || !(shown[0] && shown[1])) {
+                pinching = false;
+                popped = [frame_ns, frame_ns];
+            }
         }
-        out
+        self.meeting.set((joined, since, pinching));
+        let melt = if pinching { PINCH_MELT } else { APART_MELT };
+        let one = joined.then(|| {
+            let u = frame_ns.saturating_sub(since) as f64;
+            let fill = 1.0 - (-u / MERGE_FILL_NS).exp();
+            let bulge = MERGE_BULGE * (-u / MERGE_SETTLE_NS).exp() * (u / MERGE_PERIOD_NS * std::f64::consts::TAU).cos();
+            let (x0, x1) = (boxes[0].0.min(boxes[1].0), (boxes[0].0 + boxes[0].2).max(boxes[1].0 + boxes[1].2));
+            let ht = boxes[0].3.max(boxes[1].3);
+            // The two as one, squashed as they are on average.
+            let (sx, sy) = ((squash[0].0 + squash[1].0) / 2.0, (squash[0].1 + squash[1].1) / 2.0);
+            let (w, hh) = ((x1 - x0) * sx, ht * sy);
+            let foot = boxes[0].1 + boxes[0].3;
+            ([(x0 + x1) / 2.0 - w / 2.0, foot - hh, w, hh], fill, bulge, boxes[0].0 + boxes[0].2)
+        });
+
+        // The hinge: a half across it is in two, each part against its
+        // edge (reaching INTO the hinge, where nothing is seen, so it ends
+        // straight at the edge). The tail clings to its edge, as water does,
+        // until it is too little and lets go; the head comes out small and
+        // round, and grows.
+        let panels = layout::panels();
+        let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
+        let mut drops: Vec<([f64; 4], (f64, f64))> = Vec::new();
+        let mut clinging = self.clinging.get();
+        for h in 0..2 {
+            if !shown[h] {
+                continue;
+            }
+            let (bx, by, bw, bh) = boxes[h];
+            let (sx, sy) = squash[h];
+            let (mid, foot) = (bx + bw / 2.0, by + bh);
+            let (w, ht) = (bw * sx, bh * sy);
+            let (x0, x1) = (mid - w / 2.0, mid + w / 2.0);
+            if x1 <= h0 || x0 >= h1 {
+                drops.push(([bx, by, bw, bh], (sx, sy)));
+                clinging[h] = false;
+                continue;
+            }
+            let (wl, wr) = ((h0 - x0).max(0.0), (x1 - h1).max(0.0));
+            // A part as much smaller as it is narrower: a bulge out of the
+            // slot, round, about the drop's middle.
+            let part = |width: f64| ht * (0.3 + 0.7 * smooth(width / (0.9 * ht)));
+            let middle = foot - ht / 2.0;
+            // The tail: the part on the side it comes from.
+            let tail_left = dir[h] > 0.0;
+            let tail = if tail_left { wl } else { wr };
+            let held = if tail < LET_GO { 0.0 } else { tail.max(CLING * ht) };
+            if clinging[h] && held == 0.0 {
+                // It let go: a wet spot where it clung, and the head jolts.
+                let edge = if tail_left { h0 - SPOT } else { h1 };
+                self.trail.set(Some(([edge, foot - 0.72 * ht, SPOT + 0.0, 0.58 * ht], frame_ns)));
+                popped[h] = frame_ns;
+            }
+            clinging[h] = held > 0.0;
+            let (wl, wr) = if tail_left { (held, wr) } else { (wl, held) };
+            if wl > 0.5 {
+                let hp = part(wl);
+                drops.push(([h0 - wl, middle - hp / 2.0, wl + INTO, hp], (1.0, 1.0)));
+            }
+            if wr > 0.5 {
+                let hp = part(wr);
+                drops.push(([h1 - INTO, middle - hp / 2.0, wr + INTO, hp], (1.0, 1.0)));
+            }
+        }
+        self.clinging.set(clinging);
+        self.popped.set(popped);
+        self.at_hinge.set(drops.len() > [shown[0], shown[1]].iter().filter(|s| **s).count());
+
+        // The wet spot, drying: fainter, and shrinking towards its middle.
+        let trail = match self.trail.get() {
+            Some((t, at)) if frame_ns < at + WET_NS => {
+                let k = (frame_ns - at) as f64 / WET_NS as f64;
+                let inset = k * 0.3 * t[2].min(t[3]);
+                ([t[0] + inset, t[1] + inset, t[2] - 2.0 * inset, t[3] - 2.0 * inset], (1.0 - k).powf(1.5))
+            }
+            _ => ([0.0; 4], 0.0),
+        };
+        Shape { boxes, squash, drops, melt, one, trail }
     }
 
     /// The drops, through dock.frag: an element over the screen's bottom,
     /// its uniforms set again only when they change.
-    fn drops(&self, renderer: &mut GlesRenderer, boxes: &[(f64, f64, f64, f64)], jelly: &[(f64, f64); 2], thin: [f64; 2], frame_ns: u64) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
+    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
         use smithay::backend::renderer::gles::element::PixelShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         if self.program.borrow().is_none() {
-            let names = [
-                UniformName::new("half0", UniformType::_4f),
-                UniformName::new("half1", UniformType::_4f),
-                UniformName::new("squash0", UniformType::_2f),
-                UniformName::new("squash1", UniformType::_2f),
-                UniformName::new("radius", UniformType::_1f),
-                UniformName::new("melt", UniformType::_1f),
-                UniformName::new("body", UniformType::_4f),
-                UniformName::new("shine", UniformType::_1f),
-                UniformName::new("metal", UniformType::_1f),
-                UniformName::new("origin", UniformType::_2f),
-                UniformName::new("time", UniformType::_1f),
-                UniformName::new("life", UniformType::_1f),
-                UniformName::new("shift", UniformType::_1f),
-                UniformName::new("thin0", UniformType::_1f),
-                UniformName::new("thin1", UniformType::_1f),
-                UniformName::new("trail", UniformType::_4f),
-                UniformName::new("wet", UniformType::_1f),
-            ];
+            let mut names: Vec<UniformName> = ["b0", "b1", "b2", "b3", "s01", "s23", "one", "meet", "body", "trail"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)).collect();
+            names.extend(["radius", "melt", "shine", "metal", "time", "life", "shift", "wet"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.push(UniformName::new("origin", UniformType::_2f));
             let source = include_str!("dock.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
             match renderer.compile_custom_pixel_shader(&source, &names) {
                 Ok(p) => *self.program.borrow_mut() = Some(p),
@@ -776,81 +833,94 @@ impl Dock {
             }
         }
         let (width, height) = layout::LAYOUT;
-        // The bottom of the screen, as high as a drop flowing up the hinge.
-        let top = height - 230;
+        // The bottom of the screen: the drops, their shadow, their breath.
+        let top = height - 140;
         let area = Rectangle::<i32, Logical>::new((0, top).into(), (width, height - top).into());
         let y = |v: f64| (v - top as f64) as f32;
-        // Apart, they melt together the more the nearer, up to MELT; once
-        // they touch they are one drop (a smooth union of two that overlap
-        // would swell where they meet).
-        let gap = boxes[1].0 - (boxes[0].0 + boxes[0].2);
-        let (b0, b1, j0, j1, melt) = if gap <= 0.0 {
-            let (x0, x1) = (boxes[0].0.min(boxes[1].0), (boxes[0].0 + boxes[0].2).max(boxes[1].0 + boxes[1].2));
-            let one = (x0, boxes[0].1.min(boxes[1].1), x1 - x0, boxes[0].3.max(boxes[1].3));
-            let j = ((jelly[0].0 + jelly[1].0) / 2.0, jelly[0].1.max(jelly[1].1));
-            (one, one, j, j, 1.0)
-        } else {
-            (boxes[0], boxes[1], jelly[0], jelly[1], MELT * (gap / 14.0).clamp(0.3, 1.0))
+        let far = ([-1000.0, 0.0, 10.0, 10.0], (1.0, 1.0));
+        let d: Vec<([f64; 4], (f64, f64))> = (0..4).map(|i| shape.drops.get(i).copied().unwrap_or(far)).collect();
+        let (one, meet) = match shape.one {
+            Some((b, fill, bulge, join)) => (b, [fill, bulge, join, 0.0]),
+            None => ([-1000.0, 0.0, 10.0, 10.0], [0.0; 4]),
         };
-        let values: Vec<f32> = vec![
-            b0.0 as f32, y(b0.1), b0.2 as f32, b0.3 as f32,
-            b1.0 as f32, y(b1.1), b1.2 as f32, b1.3 as f32,
-            j0.0 as f32, j0.1 as f32, j1.0 as f32, j1.1 as f32,
-            melt as f32,
-            ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0,
-            self.life(frame_ns) as f32,
-            self.shift as f32,
-            top as f32,
-            thin[0] as f32, thin[1] as f32,
-        ];
-        // The trace, drying: fainter, and shrinking towards its middle.
-        let (trail, wet) = match self.trail.get() {
-            Some((t, at)) if frame_ns < at + WET_NS => {
-                let k = (frame_ns - at) as f64 / WET_NS as f64;
-                let inset = k * 0.3 * (t[2] - t[0]).min(t[3] - t[1]);
-                ([t[0] + inset, t[1] + inset, t[2] - t[0] - 2.0 * inset, t[3] - t[1] - 2.0 * inset], (1.0 - k).powf(1.5))
-            }
-            _ => ([0.0; 4], 0.0),
-        };
-        let mut values = values;
-        values.extend([trail[0] as f32, y(trail[1]), trail[2] as f32, trail[3] as f32, wet as f32]);
+        let mut v: Vec<f32> = Vec::new();
+        for (b, _) in &d {
+            v.extend([b[0] as f32, y(b[1]), b[2] as f32, b[3] as f32]);
+        }
+        v.extend([d[0].1 .0, d[0].1 .1, d[1].1 .0, d[1].1 .1, d[2].1 .0, d[2].1 .1, d[3].1 .0, d[3].1 .1].map(|x| x as f32));
+        v.extend([one[0] as f32, y(one[1]), one[2] as f32, one[3] as f32]);
+        v.extend(meet.map(|x| x as f32));
+        let t = shape.trail.0;
+        v.extend([t[0] as f32, y(t[1]), t[2] as f32, t[3] as f32, shape.trail.1 as f32]);
+        v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, self.life(frame_ns) as f32, self.shift as f32, top as f32]);
         let uniforms = |v: &[f32]| {
             vec![
-                Uniform::new("half0", (v[0], v[1], v[2], v[3])),
-                Uniform::new("half1", (v[4], v[5], v[6], v[7])),
-                Uniform::new("squash0", (v[8], v[9])),
-                Uniform::new("squash1", (v[10], v[11])),
+                Uniform::new("b0", (v[0], v[1], v[2], v[3])),
+                Uniform::new("b1", (v[4], v[5], v[6], v[7])),
+                Uniform::new("b2", (v[8], v[9], v[10], v[11])),
+                Uniform::new("b3", (v[12], v[13], v[14], v[15])),
+                Uniform::new("s01", (v[16], v[17], v[18], v[19])),
+                Uniform::new("s23", (v[20], v[21], v[22], v[23])),
+                Uniform::new("one", (v[24], v[25], v[26], v[27])),
+                Uniform::new("meet", (v[28], v[29], v[30], v[31])),
+                Uniform::new("trail", (v[32], v[33], v[34], v[35])),
+                Uniform::new("wet", v[36]),
+                Uniform::new("melt", v[37]),
+                Uniform::new("time", v[38]),
+                Uniform::new("life", v[39]),
+                Uniform::new("shift", v[40]),
+                Uniform::new("origin", (0.0f32, v[41])),
                 Uniform::new("radius", DROP_RADIUS),
-                Uniform::new("melt", v[12]),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
-                Uniform::new("origin", (0.0f32, v[16])),
-                Uniform::new("time", v[13]),
-                Uniform::new("life", v[14]),
-                Uniform::new("shift", v[15]),
-                Uniform::new("thin0", v[17]),
-                Uniform::new("thin1", v[18]),
-                Uniform::new("trail", (v[19], v[20], v[21], v[22])),
-                Uniform::new("wet", v[23]),
             ]
         };
         let mut drops = self.drops.borrow_mut();
         match drops.as_mut() {
             Some((e, last)) => {
-                if *last != values {
-                    e.update_uniforms(uniforms(&values));
-                    *last = values;
+                if *last != v {
+                    e.update_uniforms(uniforms(&v));
+                    *last = v;
                 }
             }
             None => {
                 let program = self.program.borrow().clone()?;
-                let e = PixelShaderElement::new(program, area, None, 1.0, uniforms(&values), Kind::Unspecified);
-                *drops = Some((e, values));
+                let e = PixelShaderElement::new(program, area, None, 1.0, uniforms(&v), Kind::Unspecified);
+                *drops = Some((e, v));
             }
         }
         drops.as_ref().map(|(e, _)| e.clone())
     }
+}
+
+/// The drops at a moment (Dock::shape): each half's box (its bump's squash
+/// about its anchor, before the hinge) and its squash; the drops to draw,
+/// up to four (a half across the hinge is two); how much drops apart melt
+/// together; the two as one once met (the box, how filled the waist is, the
+/// join's swell and where); the wet spot and how wet.
+struct Shape {
+    boxes: [(f64, f64, f64, f64); 2],
+    squash: [(f64, f64); 2],
+    drops: Vec<([f64; 4], (f64, f64))>,
+    melt: f64,
+    one: Option<([f64; 4], f64, f64, f64)>,
+    trail: ([f64; 4], f64),
+}
+
+/// Smoothstep from 0 to 1.
+fn smooth(x: f64) -> f64 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+/// How much of an icon centred at `cx`, `r` wide each way, is under the
+/// hinge or about to be (0 none, 1 all): it fades in the last px before.
+fn hinge_cover(cx: f64, r: f64) -> f64 {
+    let panels = layout::panels();
+    let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
+    let d = if cx < h0 { h0 - cx } else if cx > h1 { cx - h1 } else { 0.0 };
+    1.0 - smooth(d / (r + 10.0))
 }
 
 /// item's contact ease: 0..1 over k, easing in, then the last `delta` of

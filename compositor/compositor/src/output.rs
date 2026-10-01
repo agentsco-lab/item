@@ -577,7 +577,9 @@ impl Screen {
     /// after the swap.
     #[allow(clippy::too_many_arguments)]
     fn take_shot(renderer: &mut GlesRenderer, shot: &mut Option<String>, frames_left: &mut u32, frames_drawn: u64, size: smithay::utils::Size<i32, smithay::utils::Physical>, target: &smithay::backend::renderer::gles::GlesTarget<'_>, damaged: i64) -> Option<(String, smithay::backend::renderer::gles::GlesMapping, smithay::utils::Size<i32, smithay::utils::Physical>)> {
-        let run = damaged > 0 && *frames_left > 0 && shot.is_none();
+        // FRAMES_EVERY=n: a run keeps every n-th frame, to span a slow move.
+        let every = std::env::var("FRAMES_EVERY").ok().and_then(|n| n.parse::<u64>().ok()).unwrap_or(1).max(1);
+        let run = damaged > 0 && *frames_left > 0 && shot.is_none() && frames_drawn % every == 0;
         if run {
             *frames_left -= 1;
             *shot = Some(format!("/tmp/item-frame-{:03}-{}.rgba", frames_drawn, hybris_hwc::now_ns() / 1_000_000 % 100_000));

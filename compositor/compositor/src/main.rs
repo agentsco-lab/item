@@ -70,6 +70,8 @@ use crate::state::{ClientState, State};
 pub struct Data {
     /// The volume bar was up at the last frame.
     volume_bar_up: bool,
+    /// FRAMES_DOCK's run was taken.
+    frames_dock_done: bool,
     pub state: State,
     pub screen: Screen,
     started: Instant,
@@ -453,6 +455,12 @@ impl Data {
         if !self.screen.primed() || self.screen.reprime > 0 {
             self.state.needs_redraw = true;
         }
+        // FRAMES_DOCK: a run of frames from when a drop first reaches the
+        // hinge, for looking at its crossing.
+        if std::env::var_os("FRAMES_DOCK").is_some() && self.state.dock.at_hinge.get() && !self.frames_dock_done {
+            self.frames_dock_done = true;
+            self.screen.frames_left = 40;
+        }
         if self.state.dock.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(hybris_hwc::now_ns());
@@ -778,7 +786,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.
