@@ -1,6 +1,6 @@
 # The shell on two panels
 
-The port (iverbovoy/surfaceduo-droidian, from 0.21) runs Droidian's own
+The port (agentsco-lab/surfaceduo-droidian, from 0.21) runs Droidian's own
 phosh on the Surface Duo's two panels: a top bar and a shade per half,
 windows maximized one panel each, the app grid and the keyboard kept off the
 hinge. item-shell is what goes on top of that: a dock across both panels

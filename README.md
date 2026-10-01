@@ -2,7 +2,7 @@
 
 **item-shell** is a shell for a phone with two screens and a hinge between
 them, made on the Microsoft Surface Duo 1 running Droidian. It goes on top of
-the port, [iverbovoy/surfaceduo-droidian](https://github.com/iverbovoy/surfaceduo-droidian),
+the port, [agentsco-lab/surfaceduo-droidian](https://github.com/agentsco-lab/surfaceduo-droidian),
 which runs Droidian's own phosh on the two panels by itself; item-shell
 turns that into a desktop made for two panels.
 
