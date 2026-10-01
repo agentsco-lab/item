@@ -9,6 +9,8 @@ asked for after the person was already in, in a window of its own.
 
 ## Principles
 
+- **The interface is in English**, every label, message and date.
+
 - **Only the shell asks for a secret**: the lock screen or a system dialog
   drawn by the compositor, never a stray app window.
 - **Ask once**: after a boot the PIN opens the session and the login
@@ -21,7 +23,7 @@ asked for after the person was already in, in a window of its own.
 ## After a boot
 
 - Left: the time, large; the date; a greeting by the time of day and the
-  name ("Доброе утро, Иван"); "После перезагрузки нужен PIN".
+  name ("Good morning, Alex"); "Enter your PIN after a restart".
 - Right: the PIN pad, already open.
 - The right PIN unlocks, and the two halves open as doors: the left panel's
   half slides out to the left, the right one's to the right, the desktop
@@ -32,25 +34,25 @@ asked for after the person was already in, in a window of its own.
 - Left: the time and the date.
 - Right: a fingerprint mark at the right edge, across from the power key
   (the reader is in it), pulsing softly while the reader listens, and
-  "Коснитесь кнопки питания".
+  "Touch the power key".
 - A known finger: the mark flashes, the doors open. An unknown one: the
-  mark shakes red, a buzz, "Не узнан". After five failures the PIN pad
+  mark shakes red, a buzz, "Not recognized". After five failures the PIN pad
   slides in on the right; a swipe up brings it at any time.
 
 ## The first setup (once)
 
 1. **Welcome**: a motion across both panels (item's mark assembling over the
-   hinge). Left "Добро пожаловать", right "Начать".
+   hinge). Left "Welcome", right "Get started".
 2. **The PIN**: left, why a PIN (after a boot, and in reserve); right, the
    pad. A new PIN twice, or the one there is, once.
 3. **A finger**: left, a large fingerprint filling with each touch
-   (`EnrollProgressChanged`); right, "Касайтесь кнопки питания, меняя
-   положение пальца", an arrow to the key. "Позже" skips it.
+   (`EnrollProgressChanged`); right, "Touch the power key, moving your
+   finger a little each time", an arrow to the key. "Later" skips it.
 4. **The tour**: a lesson per gesture. Left, a ghost finger shows it; right,
-   "Попробуйте"; it counts when done for real: the shade, the app grid, an
+   "Try it"; it counts when done for real: the shade, the app grid, an
    app from the dock, putting a window away, the system screen, the pen's
-   sheet, back from the edge. "Пропустить" at any time.
-5. **"Всё готово"**, and the doors open on the desktop.
+   sheet, back from the edge. "Skip" at any time.
+5. **"All set"**, and the doors open on the desktop.
 
 ## Asking while the session runs
 
