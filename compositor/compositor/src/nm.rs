@@ -128,7 +128,7 @@ impl Wifi {
     pub fn new(wake: Ping) -> Wifi {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let agent = Agent { shared: shared.clone(), wake };
-        let conn = zbus::blocking::connection::Builder::system().and_then(|b| b.serve_at(PATH, agent)).and_then(|b| b.build());
+        let conn = zbus::blocking::connection::Builder::system().map(|b| b.method_timeout(std::time::Duration::from_secs(5))).and_then(|b| b.serve_at(PATH, agent)).and_then(|b| b.build());
         let conn = match conn {
             Ok(c) => c,
             Err(e) => {

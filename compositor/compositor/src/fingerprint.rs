@@ -76,7 +76,9 @@ impl Fingerprint {
         if std::env::var_os("NO_FINGERPRINT").is_some() {
             return none;
         }
-        let Ok(system) = zbus::blocking::Connection::system() else { return none };
+        // The daemon can hang (an enrolment left running): its answers
+        // waited for 5 s at most, the compositor starting without it if so.
+        let Ok(system) = zbus::blocking::connection::Builder::system().map(|b| b.method_timeout(std::time::Duration::from_secs(5))).and_then(|b| b.build()) else { return none };
         let fingers = system
             .call_method(Some(NAME), PATH, Some(NAME), "GetAll", &())
             .and_then(|r| r.body().deserialize::<Vec<String>>())
