@@ -64,6 +64,10 @@ pub struct Lock {
     time: Label,
     date: Label,
     hint: Label,
+    /// The hint at the foot of the panels, and a passing notice in its place
+    /// (the fingerprint reader's) until when.
+    hint_base: String,
+    notice_until: u64,
     minute: i32,
     id: Id,
     /// When the last touch came, for the idle delay.
@@ -108,6 +112,8 @@ impl Lock {
             time: Label::new(110.0, [1.0, 1.0, 1.0, 0.9]),
             date: Label::new(22.0, [1.0, 1.0, 1.0, 0.6]),
             hint: Label::new(15.0, [1.0, 1.0, 1.0, 0.45]),
+            hint_base: "Проведите вверх, чтобы разблокировать".into(),
+            notice_until: 0,
             minute: -1,
             id: Id::new(),
             last_touch_ns: hybris_hwc::now_ns(),
@@ -123,6 +129,37 @@ impl Lock {
         }
         lock.refresh();
         lock
+    }
+
+    /// The hint, when nothing passing is said in its place.
+    pub fn set_hint(&mut self, text: &str) {
+        if self.hint_base == text {
+            return;
+        }
+        self.hint_base = text.to_owned();
+        if let (Some((_, regular)), 0) = (&self.fonts, self.notice_until) {
+            self.hint.set(regular, text);
+        }
+    }
+
+    /// Something said in the hint's place for 2 s.
+    pub fn notice(&mut self, text: &str) {
+        if let Some((_, regular)) = &self.fonts {
+            self.hint.set(regular, text);
+            self.notice_until = hybris_hwc::now_ns() + 2_000_000_000;
+        }
+    }
+
+    /// The notice's time is up: the hint is back; whether it changed.
+    pub fn notice_done(&mut self, now_ns: u64) -> bool {
+        if self.notice_until == 0 || now_ns < self.notice_until {
+            return false;
+        }
+        self.notice_until = 0;
+        if let Some((_, regular)) = &self.fonts {
+            self.hint.set(regular, &self.hint_base);
+        }
+        true
     }
 
     fn say(&mut self, text: &str) {
@@ -212,7 +249,9 @@ impl Lock {
         self.minute = minute;
         self.time.set(thin, &format!("{}:{:02}", now.tm_hour, now.tm_min));
         self.date.set(regular, &date_line(&now));
-        self.hint.set(regular, "Проведите вверх, чтобы разблокировать");
+        if self.notice_until == 0 {
+            self.hint.set(regular, &self.hint_base);
+        }
         true
     }
 

@@ -8,8 +8,9 @@
 # session (from /tmp) starting gnome-session --session=item - with its files
 # in /tmp and the user's runtime systemd directory, all gone after: the
 # session file, its target's drop-in, and copies of the old GTK dock's,
-# system screen's and pen sheet's autostart files marked NotShowIn=item (the
-# compositor has its own; the package marks the originals so).
+# system screen's and pen sheet's autostart files, and sfduo-fingerprint's,
+# marked NotShowIn=item (the compositor has its own of each; the package
+# marks the originals so).
 T=${1:-60}; shift
 USER_NAME=droidian
 UID_N=$(id -u $USER_NAME)
@@ -40,7 +41,7 @@ session_env() {
 }
 
 RUNTIME_UNITS=/run/user/$UID_N/systemd/user
-AUTOSTART_OLD="sfduo-dock sfduo-system-screen sfduo-pen-screen"
+AUTOSTART_OLD="sfduo-dock sfduo-system-screen sfduo-pen-screen sfduo-fingerprint"
 
 session_files() {
     mkdir -p /tmp/item-session/share/gnome-session/sessions $RUNTIME_UNITS/gnome-session@item.target.d

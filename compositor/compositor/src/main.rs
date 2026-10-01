@@ -31,6 +31,7 @@ mod input;
 mod layers;
 mod lock;
 mod logind;
+mod fingerprint;
 mod layout;
 mod notify;
 mod output;
@@ -297,8 +298,20 @@ impl Data {
             }
             self.state.needs_redraw = true;
         }
+        for event in self.state.fingerprint.take_events() {
+            match event {
+                fingerprint::Event::Identified => self.state.lock.unlock(),
+                fingerprint::Event::NotRecognized => self.state.lock.notice("Отпечаток не распознан"),
+            }
+            self.state.needs_redraw = true;
+        }
+        if self.state.lock.notice_done(hybris_hwc::now_ns()) {
+            self.state.needs_redraw = true;
+        }
         let (locked, blank) = (self.state.lock.locked, self.state.lock.blank);
         self.state.logind.report(locked, blank);
+        // The reader listens while the phone is locked and lit.
+        self.state.fingerprint.want(self.state.lock.holds_screen() && !blank);
     }
 
     fn draw_if_needed(&mut self) {
@@ -488,6 +501,7 @@ impl Data {
         }
         let (locked, blank) = (self.state.lock.locked, self.state.lock.blank);
         self.state.logind.report(locked, blank);
+        self.state.fingerprint.want(self.state.lock.holds_screen() && !blank);
         self.state.paces.busy_until(hybris_hwc::now_ns());
     }
 
@@ -681,6 +695,9 @@ fn main() {
     // PIN also opens the login keyring (PAM's phosh service).
     if args.session.is_some() {
         state.lock.lock_now();
+    }
+    if state.fingerprint.fingers > 0 {
+        state.lock.set_hint("Приложите палец или проведите вверх");
     }
     // The session's manager: when it ends (a log out, or it failed), so
     // does the compositor, and the unit that started it decides what next.
