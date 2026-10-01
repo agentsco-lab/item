@@ -39,7 +39,8 @@
 //! PIN set, no finger enrolled, nothing written), to try the screens: there
 //! the reader only identifies, and each touch counts as taken. With
 //! `SETUP_AUTO=1` too, the touches come by themselves (a second apart, the
-//! third not taken), for scripted runs.
+//! third not taken), for scripted runs. `SETUP_DRY=pin` leaves the PIN and
+//! the marker alone but enrolls the finger for real.
 
 use std::sync::{Arc, Mutex};
 
@@ -231,6 +232,9 @@ struct Words {
 pub struct Setup {
     pub active: bool,
     dry: bool,
+    /// The finger's step dry too (SETUP_DRY=pin: only the PIN and the
+    /// marker are left alone, a finger is enrolled for real).
+    dry_finger: bool,
     step: Step,
     leaving: Option<u64>,
     /// The drop as it was when the setup went, for the dock to take: when,
@@ -306,6 +310,7 @@ impl Setup {
         Setup {
             active: false,
             dry: std::env::var_os("SETUP_DRY").is_some(),
+            dry_finger: std::env::var_os("SETUP_DRY").is_some_and(|v| v != "pin"),
             step: Step::Welcome,
             leaving: None,
             handed: None,
@@ -364,7 +369,7 @@ impl Setup {
         self.moved_at = self.started;
         self.move_ns = MOVE_MAX_NS;
         self.orb_ns = self.started;
-        tracing::info!("setup: shown{}", if self.dry { " (dry: nothing is changed)" } else { "" });
+        tracing::info!("setup: shown{}", if self.dry_finger { " (dry: nothing is changed)" } else if self.dry { " (dry but the finger: the PIN is left alone)" } else { "" });
         let slot = self.is_default.clone();
         let wake = self.wake.clone();
         std::thread::spawn(move || {
@@ -477,7 +482,7 @@ impl Setup {
                 self.progress = 0;
                 self.lit = 0.0;
                 (self.touched_at, self.poor_at, self.last_at) = (None, None, None);
-                if self.dry && std::env::var_os("SETUP_AUTO").is_some() {
+                if self.dry_finger && std::env::var_os("SETUP_AUTO").is_some() {
                     self.auto = Some((hybris_hwc::now_ns() + 2_000_000_000, 0));
                 }
                 self.enrolling = true;
@@ -594,7 +599,7 @@ impl Setup {
                         self.go(Step::FingerKnown);
                     } else {
                         self.go(Step::Finger);
-                        if !self.dry {
+                        if !self.dry_finger {
                             fingerprint.enroll(&format!("finger {}", self.fingers + 1));
                         }
                     }
@@ -633,7 +638,7 @@ impl Setup {
     /// Whether the setup wants the reader to identify: SETUP_DRY's finger
     /// step, each touch counted as taken.
     pub fn wants_reader(&self) -> bool {
-        self.holds_screen() && self.dry && self.step == Step::Finger && self.enrolling
+        self.holds_screen() && self.dry_finger && self.step == Step::Finger && self.enrolling
     }
 
     /// A touch the reader took, `progress` % of the finger now.
@@ -664,7 +669,7 @@ impl Setup {
         match event {
             Event::EnrollProgress(p) if p > self.progress && p < 100 => self.touch_taken(p),
             // SETUP_DRY: any touch is taken.
-            Event::Identified | Event::NotRecognized if self.dry => {
+            Event::Identified | Event::NotRecognized if self.dry_finger => {
                 let p = (self.progress + 100 / DRY_TOUCHES + 1).min(100);
                 if p < 100 {
                     self.touch_taken(p);
@@ -676,7 +681,7 @@ impl Setup {
                 // The print lights whole, green, and a moment after the
                 // setup moves on.
                 self.enrolling = false;
-                if !self.dry {
+                if !self.dry_finger {
                     self.fingers += 1;
                 }
                 self.touch_taken(100);
@@ -701,7 +706,7 @@ impl Setup {
                 self.note("Let's start again: touch the sensor", AMBER);
                 self.progress = 0;
                 self.touched_at = None;
-                self.enroll_again = !self.dry;
+                self.enroll_again = !self.dry_finger;
             }
             _ => {}
         }
@@ -750,7 +755,7 @@ impl Setup {
         if self.step == Step::FingerKnown && Self::button2_rect().contains((x, y)) {
             tracing::info!("setup: another finger");
             self.go(Step::Finger);
-            if !self.dry {
+            if !self.dry_finger {
                 fingerprint.enroll(&format!("finger {}", self.fingers + 1));
             }
             return;
@@ -765,7 +770,7 @@ impl Setup {
                 // Later: the reader stops.
                 tracing::info!("setup: the finger later");
                 self.enrolling = false;
-                if !self.dry {
+                if !self.dry_finger {
                     fingerprint.stop_enroll();
                 }
                 self.go(Step::Done);
