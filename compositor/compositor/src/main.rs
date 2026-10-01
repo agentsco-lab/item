@@ -30,8 +30,10 @@ mod grid;
 mod input;
 mod layers;
 mod lock;
+mod door;
 mod logind;
 mod fingerprint;
+mod status;
 mod layout;
 mod notify;
 mod output;
@@ -303,6 +305,10 @@ impl Data {
                 fingerprint::Event::Identified => self.state.lock.unlock(),
                 fingerprint::Event::NotRecognized => self.state.lock.fingerprint_failed(),
             }
+            self.state.needs_redraw = true;
+        }
+        if let Some(facts) = self.state.status.take() {
+            self.state.lock.set_status(&facts);
             self.state.needs_redraw = true;
         }
         if self.state.lock.notice_done(hybris_hwc::now_ns()) {

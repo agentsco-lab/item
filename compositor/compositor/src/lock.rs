@@ -30,8 +30,6 @@ use crate::layout::{self, SCALE};
 use crate::shade::{date_line, local_time, ShellElement};
 use crate::text::{Font, Label};
 
-/// The doors opening.
-const DOOR_NS: u64 = 450_000_000;
 /// The PIN pad coming in.
 const PAD_IN_NS: u64 = 200_000_000;
 /// A shake: the pad at a wrong PIN, the mark at an unknown finger.
@@ -57,7 +55,12 @@ const MAX_PIN: usize = 16;
 /// The fingerprint mark: its size, and the height of the power key's middle
 /// on the right panel's right edge (logical px).
 const MARK: f64 = 48.0;
-const POWER_Y: f64 = 380.0;
+const POWER_Y: f64 = 405.0;
+/// The mark comes up over this, with a soft glow behind it.
+const MARK_IN_NS: u64 = 400_000_000;
+const GLOW: f64 = 124.0;
+/// Where the left panel talks to you: the middle of its lower part.
+const TALK_FROM_FOOT: i32 = 170;
 const MARK_ICON: &str = "/usr/share/icons/Adwaita/symbolic/devices/auth-fingerprint-symbolic.svg";
 
 pub struct Lock {
@@ -79,6 +82,13 @@ pub struct Lock {
     /// The fingerprint mark, white and red.
     mark: Option<MemoryRenderBuffer>,
     mark_red: Option<MemoryRenderBuffer>,
+    glow: Option<MemoryRenderBuffer>,
+    /// The status line under the date: the battery and the network.
+    battery_icon: Option<MemoryRenderBuffer>,
+    battery_label: Label,
+    net_icon: Option<MemoryRenderBuffer>,
+    net_label: Label,
+    status_icons: (String, &'static str),
     pub locked: bool,
     pub blank: bool,
     /// The first lock after a boot: the PIN, and a greeting.
@@ -87,8 +97,9 @@ pub struct Lock {
     fingers: usize,
     /// Unknown fingers in a row.
     fails: u32,
-    /// When the doors began to open.
+    /// When the doors began to open, and how they open (door.rs).
     fading: Option<u64>,
+    door: crate::door::Style,
     /// When the pad last shook, the mark last shook or flashed.
     pad_shake: Option<u64>,
     mark_shake: Option<u64>,
@@ -129,6 +140,30 @@ fn tinted(path: &str, size: i32, rgb: [u8; 3]) -> Option<MemoryRenderBuffer> {
     }
     let n = pixmap.width() as i32;
     Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (n, n), SCALE, smithay::utils::Transform::Normal, None))
+}
+
+/// A soft white glow, `size` logical px across.
+fn glow(size: f64) -> Option<MemoryRenderBuffer> {
+    use resvg::tiny_skia;
+    let px = (size * SCALE as f64) as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
+    let c = px as f32 / 2.0;
+    let shader = tiny_skia::RadialGradient::new(
+        tiny_skia::Point::from_xy(c, c),
+        tiny_skia::Point::from_xy(c, c),
+        c,
+        vec![
+            tiny_skia::GradientStop::new(0.0, tiny_skia::Color::from_rgba8(255, 255, 255, 46)),
+            tiny_skia::GradientStop::new(0.45, tiny_skia::Color::from_rgba8(255, 255, 255, 18)),
+            tiny_skia::GradientStop::new(1.0, tiny_skia::Color::from_rgba8(255, 255, 255, 0)),
+        ],
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::Transform::identity(),
+    )?;
+    let mut paint = tiny_skia::Paint::default();
+    paint.shader = shader;
+    pixmap.fill_rect(tiny_skia::Rect::from_xywh(0.0, 0.0, px as f32, px as f32)?, &paint, tiny_skia::Transform::identity(), None);
+    Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (px as i32, px as i32), SCALE, smithay::utils::Transform::Normal, None))
 }
 
 /// Ease in and out (cubic).
@@ -173,12 +208,19 @@ impl Lock {
                 .or_else(|| crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/actions/edit-clear-symbolic.svg", 28)),
             mark: tinted(MARK_ICON, MARK as i32, [240, 240, 240]),
             mark_red: tinted(MARK_ICON, MARK as i32, [235, 80, 70]),
+            glow: glow(GLOW),
+            battery_icon: None,
+            battery_label: Label::new(15.0, [1.0, 1.0, 1.0, 0.65]),
+            net_icon: None,
+            net_label: Label::new(15.0, [1.0, 1.0, 1.0, 0.65]),
+            status_icons: (String::new(), ""),
             locked: false,
             blank: false,
             after_boot: false,
             fingers: 0,
             fails: 0,
             fading: None,
+            door: crate::door::Style::default(),
             pad_shake: None,
             mark_shake: None,
             mark_flash: None,
@@ -225,7 +267,21 @@ impl Lock {
     /// How many fingers the reader knows: with none there is no mark.
     pub fn set_fingers(&mut self, n: usize) {
         self.fingers = n;
-        self.set_hint(if n > 0 { "Touch the power key" } else { "Swipe up to unlock" });
+        self.set_hint(if n > 0 { "" } else { "Swipe up to unlock" });
+    }
+
+    /// The status line's facts.
+    pub fn set_status(&mut self, f: &crate::status::Facts) {
+        let Some((_, regular)) = &self.fonts else { return };
+        self.battery_label.set(regular, &format!("{}%", f.battery));
+        self.net_label.set(regular, &f.net);
+        let icons = (f.battery_icon(), f.net_icon);
+        if icons != self.status_icons {
+            let path = |n: &str| format!("/usr/share/icons/Adwaita/symbolic/status/{n}.svg");
+            self.battery_icon = crate::quick::symbolic(&path(&icons.0), 16);
+            self.net_icon = crate::quick::symbolic(&path(icons.1), 16);
+            self.status_icons = icons;
+        }
     }
 
     /// Whether the reader should listen: locked, lit, not right after a
@@ -360,6 +416,8 @@ impl Lock {
     }
 
     fn open_doors(&mut self) {
+        self.door = crate::door::Style::read();
+        tracing::info!("lock: doors {:?}, {} ms", self.door.mode, self.door.ns / 1_000_000);
         self.fading = Some(hybris_hwc::now_ns());
         self.unlocked = self.fading;
         self.after_boot = false;
@@ -517,7 +575,7 @@ impl Lock {
     /// After a frame: whether the lock screen still wants frames.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
         if let Some(t) = self.fading {
-            if frame_ns >= t + DOOR_NS {
+            if frame_ns >= t + self.door.ns {
                 self.locked = false;
                 self.fading = None;
                 self.lift = 0.0;
@@ -534,6 +592,7 @@ impl Lock {
             || moving(self.pad_shake, SHAKE_NS)
             || moving(self.mark_shake, SHAKE_NS)
             || moving(self.mark_flash, FLASH_NS)
+            || moving(Some(self.shown_at), MARK_IN_NS)
             || (self.fingers > 0 && !self.entering && !self.after_boot && frame_ns < self.shown_at + PULSE_FOR_NS)
     }
 
@@ -544,18 +603,36 @@ impl Lock {
             .chain(self.keys.iter().map(|l| &l.buffer))
             .chain(self.mark.iter())
             .chain(self.mark_red.iter())
+            .chain(self.glow.iter())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
 
+    /// The doors turning in depth (not sliding): their style, how far open
+    /// (0..1), and since when - the output draws them from a picture of the
+    /// lock screen (door.rs).
+    pub fn turning(&self, frame_ns: u64) -> Option<(crate::door::Style, f64, u64)> {
+        let t = self.fading?;
+        (self.door.mode != crate::door::Mode::Slide).then(|| (self.door, ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64), t))
+    }
+
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
-        if !self.locked {
+        if !self.locked || self.turning(frame_ns).is_some() {
             return Vec::new();
         }
+        // The doors sliding: each half out to its own side.
+        let open = self.fading.map(|t| ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64)).unwrap_or(0.0);
+        self.draw(renderer, frame_ns, open)
+    }
+
+    /// The lock screen as it stands, for the picture the doors turn.
+    pub fn picture(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
+        self.draw(renderer, frame_ns, 0.0)
+    }
+
+    fn draw(&self, renderer: &mut GlesRenderer, frame_ns: u64, open: f64) -> Vec<ShellElement> {
         let panels = layout::panels();
         let (left, right) = (panels[0], panels[1]);
-        // The doors: each half slides out to its own side.
-        let open = self.fading.map(|t| ease(frame_ns.saturating_sub(t) as f64 / DOOR_NS as f64)).unwrap_or(0.0);
         let middle = (left.loc.x + left.size.w + right.loc.x) as f64 / 2.0;
         let (w, h) = layout::LAYOUT;
         let left_dx = -middle * open;
@@ -604,30 +681,57 @@ impl Lock {
             } else {
                 0.7
             };
-            let alpha = flash.map(|f| 0.9 + 0.1 * f).unwrap_or(pulse) as f32;
+            // It comes up softly where the lock screen shows.
+            let appear = ease(frame_ns.saturating_sub(self.shown_at) as f64 / MARK_IN_NS as f64);
+            let alpha = (flash.map(|f| 0.9 + 0.1 * f).unwrap_or(pulse) * appear) as f32;
             let mx = (right.loc.x + right.size.w) as f64 - 18.0 - MARK;
             let my = POWER_Y - MARK / 2.0;
+            if let Some(g) = &self.glow {
+                let glow = (appear * (0.6 + 0.4 * pulse)) as f32;
+                put(&mut out, g, mx + MARK / 2.0 - GLOW / 2.0, POWER_Y - GLOW / 2.0, right_dx + sx, glow);
+            }
             let icon = if shaking { self.mark_red.as_ref() } else { self.mark.as_ref() };
             if let Some(icon) = icon {
                 put(&mut out, icon, mx, my, right_dx + sx, alpha);
             }
-            // What to do, beside it, right-aligned to the mark.
-            put(&mut out, &self.hint.buffer, mx - 14.0 - self.hint.extent.w as f64, POWER_Y - self.hint.extent.h as f64 / 2.0, right_dx, 1.0);
-        } else {
-            put(&mut out, &self.hint.buffer, cx(&self.hint, right), (right.size.h - 60) as f64, right_dx, 1.0);
         }
 
-        // The left half: who and what.
+        // The left half: who and what. The time, the date, the status line
+        // under them; after a boot a greeting; low down, what is said to you.
         let rise = -(self.lift * 0.5);
+        let top = if self.after_boot { 130.0 } else { 150.0 };
+        put(&mut out, &self.time.buffer, cx(&self.time, left), top + rise, left_dx, 1.0);
+        let mut y = top + 4.0 + self.time.extent.h as f64;
+        put(&mut out, &self.date.buffer, cx(&self.date, left), y + rise, left_dx, 1.0);
+        y += self.date.extent.h as f64 + 14.0;
+        // The status line: [battery] 84%   [network] its name, centred.
+        let gap = 6.0;
+        let item = |icon: &Option<MemoryRenderBuffer>, l: &Label| if icon.is_some() { 16.0 + gap } else { 0.0 } + l.extent.w as f64;
+        let (bw, nw) = (item(&self.battery_icon, &self.battery_label), item(&self.net_icon, &self.net_label));
+        if self.battery_label.extent.w > 0 {
+            let mut x = left.loc.x as f64 + (left.size.w as f64 - (bw + 22.0 + nw)) / 2.0;
+            let ly = y + rise;
+            let icon_y = ly + (self.battery_label.extent.h as f64 - 16.0) / 2.0;
+            for (icon, l) in [(&self.battery_icon, &self.battery_label), (&self.net_icon, &self.net_label)] {
+                if let Some(i) = icon {
+                    put(&mut out, i, x, icon_y, left_dx, 0.75);
+                    x += 16.0 + gap;
+                }
+                put(&mut out, &l.buffer, x, ly, left_dx, 1.0);
+                x += l.extent.w as f64 + 22.0;
+            }
+            y += self.battery_label.extent.h as f64;
+        }
         if self.after_boot {
-            put(&mut out, &self.time.buffer, cx(&self.time, left), 130.0 + rise, left_dx, 1.0);
-            let y = 134.0 + self.time.extent.h as f64;
-            put(&mut out, &self.date.buffer, cx(&self.date, left), y + rise, left_dx, 1.0);
-            put(&mut out, &self.greeting.buffer, cx(&self.greeting, left), y + 90.0 + rise, left_dx, 1.0);
-            put(&mut out, &self.status.buffer, cx(&self.status, left), (left.size.h - 70) as f64, left_dx, 1.0);
-        } else {
-            put(&mut out, &self.time.buffer, cx(&self.time, left), 150.0 + rise, left_dx, 1.0);
-            put(&mut out, &self.date.buffer, cx(&self.date, left), 154.0 + self.time.extent.h as f64 + rise, left_dx, 1.0);
+            put(&mut out, &self.greeting.buffer, cx(&self.greeting, left), y + 70.0 + rise, left_dx, 1.0);
+        }
+        // Talking: a passing notice, else the hint, else after a boot why
+        // the PIN.
+        let talk_y = (left.size.h - TALK_FROM_FOOT) as f64;
+        if self.notice_until != 0 || !self.hint_base.is_empty() {
+            put(&mut out, &self.hint.buffer, cx(&self.hint, left), talk_y, left_dx, 1.0);
+        } else if self.after_boot {
+            put(&mut out, &self.status.buffer, cx(&self.status, left), talk_y, left_dx, 1.0);
         }
 
         // The two halves' black, meeting over the hinge.

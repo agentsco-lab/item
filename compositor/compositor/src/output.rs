@@ -121,6 +121,9 @@ pub struct Screen {
     /// Our own buffer the frame is drawn into (CANVAS=0: none).
     canvas: Option<Canvas>,
     canvas_ready: bool,
+    /// The doors' picture of the lock screen, and since when (door.rs).
+    door: Option<(u64, smithay::backend::renderer::gles::GlesTexture)>,
+    door_ids: Vec<smithay::backend::renderer::element::Id>,
     _hwc: HwcOutput,
 }
 
@@ -177,7 +180,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -193,6 +196,18 @@ impl Screen {
         // The volume bar over everything, the lock screen next.
         let mut elements: Vec<FrameElement> = state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
         elements.extend(state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // The doors turning in depth: strips of a picture of the lock screen
+        // taken as they began (door.rs).
+        if let Some((style, k, start)) = state.lock.turning(frame_ns) {
+            if self.door.as_ref().map(|d| d.0) != Some(start) {
+                self.door = self.lock_picture(state, start).map(|t| (start, t));
+            }
+            if let Some((_, texture)) = &self.door {
+                elements.extend(self.door_strips(&style, k, texture.clone()));
+            }
+        } else if self.door.is_some() && !state.lock.locked {
+            self.door = None;
+        }
         elements.extend(state.back.elements(&mut self.renderer).into_iter().map(FrameElement::from));
         let rows: Vec<crate::quick::Row> = if state.shade.visible() { state.shade_rows() } else { Vec::new() };
         // A new notification's banner, on top of everything.
@@ -407,6 +422,68 @@ impl Screen {
                 None
             }
         }
+    }
+
+    /// The lock screen as it stood at `frame_ns`, in a texture the size of
+    /// the output.
+    fn lock_picture(&mut self, state: &State, frame_ns: u64) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+        use smithay::backend::renderer::Offscreen;
+        let size = self.output.current_mode()?.size;
+        let elements: Vec<FrameElement> = state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        let mut texture: smithay::backend::renderer::gles::GlesTexture = self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
+        let mut tracker = OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Normal);
+        {
+            let mut target = self.renderer.bind(&mut texture).ok()?;
+            tracker.render_output(&mut self.renderer, &mut target, 0, &elements, [0.0, 0.0, 0.0, 1.0]).ok()?;
+        }
+        tracing::info!("lock: a picture for the doors");
+        Some(texture)
+    }
+
+    /// The turning halves as strips of `texture`, each under its shade.
+    fn door_strips(&mut self, style: &crate::door::Style, k: f64, texture: smithay::backend::renderer::gles::GlesTexture) -> Vec<FrameElement> {
+        use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        use smithay::backend::renderer::utils::CommitCounter;
+        let (w, h) = crate::layout::LAYOUT;
+        let panels = crate::layout::panels();
+        let middle = (panels[0].loc.x + panels[0].size.w + panels[1].loc.x) as f64 / 2.0;
+        let strips = crate::door::strips(style, k, w as f64, middle, h as f64);
+        while self.door_ids.len() < 2 * strips.len() {
+            self.door_ids.push(smithay::backend::renderer::element::Id::new());
+        }
+        let context = self.renderer.context_id();
+        let commit = CommitCounter::from((k * 10000.0) as usize);
+        let mut out = Vec::with_capacity(2 * strips.len());
+        for (i, st) in strips.iter().enumerate() {
+            // Shared edges round alike: no seams between strips. Logical px,
+            // the output's scale.
+            let (x0, x1) = (st.x0.round() as i32, st.x1.round() as i32);
+            let hh = st.height.round() as i32;
+            if x1 <= x0 || hh <= 0 {
+                continue;
+            }
+            let y0 = (h - hh) / 2;
+            let rect = smithay::utils::Rectangle::<i32, smithay::utils::Physical>::new((x0 * SCALE, y0 * SCALE).into(), ((x1 - x0) * SCALE, hh * SCALE).into());
+            if st.dim > 0.005 {
+                out.push(FrameElement::Shell(ShellElement::Solid(SolidColorRenderElement::new(self.door_ids[2 * i + 1].clone(), rect, commit, [0.0, 0.0, 0.0, st.dim as f32], smithay::backend::renderer::element::Kind::Unspecified))));
+            }
+            let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((st.src_x0, 0.0).into(), (st.src_x1 - st.src_x0, h as f64).into());
+            out.push(FrameElement::Snapshot(TextureRenderElement::from_static_texture(
+                self.door_ids[2 * i].clone(),
+                context.clone(),
+                ((x0 * SCALE) as f64, (y0 * SCALE) as f64),
+                texture.clone(),
+                SCALE,
+                Transform::Normal,
+                None,
+                Some(src),
+                Some((x1 - x0, hh).into()),
+                None,
+                smithay::backend::renderer::element::Kind::Unspecified,
+            )));
+        }
+        out
     }
 
     /// Whether every buffer of the window has had a frame.
