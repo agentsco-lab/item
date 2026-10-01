@@ -108,6 +108,9 @@ pub struct State {
     pub status: crate::status::Status,
     /// gnome-keyring's prompts (keyring.rs).
     pub keyring: crate::keyring::Keyring,
+    /// The first setup (setup.rs), and the finger on it: slot, where down, where now.
+    pub setup: crate::setup::Setup,
+    pub setup_touch: Option<(smithay::backend::input::TouchSlot, f64, f64, f64, f64)>,
     pub system: crate::sysscreen::SystemScreen,
     /// The pen's tip is on the screen.
     pub pen_down: bool,
@@ -180,6 +183,8 @@ impl State {
             fingerprint: crate::fingerprint::Fingerprint::new(wake.clone()),
             status: crate::status::Status::new(wake.clone()),
             keyring: crate::keyring::Keyring::new(wake.clone()),
+            setup: crate::setup::Setup::new(wake.clone()),
+            setup_touch: None,
             system: crate::sysscreen::SystemScreen::new(wake.clone()),
             pen_down: false,
             pen: crate::pensheet::PenSheet::new(),

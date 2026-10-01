@@ -36,6 +36,7 @@ mod logind;
 mod fingerprint;
 mod status;
 mod keyring;
+mod setup;
 mod layout;
 mod notify;
 mod output;
@@ -306,14 +307,27 @@ impl Data {
             match event {
                 fingerprint::Event::Identified => self.state.lock.unlock(),
                 fingerprint::Event::NotRecognized => self.state.lock.fingerprint_failed(),
+                other => self.state.setup.reader(other),
             }
             self.state.needs_redraw = true;
+        }
+        // The first setup: its threads' answers; the PIN it settled on for
+        // the keyring; its fingers for the lock's mark.
+        if self.state.setup.poll(&self.state.fingerprint) {
+            self.state.needs_redraw = true;
+        }
+        if let Some(pin) = self.state.setup.take_pin() {
+            self.state.keyring.unlocked_with(pin);
+        }
+        if self.state.setup.active {
+            let n = self.state.setup.fingers;
+            self.state.lock.set_fingers(n);
         }
         // The keyring's prompts: the PIN that unlocked answers those waiting.
         if let Some(pin) = self.state.lock.take_verified_pin() {
             self.state.keyring.unlocked_with(pin);
         }
-        self.state.keyring.service(self.state.lock.locked);
+        self.state.keyring.service(self.state.lock.locked || self.state.setup.holds_screen());
         if let Some(facts) = self.state.status.take() {
             self.state.lock.set_status(&facts);
             self.state.needs_redraw = true;
@@ -479,6 +493,10 @@ impl Data {
             if age < 300_000_000 || age + 300_000_000 > crate::notify::BANNER_NS {
                 self.state.needs_redraw = true;
             }
+        }
+        if self.state.setup.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
         }
         if self.state.lock.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
@@ -708,8 +726,14 @@ fn main() {
     // PIN also opens the login keyring (PAM's phosh service).
     let fingers = state.fingerprint.fingers;
     state.lock.set_fingers(fingers);
-    if args.session.is_some() {
+    // A real session: the first setup if it was not done, else locked as
+    // after a boot.
+    if args.session.is_some() && setup::wanted() {
+        state.setup.start(fingers);
+    } else if args.session.is_some() {
         state.lock.after_boot();
+    } else if std::env::var_os("SETUP").is_some() || std::env::var_os("SETUP_DRY").is_some() {
+        state.setup.start(fingers);
     }
     // The session's manager: when it ends (a log out, or it failed), so
     // does the compositor, and the unit that started it decides what next.

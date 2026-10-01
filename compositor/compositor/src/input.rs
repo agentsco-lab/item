@@ -209,6 +209,33 @@ impl State {
             return;
         }
         self.lock.last_touch_ns = hybris_hwc::now_ns();
+        // The first setup: every touch is its own (setup.rs).
+        if self.setup.holds_screen() {
+            match contact {
+                Contact::Down(slot, pos, _) if self.setup_touch.is_none() => {
+                    self.setup.down(pos.x, pos.y);
+                    self.setup_touch = Some((slot, pos.x, pos.y, pos.x, pos.y));
+                }
+                Contact::Motion(slot, pos, _) => {
+                    if let Some(t) = self.setup_touch.as_mut().filter(|t| t.0 == slot) {
+                        (t.3, t.4) = (pos.x, pos.y);
+                        if (t.3 - t.1).abs() > 12.0 || (t.4 - t.2).abs() > 12.0 {
+                            self.setup.motion();
+                        }
+                    }
+                }
+                Contact::Up(slot, _) => {
+                    if let Some(t) = self.setup_touch.take_if(|t| t.0 == slot) {
+                        let fingerprint = &self.fingerprint;
+                        self.setup.up(t.3, t.4, fingerprint);
+                    }
+                }
+                Contact::Cancel => self.setup_touch = None,
+                _ => {}
+            }
+            self.needs_redraw = true;
+            return;
+        }
         // Locked: every touch is the lock screen's.
         match &contact {
             Contact::Down(slot, pos, t) if self.lock.holds_screen() => {

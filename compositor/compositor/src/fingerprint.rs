@@ -33,11 +33,19 @@ pub enum Event {
     Identified,
     /// A finger the reader does not know.
     NotRecognized,
+    /// Enrolling: how far (0-100).
+    EnrollProgress(i32),
+    /// Enrolled: the finger is known now.
+    Enrolled,
+    /// The enrolling stopped without a finger.
+    EnrollFailed,
 }
 
 enum Msg {
     Want(bool),
-    Signal(String, Option<String>),
+    Enroll(String),
+    StopEnroll,
+    Signal(String, Option<String>, Option<i32>),
 }
 
 pub struct Fingerprint {
@@ -81,7 +89,8 @@ impl Fingerprint {
                 for message in signals.flatten() {
                     let member = message.header().member().map(|m| m.to_string()).unwrap_or_default();
                     let arg = message.body().deserialize::<String>().ok();
-                    if tx.send(Msg::Signal(member, arg)).is_err() {
+                    let number = message.body().deserialize::<i32>().ok();
+                    if tx.send(Msg::Signal(member, arg, number)).is_err() {
                         break;
                     }
                 }
@@ -90,7 +99,11 @@ impl Fingerprint {
         let worker_events = events.clone();
         std::thread::spawn(move || {
             let call = |method: &str| system.call_method(Some(NAME), PATH, Some(NAME), method, &()).and_then(|r| r.body().deserialize::<i32>());
-            let (mut wanted, mut armed) = (false, false);
+            let (mut wanted, mut armed, mut enrolling) = (false, false, false);
+            let push = |event: Event| {
+                worker_events.lock().unwrap().push(event);
+                wake.ping();
+            };
             let mut next_try = Instant::now();
             loop {
                 let wait = if wanted && !armed { next_try.saturating_duration_since(Instant::now()) } else { Duration::from_secs(3600) };
@@ -103,7 +116,45 @@ impl Fingerprint {
                             tracing::info!("fingerprint: reader given up");
                         }
                     }
-                    Ok(Msg::Signal(member, arg)) => match (member.as_str(), arg.as_deref()) {
+                    Ok(Msg::Enroll(name)) => {
+                        if armed {
+                            armed = false;
+                            let _ = call("Abort");
+                        }
+                        let reply = system.call_method(Some(NAME), PATH, Some(NAME), "Enroll", &(name.as_str())).and_then(|r| r.body().deserialize::<i32>());
+                        match reply {
+                            Ok(0) => {
+                                enrolling = true;
+                                tracing::info!("fingerprint: enrolling");
+                            }
+                            other => {
+                                tracing::info!("fingerprint: Enroll refused ({other:?})");
+                                push(Event::EnrollFailed);
+                            }
+                        }
+                    }
+                    Ok(Msg::StopEnroll) => {
+                        if enrolling {
+                            enrolling = false;
+                            let _ = call("Abort");
+                            tracing::info!("fingerprint: enrolling given up");
+                        }
+                    }
+                    Ok(Msg::Signal(member, _, number)) if enrolling && member == "EnrollProgressChanged" => {
+                        push(Event::EnrollProgress(number.unwrap_or(0)));
+                    }
+                    Ok(Msg::Signal(member, _, _)) if enrolling && member == "Added" => {
+                        enrolling = false;
+                        tracing::info!("fingerprint: enrolled");
+                        push(Event::Enrolled);
+                        buzz(KNOWN_EVENT);
+                    }
+                    Ok(Msg::Signal(member, arg, _)) if enrolling && member == "StateChanged" && arg.as_deref() == Some("FPSTATE_IDLE") => {
+                        enrolling = false;
+                        tracing::info!("fingerprint: enrolling stopped");
+                        push(Event::EnrollFailed);
+                    }
+                    Ok(Msg::Signal(member, arg, _)) => match (member.as_str(), arg.as_deref()) {
                         ("Identified", _) if armed => {
                             armed = false;
                             // Not again before the loop has heard and let the
@@ -130,7 +181,7 @@ impl Fingerprint {
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
-                if wanted && !armed && Instant::now() >= next_try {
+                if wanted && !armed && !enrolling && Instant::now() >= next_try {
                     match call("Identify") {
                         Ok(0) => {
                             armed = true;
@@ -155,6 +206,20 @@ impl Fingerprint {
             if let Some(tx) = &self.tx {
                 let _ = tx.send(Msg::Want(wanted));
             }
+        }
+    }
+
+    /// Enroll a finger, named so.
+    pub fn enroll(&self, name: &str) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(Msg::Enroll(name.to_owned()));
+        }
+    }
+
+    /// Stop enrolling.
+    pub fn stop_enroll(&self) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.send(Msg::StopEnroll);
         }
     }
 
