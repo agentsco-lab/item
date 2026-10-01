@@ -107,6 +107,8 @@ pub struct State {
     pub pen: crate::pensheet::PenSheet,
     /// The pen draws on the sheet: its stroke began there.
     pub pen_drawing: bool,
+    /// How quickly each client answers its frame callbacks (pace.rs).
+    pub paces: crate::pace::Paces,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
     /// The panel the next window goes to, asked for by a launch from the
@@ -170,6 +172,7 @@ impl State {
             pen_down: false,
             pen: crate::pensheet::PenSheet::new(),
             pen_drawing: false,
+            paces: Default::default(),
             put_away: Vec::new(),
             launch_to: None,
             socket_name: Default::default(),
@@ -453,6 +456,7 @@ impl CompositorHandler for State {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        self.paces.committed(surface, hybris_hwc::now_ns());
         self.layers.commit(surface);
         self.needs_redraw = true;
         self.commits += 1;

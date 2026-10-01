@@ -81,6 +81,14 @@ fn cpu_ns() -> u64 {
     ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
 }
 
+/// Which clients hear their frame callbacks now (pace.rs).
+#[derive(Clone, Copy, PartialEq)]
+pub enum Group {
+    All,
+    Quick,
+    Slow,
+}
+
 /// Our own buffer, with its own damage tracker: it keeps every pixel between
 /// frames, so only what changed is drawn into it.
 struct Canvas {
@@ -435,10 +443,32 @@ impl Screen {
 
     /// Frame callbacks to every window, after a frame went out, with the time
     /// it will be on screen.
-    pub fn send_frames(&self, state: &State, time: Duration) {
-        state.layers.send_frames(&self.output, time);
+    /// Returns whether any surface was waiting for its callback.
+    pub fn send_frames(&self, state: &State, time: Duration, group: Group) -> bool {
+        let now = hybris_hwc::now_ns();
+        let mut any = false;
+        let mut take = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+            let quick = state.paces.quick(surface);
+            let ours = match group {
+                Group::All => true,
+                Group::Quick => quick,
+                Group::Slow => !quick,
+            };
+            if std::env::var_os("PACE_DEBUG").is_some() {
+                tracing::info!("pace: {} quick {quick} ours {ours} waiting {}", surface.id(), crate::pace::Paces::waiting(surface));
+            }
+            if ours && crate::pace::Paces::waiting(surface) {
+                state.paces.sent(surface, now);
+                any = true;
+            }
+            ours
+        };
+        state.layers.send_frames(&self.output, time, &mut take);
         for window in state.space.elements() {
-            window.send_frame(&self.output, time, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
+            if take(window.toplevel().unwrap().wl_surface()) {
+                window.send_frame(&self.output, time, Some(Duration::ZERO), |_, _| Some(self.output.clone()));
+            }
         }
+        any
     }
 }

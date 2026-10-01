@@ -143,6 +143,9 @@ impl State {
             surface.frame(qh, ());
         }
         surface.commit();
+        if self.mode == Mode::Anim && std::env::var_os("PROBE_COMMITS").is_some() {
+            println!("commit {:.6}", now_ns() as f64 / 1e9);
+        }
         true
     }
 }
@@ -237,6 +240,9 @@ impl Dispatch<wl_buffer::WlBuffer, usize> for State {
 impl Dispatch<wl_callback::WlCallback, ()> for State {
     fn event(state: &mut Self, _: &wl_callback::WlCallback, event: wl_callback::Event, _: &(), _: &Connection, qh: &QueueHandle<Self>) {
         if let wl_callback::Event::Done { .. } = event {
+            if state.mode == Mode::Anim && std::env::var_os("PROBE_COMMITS").is_some() {
+                println!("callback {:.6}", now_ns() as f64 / 1e9);
+            }
             if state.mode == Mode::Anim && !state.frame(qh, Asked::Frame { committed_ns: now_ns() }) {
                 // No buffer free: try again at the next frame.
                 state.surface.as_ref().unwrap().frame(qh, ());

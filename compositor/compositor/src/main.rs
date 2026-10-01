@@ -28,6 +28,7 @@ mod lock;
 mod layout;
 mod notify;
 mod output;
+mod pace;
 mod pam;
 mod pensheet;
 mod protocols;
@@ -94,7 +95,10 @@ struct Pacing {
 /// When frame callbacks go out.
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Callbacks {
-    /// As the frame is drawn (`draw`, the default): a client starts its
+    /// Each client when it suits it (`adaptive`, the default): the quick
+    /// ones at the vsync, the rest as the frame is drawn (pace.rs).
+    Adaptive,
+    /// As the frame is drawn (`draw`, the default before step 23): a client starts its
     /// next frame while ours waits for the vsync, as under phoc. Settings
     /// scrolls at 60 fps with the GPU boosted (43 without). A client quicker
     /// than a frame commits while ours still waits, and its frame shows a
@@ -118,7 +122,8 @@ impl Pacing {
             callbacks: match std::env::var("CALLBACKS").as_deref() {
                 Ok("vsync") => Callbacks::Vsync,
                 Ok("after") => Callbacks::After,
-                _ => Callbacks::Draw,
+                Ok("draw") => Callbacks::Draw,
+                _ => Callbacks::Adaptive,
             },
             callbacks_due: false,
         }
@@ -190,8 +195,16 @@ impl Data {
         if self.pacing.callbacks_due && hybris_hwc::last_present_ns() < vsync {
             self.pacing.callbacks_due = false;
             let time = std::time::Duration::from_nanos(vsync.saturating_sub(self.screen.clock_origin_ns));
-            self.screen.send_frames(&self.state, time);
+            self.screen.send_frames(&self.state, time, output::Group::All);
             let _ = self.state.display_handle.flush_clients();
+        }
+        // Callbacks::Adaptive: the quick clients hear at the vsync, once the
+        // last frame is out, and their next is drawn at once (pace.rs).
+        if self.pacing.callbacks == Callbacks::Adaptive && hybris_hwc::last_present_ns() < vsync {
+            let time = std::time::Duration::from_nanos(vsync.saturating_sub(self.screen.clock_origin_ns));
+            if self.screen.send_frames(&self.state, time, output::Group::Quick) {
+                let _ = self.state.display_handle.flush_clients();
+            }
         }
         // wp_presentation: the frames that were to show at this vsync are on
         // screen; their time is the vsync's (CLOCK_MONOTONIC, hwcomposer's).
@@ -301,9 +314,10 @@ impl Data {
         // Sent after, a GTK app had 7 ms left before the next vsync, missed
         // it, and scrolled at 28 fps. Their time is the vsync the frame aims
         // for.
-        if self.pacing.callbacks == Callbacks::Draw {
+        if matches!(self.pacing.callbacks, Callbacks::Draw | Callbacks::Adaptive) {
             let time = std::time::Duration::from_nanos(self.pacing.target_ns.saturating_sub(self.screen.clock_origin_ns));
-            self.screen.send_frames(&self.state, time);
+            let group = if self.pacing.callbacks == Callbacks::Draw { output::Group::All } else { output::Group::Slow };
+            self.screen.send_frames(&self.state, time, group);
             let _ = self.state.display_handle.flush_clients();
         }
         let cost = self.screen.render(&self.state, self.pacing.target_ns);
@@ -442,11 +456,12 @@ impl Data {
         // it, so the clients hear now.
         if self.pacing.callbacks == Callbacks::After || (self.pacing.callbacks == Callbacks::Vsync && !cost.swapped) {
             let time = std::time::Duration::from_nanos(shown_at.saturating_sub(self.screen.clock_origin_ns));
-            self.screen.send_frames(&self.state, time);
+            self.screen.send_frames(&self.state, time, output::Group::All);
             let _ = self.state.display_handle.flush_clients();
         } else if self.pacing.callbacks == Callbacks::Vsync {
             self.pacing.callbacks_due = true;
         }
+        self.state.paces.busy_until(hybris_hwc::now_ns());
     }
 
     fn log_report(&mut self) {

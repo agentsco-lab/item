@@ -148,8 +148,11 @@ impl Layers {
         out
     }
 
-    pub fn send_frames(&self, output: &Output, time: std::time::Duration) {
+    pub fn send_frames(&self, output: &Output, time: std::time::Duration, take: &mut impl FnMut(&smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) -> bool) {
         for layer in &self.surfaces {
+            if !take(layer.wl_surface()) {
+                continue;
+            }
             send_frames_surface_tree(layer.wl_surface(), output, time, Some(std::time::Duration::ZERO), |_, _| Some(output.clone()));
         }
     }

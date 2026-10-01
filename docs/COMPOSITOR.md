@@ -8,7 +8,7 @@ phosh", item-shell 0.1.x on phosh stays the shell in use, and phosh stays
 the way back after.
 
 The work so far, step by step with its measurements, is in
-`compositor/log/` (steps 1-22, 2026-09-30 to 2026-10-01); the probes that
+`compositor/log/` (steps 1-23, 2026-09-30 to 2026-10-01); the probes that
 chose the path are in agentsco-lab/duo-lindroid (private).
 
 ## Why a compositor of our own
@@ -53,7 +53,7 @@ most here (duo-lindroid's `log/2026-09-30-choosing-a-base.md`).
 The same phone, the same night, timed below both compositors: a uprobe on
 libhybris' `hwc2_compat_display_present`, the call both make to hand
 hwcomposer a frame, and a probe client both serve alike
-(`compositor/log/2026-10-01-step-21-ab.md`, `-step-22-canvas.md`).
+(`compositor/log/2026-10-01-step-21-ab.md`, `-step-22-canvas.md`, `-step-23-paces.md`).
 
 | | item on phosh | item-compositor |
 |---|---|---|
@@ -61,6 +61,7 @@ hwcomposer a frame, and a probe client both serve alike
 | the app grid going down | a 235-243 ms freeze each time | up to 34 ms |
 | the shade down, the grid up | at the vsync, 1-2 gaps | at the vsync, 1-3 gaps |
 | a tap, touch to the present with its content | 17.6 ms (p90 24.4) | 6.2 ms (p90 7.9) |
+| an animating client, its commit to the screen | not measurable (phoc reports no presentation) | one vsync, 15.8 ms |
 | the shell at rest: memory (PSS) | 461 MB (phoc, phosh, dock, system screen, pen) | 173 MB |
 | the shell at rest: CPU | 3.5 % of a core | 2.6 % |
 
@@ -101,4 +102,4 @@ pen as a finger, the system screen, the pen's sheet, the GPU boost on touch,
   to phosh if it does not start.
 
 Each goes in as a step in `compositor/log/`, measured and tried by
-hand, as the first 22 were.
+hand, as the first 23 were.
