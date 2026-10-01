@@ -8,8 +8,8 @@
 //! finger's speed, or by how far it was pulled. A tap on an open sheet closes
 //! it. The sheet carries the time, the date and a status line (the network
 //! and the battery, icons and words, as the lock screen's), as text
-//! (`text.rs`); the network as an icon alone. Under it, glass (glass.rs); its content comes up as the
-//! sheet nears the bottom.
+//! (`text.rs`); the network as an icon alone. Under it, glass (glass.rs) of what is under it, live; its content
+//! comes with the sheet from the start, hanging from its edge.
 
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
@@ -473,8 +473,9 @@ impl Shade {
                 continue;
             }
             let panel = panel.to_physical(SCALE);
-            // The content comes up over the last part of the way down.
-            let k = ((heights[i] as f64 / layout::LAYOUT.1 as f64 - 0.4) / 0.5).clamp(0.0, 1.0);
+            // The content is there from the start, hanging from the edge the
+            // finger pulls: only the first bit of the way brings it up.
+            let k = (heights[i] as f64 / layout::LAYOUT.1 as f64 / 0.15).clamp(0.0, 1.0);
             let alpha = (k * k * (3.0 - 2.0 * k)) as f32;
             // The settings (left) or the open windows (right), over the head.
             out.extend(self.quick.elements(renderer, i, panel.loc.x, h, rows, alpha));
