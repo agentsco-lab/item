@@ -304,6 +304,12 @@ impl Data {
             self.state.needs_redraw = true;
         }
         for event in self.state.fingerprint.take_events() {
+            // The first setup's, while it is on.
+            if self.state.setup.active {
+                self.state.setup.reader(event);
+                self.state.needs_redraw = true;
+                continue;
+            }
             match event {
                 fingerprint::Event::Identified => self.state.lock.unlock(),
                 fingerprint::Event::NotRecognized => self.state.lock.fingerprint_failed(),
@@ -338,7 +344,7 @@ impl Data {
         let (locked, blank) = (self.state.lock.locked, self.state.lock.blank);
         self.state.logind.report(locked, blank);
         // The reader listens while the phone is locked and lit.
-        self.state.fingerprint.want(self.state.lock.wants_reader());
+        self.state.fingerprint.want(self.state.lock.wants_reader() || self.state.setup.wants_reader());
     }
 
     fn draw_if_needed(&mut self) {
@@ -532,7 +538,7 @@ impl Data {
         }
         let (locked, blank) = (self.state.lock.locked, self.state.lock.blank);
         self.state.logind.report(locked, blank);
-        self.state.fingerprint.want(self.state.lock.wants_reader());
+        self.state.fingerprint.want(self.state.lock.wants_reader() || self.state.setup.wants_reader());
         self.state.paces.busy_until(hybris_hwc::now_ns());
     }
 

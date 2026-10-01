@@ -39,6 +39,19 @@ pub enum Event {
     Enrolled,
     /// The enrolling stopped without a finger.
     EnrollFailed,
+    /// Enrolling: a touch the reader could not take, and why.
+    Poor(Poor),
+}
+
+/// Why a touch was not taken (the daemon's AcquisitionInfo, which it sends
+/// only when it changes).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Poor {
+    Partial,
+    Insufficient,
+    Dirty,
+    TooFast,
+    TooSlow,
 }
 
 enum Msg {
@@ -141,7 +154,22 @@ impl Fingerprint {
                         }
                     }
                     Ok(Msg::Signal(member, _, number)) if enrolling && member == "EnrollProgressChanged" => {
+                        tracing::info!("fingerprint: a touch taken, {}%", number.unwrap_or(0));
                         push(Event::EnrollProgress(number.unwrap_or(0)));
+                    }
+                    Ok(Msg::Signal(member, arg, _)) if enrolling && member == "AcquisitionInfo" => {
+                        let poor = match arg.as_deref() {
+                            Some("FPACQUIRED_PARTIAL") => Some(Poor::Partial),
+                            Some("FPACQUIRED_INSUFFICIENT") => Some(Poor::Insufficient),
+                            Some("FPACQUIRED_IMAGER_DIRTY") => Some(Poor::Dirty),
+                            Some("FPACQUIRED_TOO_FAST") => Some(Poor::TooFast),
+                            Some("FPACQUIRED_TOO_SLOW") => Some(Poor::TooSlow),
+                            _ => None,
+                        };
+                        if let Some(poor) = poor {
+                            tracing::info!("fingerprint: a touch not taken ({poor:?})");
+                            push(Event::Poor(poor));
+                        }
                     }
                     Ok(Msg::Signal(member, _, _)) if enrolling && member == "Added" => {
                         enrolling = false;

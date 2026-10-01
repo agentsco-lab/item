@@ -446,7 +446,7 @@ impl Screen {
         }
     }
 
-    /// The first setup's circle (orb.frag) over the left panel.
+    /// The first setup's circle (orb.frag).
     fn orb_element(&mut self, orb: &crate::setup::Orb) -> Option<FrameElement> {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         if self.orb_program.is_none() {
@@ -458,6 +458,9 @@ impl Screen {
                 UniformName::new("segments", UniformType::_1f),
                 UniformName::new("base", UniformType::_4f),
                 UniformName::new("accent", UniformType::_4f),
+                UniformName::new("print", UniformType::_1f),
+                UniformName::new("lit", UniformType::_1f),
+                UniformName::new("flash", UniformType::_1f),
             ];
             match self.renderer.compile_custom_pixel_shader(include_str!("orb.frag"), &names) {
                 Ok(p) => self.orb_program = Some(p),
@@ -467,19 +470,26 @@ impl Screen {
                 }
             }
         }
-        let left = crate::layout::panels()[0];
-        // smithay gives the shader the area's size in logical px.
+        // Drawn over a square round it alone, wherever it goes (across the
+        // hinge too); smithay gives the shader the area's size in logical px.
+        let reach = orb.r * 1.08 + 4.0;
+        let (x0, y0) = ((orb.x - reach).floor(), (orb.y - reach).floor());
+        let side = (2.0 * reach).ceil() as i32 + 2;
+        let area = smithay::utils::Rectangle::<i32, smithay::utils::Logical>::new((x0 as i32, y0 as i32).into(), (side, side).into());
         let uniforms = vec![
-            Uniform::new("centre", ((orb.x - left.loc.x as f64) as f32, orb.y as f32)),
+            Uniform::new("centre", ((orb.x - x0) as f32, (orb.y - y0) as f32)),
             Uniform::new("radius", orb.r as f32),
             Uniform::new("thickness", orb.thickness as f32),
             Uniform::new("progress", orb.progress as f32),
             Uniform::new("segments", orb.segments as f32),
             Uniform::new("base", (orb.base[0], orb.base[1], orb.base[2], orb.base[3])),
             Uniform::new("accent", (orb.accent[0], orb.accent[1], orb.accent[2], orb.accent[3])),
+            Uniform::new("print", orb.print as f32),
+            Uniform::new("lit", orb.lit as f32),
+            Uniform::new("flash", orb.flash as f32),
         ];
         let program = self.orb_program.clone()?;
-        Some(FrameElement::Pixel(smithay::backend::renderer::gles::element::PixelShaderElement::new(program, left, None, 1.0, uniforms, smithay::backend::renderer::element::Kind::Unspecified)))
+        Some(FrameElement::Pixel(smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, None, 1.0, uniforms, smithay::backend::renderer::element::Kind::Unspecified)))
     }
 
     /// The lock screen, or the setup with its circle, as it stood at
@@ -630,7 +640,7 @@ impl Screen {
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
         let _ = self.wave_program();
-        let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4] });
+        let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4], print: 0.0, lit: 0.0, flash: 0.0 });
         let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer) + state.pen.warm_up(&mut self.renderer) + state.setup.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }

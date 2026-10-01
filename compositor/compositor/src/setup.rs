@@ -14,19 +14,32 @@
 //! - **Done**: `~/.config/item/setup-done` is written, and the setup goes
 //!   in a wave from its circle.
 //!
-//! **Motion.** One circle carries the setup through (orb.frag): on the
-//! welcome it grows out of a point and breathes; for the PIN it shrinks to a
-//! step mark at the top; for the finger it becomes the ring that fills as
-//! the reader takes it; at the end it closes, green, and the wave that
-//! opens the desktop starts from it. Words leave quickly (180 ms, drifting
-//! up), and the next come in after them, one after another (280 ms each,
-//! rising 12 px, 60 ms apart); the right panel follows the left by 80 ms.
+//! **Motion.** One circle carries the setup through (orb.frag), and goes
+//! where the user is to act: on the welcome it grows out of a point on the
+//! left and breathes; at "Get started" it rolls over the hinge to the right,
+//! shrinking to the PIN's step mark above the pad; for the finger it grows
+//! into a ring by the reader with a fingerprint inside, whose ridges come
+//! from the middle out and light up, one touch after another; at the end it
+//! rolls back to the left, closing green, and the wave that opens the
+//! desktop starts from it. A move takes 0.4-0.8 s by how far it goes, along
+//! a slight arc. Words leave quickly (180 ms, drifting up), and the next
+//! come in after them, one after another (280 ms each, rising 12 px, 60 ms
+//! apart); the right panel follows the left by 80 ms.
+//!
+//! **A finger, touch by touch.** Each touch the reader takes lights the
+//! print further, flashes it and the ring, buzzes, and says what next on
+//! the left; one it could not take shakes the print and says why, in amber.
+//! The last lights the print whole, and a moment after the setup moves on.
+//!
 //! Colours only where they mean something: blue for progress and the
-//! buttons, green for done, red for a wrong PIN.
+//! buttons, green for done, amber for a touch to do again, red for a wrong
+//! PIN.
 //!
 //! `SETUP=1` shows it though it was done; `SETUP_DRY=1` changes nothing (no
-//! PIN set, no finger enrolled, the reader's progress made up, nothing
-//! written), to try the screens.
+//! PIN set, no finger enrolled, nothing written), to try the screens: there
+//! the reader only identifies, and each touch counts as taken. With
+//! `SETUP_AUTO=1` too, the touches come by themselves (a second apart, the
+//! third not taken), for scripted runs.
 
 use std::sync::{Arc, Mutex};
 
@@ -51,25 +64,39 @@ const WORDS_IN_NS: u64 = 280_000_000;
 const WORDS_GAP_NS: u64 = 60_000_000;
 const RIGHT_AFTER_NS: u64 = 80_000_000;
 const RISE: f64 = 12.0;
-/// The circle easing to where it goes, and its breath on the welcome.
-const ORB_TAU_NS: f64 = 140_000_000.0;
+/// The circle's moves, by how far: from 0.4 s, 0.45 ms more a px, up to
+/// 0.8 s; its arc, of the way across; its breath on the welcome.
+const MOVE_MIN_NS: f64 = 400_000_000.0;
+const MOVE_PER_PX_NS: f64 = 450_000.0;
+const MOVE_MAX_NS: f64 = 800_000_000.0;
+const ARC: f64 = 0.12;
 const BREATH_NS: f64 = 3_200_000_000.0;
+/// The print: its ridges coming (after the circle is nearly there), its
+/// light following the reader, a touch's flash, the pause after the last.
+const PRINT_IN_NS: f64 = 700_000_000.0;
+const LIT_TAU_NS: f64 = 260_000_000.0;
+const FLASH_NS: f64 = 700_000_000.0;
+const LAST_PAUSE_NS: u64 = 900_000_000;
+/// SETUP_DRY's touches for a whole finger.
+const DRY_TOUCHES: i32 = 8;
 /// The wave from the circle at the end.
 const WAVE_NS: u64 = 850_000_000;
 const BUTTON_W: f64 = 240.0;
 const BUTTON_H: f64 = 56.0;
-const BIG_MARK: f64 = 150.0;
-/// The finger's ring and mark, the welcome's circle, on the left panel.
-const FINGER_Y: f64 = 480.0;
+/// The welcome's circle (and the end's) on the left; the PIN's step mark
+/// and the finger's ring on the right, the ring level with the reader.
 const WELCOME_Y: f64 = 250.0;
+const PIN_MARK_Y: f64 = 120.0;
+const PRINT_R: f64 = 104.0;
 /// The reader, under the power key (lock.rs's POWER_Y).
 const READER_Y: f64 = 455.0;
-const MARK_ICON: &str = "/usr/share/icons/Adwaita/symbolic/devices/auth-fingerprint-symbolic.svg";
 const ARROW_ICON: &str = "/usr/share/icons/Adwaita/symbolic/actions/go-next-symbolic.svg";
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 const BLUE: [f32; 4] = [0.208, 0.518, 0.894, 1.0];
 const GREEN: [f32; 4] = [0.180, 0.761, 0.494, 1.0];
+const AMBER: [f32; 4] = [0.965, 0.729, 0.290, 1.0];
+const NOTE: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Step {
@@ -149,25 +176,30 @@ pub struct Orb {
     pub segments: f64,
     pub base: [f32; 4],
     pub accent: [f32; 4],
+    /// The fingerprint inside: how much of it is shown, lit, flashing.
+    pub print: f64,
+    pub lit: f64,
+    pub flash: f64,
 }
 
 impl Orb {
-    fn towards(&mut self, to: &Orb, k: f64) {
-        let mix = |a: &mut f64, b: f64| *a += (b - *a) * k;
-        mix(&mut self.x, to.x);
-        mix(&mut self.y, to.y);
-        mix(&mut self.r, to.r);
-        mix(&mut self.thickness, to.thickness);
-        mix(&mut self.progress, to.progress);
-        self.segments = to.segments;
-        for i in 0..4 {
-            self.base[i] += (to.base[i] - self.base[i]) * k as f32;
-            self.accent[i] += (to.accent[i] - self.accent[i]) * k as f32;
+    /// `k` of the way from this to `to`.
+    fn lerp(&self, to: &Orb, k: f64) -> Orb {
+        let mix = |a: f64, b: f64| a + (b - a) * k;
+        let mix4 = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * k as f32);
+        Orb {
+            x: mix(self.x, to.x),
+            y: mix(self.y, to.y),
+            r: mix(self.r, to.r),
+            thickness: mix(self.thickness, to.thickness),
+            progress: mix(self.progress, to.progress),
+            segments: if k < 0.5 { self.segments } else { to.segments },
+            base: mix4(self.base, to.base),
+            accent: mix4(self.accent, to.accent),
+            print: mix(self.print, to.print),
+            lit: to.lit,
+            flash: to.flash,
         }
-    }
-
-    fn near(&self, to: &Orb) -> bool {
-        (self.x - to.x).abs() < 0.2 && (self.y - to.y).abs() < 0.2 && (self.r - to.r).abs() < 0.2 && (self.progress - to.progress).abs() < 0.002 && (self.thickness - to.thickness).abs() < 0.002
     }
 }
 
@@ -198,8 +230,16 @@ pub struct Setup {
     /// A PIN that is the user's now, for the keyring's prompts (keyring.rs).
     pin_for_keyring: Option<String>,
     progress: i32,
-    /// SETUP_DRY's made-up reader: when its next 20 % come.
-    dry_next: u64,
+    /// The print's light as shown, following `progress`.
+    lit: f64,
+    /// The last touch taken, the last not taken; the last of all, after
+    /// which the setup moves on; the reader to be asked again.
+    touched_at: Option<u64>,
+    poor_at: Option<u64>,
+    last_at: Option<u64>,
+    enroll_again: bool,
+    /// SETUP_AUTO's touches: the next, and how many came.
+    auto: Option<(u64, u32)>,
     enrolling: bool,
     /// The fingers enrolled, for the lock's mark.
     pub fingers: usize,
@@ -207,13 +247,19 @@ pub struct Setup {
     words: Words,
     /// The step before's words going, since when.
     old: Option<(Words, u64)>,
+    /// What next, on the left while a finger is taken; the one before
+    /// going, since when.
     note: Label,
+    note_at: u64,
+    old_note: Option<(Label, u64)>,
     orb: Orb,
+    /// The circle's move: from where, since when, how long.
+    from: Orb,
+    moved_at: u64,
+    move_ns: f64,
     orb_ns: u64,
     started: u64,
     button_bg: MemoryRenderBuffer,
-    mark_dim: Option<MemoryRenderBuffer>,
-    mark_lit: Option<MemoryRenderBuffer>,
     arrow: Option<MemoryRenderBuffer>,
     id: Id,
 }
@@ -245,19 +291,27 @@ impl Setup {
             wake,
             pin_for_keyring: None,
             progress: 0,
-            dry_next: 0,
+            lit: 0.0,
+            touched_at: None,
+            poor_at: None,
+            last_at: None,
+            enroll_again: false,
+            auto: None,
             enrolling: false,
             fingers: 0,
             fonts: thin.zip(regular),
             words: blank,
             old: None,
-            note: Label::new(16.0, [1.0, 1.0, 1.0, 0.6]),
-            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: BLUE },
+            note: Label::new(19.0, NOTE),
+            note_at: 0,
+            old_note: None,
+            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: BLUE, print: 0.0, lit: 0.0, flash: 0.0 },
+            from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: BLUE, print: 0.0, lit: 0.0, flash: 0.0 },
+            moved_at: 0,
+            move_ns: MOVE_MAX_NS,
             orb_ns: 0,
             started: 0,
             button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [0x35, 0x84, 0xe4, 255]),
-            mark_dim: tint([70, 74, 80], MARK_ICON, BIG_MARK),
-            mark_lit: tint([240, 240, 240], MARK_ICON, BIG_MARK),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
             id: Id::new(),
         }
@@ -273,6 +327,9 @@ impl Setup {
         // The circle grows out of a point in the left panel's middle.
         self.orb.x = left.loc.x as f64 + left.size.w as f64 / 2.0;
         self.orb.r = 0.0;
+        self.from = self.orb;
+        self.moved_at = self.started;
+        self.move_ns = MOVE_MAX_NS;
         self.orb_ns = self.started;
         tracing::info!("setup: shown{}", if self.dry { " (dry: nothing is changed)" } else { "" });
         let slot = self.is_default.clone();
@@ -311,12 +368,20 @@ impl Setup {
         words.button.set(regular, button);
         self.words = words;
         self.note.set(regular, "");
+        self.old_note = None;
     }
 
-    fn note(&mut self, text: &str) {
-        if let Some((_, regular)) = &self.fonts {
-            self.note.set(regular, text);
+    /// What next, said on the left: the one before goes, this comes.
+    fn note(&mut self, text: &str, color: [f32; 4]) {
+        let Some((_, regular)) = &self.fonts else { return };
+        let now = hybris_hwc::now_ns();
+        let mut label = Label::new(19.0, color);
+        label.set(regular, text);
+        let old = std::mem::replace(&mut self.note, label);
+        if old.extent.w > 0 {
+            self.old_note = Some((old, now));
         }
+        self.note_at = now + if self.old_note.is_some() { WORDS_OUT_NS / 2 } else { 0 };
     }
 
     /// When the right panel's things come in: after the left's.
@@ -328,6 +393,16 @@ impl Setup {
         tracing::info!("setup: {step:?}");
         let was = self.step;
         self.step = step;
+        // The circle moves from where it is to the step's place, longer the
+        // further it goes.
+        let now = hybris_hwc::now_ns();
+        if step != Step::Welcome {
+            let to = self.orb_target(now);
+            let far = (to.x - self.orb.x).hypot(to.y - self.orb.y);
+            self.from = self.orb;
+            self.moved_at = now;
+            self.move_ns = (MOVE_MIN_NS + far * MOVE_PER_PX_NS).min(MOVE_MAX_NS);
+        }
         match step {
             Step::Welcome => self.text("Welcome", &["Let's set up your Duo.", "It takes a minute."], "Get started", WELCOME_Y + 90.0),
             Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
@@ -353,9 +428,13 @@ impl Setup {
             }
             Step::Saving => self.pad.say("Saving…"),
             Step::Finger => {
-                self.text("Add a fingerprint", &["Touch the sensor under the power key,", "lifting your finger and moving it", "a little each time."], "Later", 150.0);
+                self.text("Add a fingerprint", &["Touch the sensor under the power key.", "Lift your finger after each touch,", "and move it a little each time."], "Later", 150.0);
                 self.progress = 0;
-                self.dry_next = hybris_hwc::now_ns() + 1_500_000_000;
+                self.lit = 0.0;
+                (self.touched_at, self.poor_at, self.last_at) = (None, None, None);
+                if self.dry && std::env::var_os("SETUP_AUTO").is_some() {
+                    self.auto = Some((hybris_hwc::now_ns() + 2_000_000_000, 0));
+                }
                 self.enrolling = true;
             }
             Step::Done => self.text("All set", &["Touch the sensor to unlock,", "or swipe up for your PIN."], "Start", WELCOME_Y + 90.0),
@@ -364,25 +443,40 @@ impl Setup {
 
     /// Where the circle goes for the step, and how it looks.
     fn orb_target(&self, frame_ns: u64) -> Orb {
-        let left = layout::panels()[0];
-        let x = left.loc.x as f64 + left.size.w as f64 / 2.0;
+        let panels = layout::panels();
+        let middle = |i: usize| panels[i].loc.x as f64 + panels[i].size.w as f64 / 2.0;
         let dim = |a: f32| [a, a, a, a];
+        let orb = Orb { x: middle(0), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: BLUE, print: 0.0, lit: self.lit, flash: 0.0 };
         match self.step {
             Step::Welcome => {
                 let t = frame_ns.saturating_sub(self.started) as f64;
                 let breath = 1.0 + 0.025 * (t / BREATH_NS * std::f64::consts::TAU).sin();
-                Orb { x, y: WELCOME_Y, r: 52.0 * breath, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: BLUE }
+                Orb { r: 52.0 * breath, ..orb }
             }
             Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
                 let lit = match self.step {
                     Step::PinAgain | Step::Saving => 2.0 / 3.0,
                     _ => 1.0 / 3.0,
                 };
-                Orb { x, y: 90.0, r: 13.0, thickness: 0.34, progress: lit, segments: 3.0, base: dim(0.22), accent: BLUE }
+                Orb { x: middle(1), y: PIN_MARK_Y, r: 14.0, thickness: 0.34, progress: lit, segments: 3.0, base: dim(0.22), ..orb }
             }
-            Step::Finger => Orb { x, y: FINGER_Y, r: BIG_MARK * 0.72, thickness: 0.035, progress: self.progress as f64 / 100.0, segments: 0.0, base: dim(0.16), accent: BLUE },
-            Step::Done => Orb { x, y: WELCOME_Y, r: 52.0, thickness: 0.09, progress: 1.0, segments: 0.0, base: dim(0.16), accent: GREEN },
+            Step::Finger => {
+                // A touch: the ring swells a little and lets go.
+                let flash = self.flash(frame_ns);
+                // The whole finger taken: the print turns green.
+                let green = self.last_at.map(|t| ease(frame_ns.saturating_sub(t) as f64 / 300_000_000.0) as f32).unwrap_or(0.0);
+                let accent = std::array::from_fn(|i| BLUE[i] + (GREEN[i] - BLUE[i]) * green);
+                Orb { x: middle(1), y: READER_Y, r: PRINT_R + 5.0 * flash, thickness: 0.022, base: dim(0.2), accent, print: 1.0, flash, ..orb }
+            }
+            Step::Done => Orb { thickness: 0.09, progress: 1.0, base: dim(0.16), accent: GREEN, ..orb },
         }
+    }
+
+    /// A touch's flash, 1 fading to 0.
+    fn flash(&self, frame_ns: u64) -> f64 {
+        let Some(t) = self.touched_at else { return 0.0 };
+        let k = (frame_ns.saturating_sub(t) as f64 / FLASH_NS).min(1.0);
+        (1.0 - k) * (1.0 - k)
     }
 
     /// The circle now, for the output to draw (orb.frag), with the setup's
@@ -434,15 +528,49 @@ impl Setup {
                 }
             }
         }
-        if self.step == Step::Finger && self.enrolling && self.dry && hybris_hwc::now_ns() >= self.dry_next {
-            self.dry_next = hybris_hwc::now_ns() + 1_200_000_000;
-            self.reader(crate::fingerprint::Event::EnrollProgress((self.progress + 20).min(100)));
-            if self.progress >= 100 {
-                self.reader(crate::fingerprint::Event::Enrolled);
+        if self.step == Step::Finger && self.enroll_again {
+            self.enroll_again = false;
+            fingerprint.enroll(&format!("finger {}", self.fingers + 1));
+        }
+        if let Some((at, n)) = self.auto.filter(|_| self.step == Step::Finger && self.enrolling) {
+            if hybris_hwc::now_ns() >= at {
+                self.auto = Some((at + 1_000_000_000, n + 1));
+                self.reader(if n == 2 { crate::fingerprint::Event::Poor(crate::fingerprint::Poor::Partial) } else { crate::fingerprint::Event::Identified });
+                changed = true;
             }
+        }
+        // The last touch's light seen, on.
+        if self.step == Step::Finger && self.last_at.is_some_and(|t| hybris_hwc::now_ns() >= t + LAST_PAUSE_NS) {
+            self.last_at = None;
+            self.go(Step::Done);
             changed = true;
         }
         changed
+    }
+
+    /// Whether the setup wants the reader to identify: SETUP_DRY's finger
+    /// step, each touch counted as taken.
+    pub fn wants_reader(&self) -> bool {
+        self.holds_screen() && self.dry && self.step == Step::Finger && self.enrolling
+    }
+
+    /// A touch the reader took, `progress` % of the finger now.
+    fn touch_taken(&mut self, progress: i32) {
+        let now = hybris_hwc::now_ns();
+        self.progress = progress.clamp(0, 100);
+        self.touched_at = Some(now);
+        self.poor_at = None;
+        if self.progress == 100 {
+            return;
+        }
+        crate::fingerprint::buzz("button-pressed");
+        let next = match self.progress {
+            0..=29 => "Good. Lift, and touch again",
+            30..=59 => "Keep going",
+            60..=84 => "Now the edges of your finger",
+            _ => "Almost there",
+        };
+        self.note(next, NOTE);
     }
 
     /// What the reader says while a finger is enrolled.
@@ -452,20 +580,46 @@ impl Setup {
             return;
         }
         match event {
-            Event::EnrollProgress(p) => {
-                self.progress = p.clamp(0, 100);
-                let text = format!("{}%", self.progress);
-                self.note(&text);
+            Event::EnrollProgress(p) if p > self.progress && p < 100 => self.touch_taken(p),
+            // SETUP_DRY: any touch is taken.
+            Event::Identified | Event::NotRecognized if self.dry => {
+                let p = (self.progress + 100 / DRY_TOUCHES + 1).min(100);
+                if p < 100 {
+                    self.touch_taken(p);
+                } else {
+                    self.reader(Event::Enrolled);
+                }
             }
             Event::Enrolled => {
+                // The print lights whole, green, and a moment after the
+                // setup moves on.
                 self.enrolling = false;
-                self.fingers += 1;
-                self.progress = 100;
-                self.go(Step::Done);
+                if !self.dry {
+                    self.fingers += 1;
+                }
+                self.touch_taken(100);
+                self.note("Done", GREEN);
+                self.last_at = Some(hybris_hwc::now_ns());
+            }
+            Event::Poor(poor) => {
+                use crate::fingerprint::Poor;
+                self.poor_at = Some(hybris_hwc::now_ns());
+                let why = match poor {
+                    Poor::Partial => "Cover the whole sensor",
+                    Poor::Insufficient => "Press a little firmer",
+                    Poor::Dirty => "Clean the sensor, then try again",
+                    Poor::TooFast => "Hold your finger a moment longer",
+                    Poor::TooSlow => "Lift your finger a bit sooner",
+                };
+                self.note(why, AMBER);
             }
             Event::EnrollFailed => {
-                self.note("Let's try again: touch the sensor");
+                // The reader gave up (a while with no finger): it is asked
+                // again, from the start.
+                self.note("Let's start again: touch the sensor", AMBER);
                 self.progress = 0;
+                self.touched_at = None;
+                self.enroll_again = !self.dry;
             }
             _ => {}
         }
@@ -597,17 +751,43 @@ impl Setup {
             }
             return true;
         }
-        // The circle eases to its place, as a spring with no overshoot.
-        let target = self.orb_target(frame_ns);
+        // The print's light follows the reader.
         let dt = frame_ns.saturating_sub(self.orb_ns) as f64;
         self.orb_ns = frame_ns;
-        self.orb.towards(&target, 1.0 - (-dt / ORB_TAU_NS).exp());
-        let words_moving = frame_ns < self.right_at() + WORDS_IN_NS + 200_000_000 || self.old.as_ref().is_some_and(|(_, t)| frame_ns < t + WORDS_OUT_NS);
+        let lit_to = self.progress as f64 / 100.0;
+        self.lit += (lit_to - self.lit) * (1.0 - (-dt / LIT_TAU_NS).exp());
+        if (self.lit - lit_to).abs() < 0.001 {
+            self.lit = lit_to;
+        }
+        // The circle goes from where it was to its place (which may move on
+        // its own meanwhile), along a slight arc.
+        let target = self.orb_target(frame_ns);
+        let k = (frame_ns.saturating_sub(self.moved_at) as f64 / self.move_ns).min(1.0);
+        let e = ease(k);
+        self.orb = self.from.lerp(&target, e);
+        self.orb.y -= ARC * (target.x - self.from.x).abs() * (std::f64::consts::PI * e).sin();
+        // The print's ridges come once the circle is nearly there; a touch
+        // not taken shakes it.
+        if self.step == Step::Finger {
+            let since = frame_ns as f64 - (self.moved_at as f64 + self.move_ns * 0.7);
+            self.orb.print = ease(since / PRINT_IN_NS);
+            if let Some(t) = self.poor_at {
+                self.orb.x += crate::pinpad::shake(frame_ns.saturating_sub(t));
+            }
+        }
+        let notes_moving = frame_ns < self.note_at + WORDS_IN_NS || self.old_note.as_ref().is_some_and(|(_, t)| frame_ns < t + WORDS_OUT_NS);
+        if self.old_note.as_ref().is_some_and(|(_, t)| frame_ns >= t + WORDS_OUT_NS) {
+            self.old_note = None;
+        }
+        let words_moving = notes_moving || frame_ns < self.right_at() + WORDS_IN_NS + 200_000_000 || self.old.as_ref().is_some_and(|(_, t)| frame_ns < t + WORDS_OUT_NS);
         if self.old.as_ref().is_some_and(|(_, t)| frame_ns >= t + WORDS_OUT_NS) {
             self.old = None;
         }
         words_moving
-            || !self.orb.near(&target)
+            || k < 1.0
+            || self.lit != lit_to
+            || self.flash(frame_ns) > 0.0
+            || self.poor_at.is_some_and(|t| frame_ns < t + crate::pinpad::SHAKE_NS)
             || self.step == Step::Welcome
             || (self.has_pad() && self.pad.moving(frame_ns))
             // The arrow to the reader bobs while a finger is awaited.
@@ -617,8 +797,6 @@ impl Setup {
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
         [&self.button_bg]
             .into_iter()
-            .chain(self.mark_dim.iter())
-            .chain(self.mark_lit.iter())
             .chain(self.arrow.iter())
             .chain(self.pad.buffers())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
@@ -683,21 +861,18 @@ impl Setup {
             y += l.extent.h as f64 + 6.0;
         }
 
-        // A finger: the mark in the circle's ring, filling from below as it
-        // is taken; on the right, an arrow bobbing at the reader.
+        // A finger: what next under the words, the one before going; the
+        // print is the circle's (orb.frag). On the right, an arrow bobbing
+        // at the reader.
         if self.step == Step::Finger {
-            let (a, dy) = coming(w.at + WORDS_GAP_NS * 2);
-            let (mx, my) = (cx(BIG_MARK as i32, left), FINGER_Y - BIG_MARK / 2.0 + dy);
-            // Topmost first: the lit part over the dim mark.
-            if let (Some(lit), true) = (&self.mark_lit, self.progress > 0) {
-                let h = BIG_MARK * self.progress as f64 / 100.0;
-                put(&mut out, lit, mx, my + BIG_MARK - h, a, Some(Rectangle::new((0.0, BIG_MARK - h).into(), (BIG_MARK, h).into())));
+            let note_y = y + 34.0;
+            if let Some((old, t)) = &self.old_note {
+                let k = ease(frame_ns.saturating_sub(*t) as f64 / WORDS_OUT_NS as f64);
+                put(&mut out, &old.buffer, cx(old.extent.w, left), note_y - 8.0 * k, 1.0 - k, None);
             }
-            if let Some(dim) = &self.mark_dim {
-                put(&mut out, dim, mx, my, a, None);
-            }
-            put(&mut out, &self.note.buffer, cx(self.note.extent.w, left), FINGER_Y + BIG_MARK * 0.72 + 24.0, a, None);
-            if let Some(arrow) = &self.arrow {
+            let (a, dy) = coming(self.note_at);
+            put(&mut out, &self.note.buffer, cx(self.note.extent.w, left), note_y + dy, a, None);
+            if let (Some(arrow), true) = (&self.arrow, self.enrolling) {
                 let (a, _) = coming(self.right_at());
                 let bob = 8.0 * (frame_ns as f64 / 1e9 * std::f64::consts::TAU / 1.2).sin().abs();
                 put(&mut out, arrow, (right.loc.x + right.size.w) as f64 - 60.0 + bob, READER_Y - 16.0, a, None);
