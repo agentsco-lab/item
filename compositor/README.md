@@ -19,7 +19,7 @@ Why, from a day of probes on the Lindroid chain
   shell clients.
 - **Freedom.** Our own code, not patches on phoc and phosh.
 
-It is an experiment beside the port (iverbovoy/surfaceduo-droidian) and
+It is an experiment beside the port (agentsco-lab/surfaceduo-droidian) and
 item, which keep running the phone day to day.
 
 ## Where it stands (2026-09-30)
