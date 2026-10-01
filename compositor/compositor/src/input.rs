@@ -357,6 +357,14 @@ impl State {
         }
         // Locked: every touch is the lock screen's.
         match &contact {
+            Contact::Down(_, pos, _) if self.lock.media_at(pos.x, pos.y).is_some() => {
+                if let Some(b) = self.lock.media_at(pos.x, pos.y) {
+                    self.shade.quick.media_button(b);
+                    crate::fingerprint::buzz("button-pressed");
+                }
+                self.needs_redraw = true;
+                return;
+            }
             Contact::Down(slot, pos, t) if self.lock.holds_screen() => {
                 self.lock.down(*slot, pos.x, pos.y, *t);
                 self.needs_redraw = true;

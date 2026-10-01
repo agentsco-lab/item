@@ -97,6 +97,9 @@ pub struct PinPad {
     /// The keys as water: born of a drop from when, gathering back from
     /// when; each key's last press and let go.
     water: bool,
+    /// As water, born from the pad's middle each time it comes (the lock
+    /// screen's), not of a drop above it (the setup's).
+    bloom: bool,
     split_at: Option<u64>,
     gather_at: Option<u64>,
     poked: [u64; 12],
@@ -129,6 +132,7 @@ impl PinPad {
             shown_since: 0,
             shaken_at: None,
             water: false,
+            bloom: false,
             split_at: None,
             gather_at: None,
             poked: [0; 12],
@@ -139,6 +143,13 @@ impl PinPad {
     /// Its keys as water (the first setup's).
     pub fn water(&mut self) {
         self.water = true;
+    }
+
+    /// Its keys as water, born from the pad's middle each time it comes in
+    /// (the lock screen's).
+    pub fn water_bloom(&mut self) {
+        self.water = true;
+        self.bloom = true;
     }
 
     /// The keys born of the drop from `at`.
@@ -243,6 +254,10 @@ impl PinPad {
     /// It comes in at `t` (ns), empty.
     pub fn show_at(&mut self, t: u64) {
         self.shown_since = t;
+        if self.bloom {
+            // From the rows' parting: there is no drop above to come from.
+            self.split(t.saturating_sub(STREAM_NS as u64));
+        }
         self.clear();
     }
 

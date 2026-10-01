@@ -150,6 +150,8 @@ pub struct Screen {
     setup_wall_id: smithay::backend::renderer::element::Id,
     /// Where a carried window would go, lit.
     carry_id: smithay::backend::renderer::element::Id,
+    /// The lock screen's wallpaper halves.
+    lock_wall_ids: Vec<smithay::backend::renderer::element::Id>,
     /// The ribbon's dot.
     dot: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
     /// The wallpaper (walls.rs): a texture the output's scale, wider than
@@ -215,7 +217,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -292,7 +294,18 @@ impl Screen {
         }
         // A call, over the lock screen (calls.rs).
         elements.extend(state.calls.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // The lock screen: its soft edges over it; its words and dark; under
+        // the dark its keys as drops and the wallpaper, each half's moving
+        // with it as the doors open.
+        let doors = state.lock.doors(frame_ns);
+        if doors.is_some() {
+            elements.extend(self.edges(0));
+        }
         elements.extend(state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        if let Some((ldx, rdx)) = doors {
+            elements.extend(self.lock_drops(state, frame_ns, rdx));
+            elements.extend(self.lock_wall(ldx, rdx));
+        }
         // The system's dialog, under the lock screen, over everything else.
         elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The lock screen going: a picture of it taken as it began, in a
@@ -771,6 +784,39 @@ impl Screen {
         self.edges.as_ref().map(|e| e[set].clone()).unwrap_or_default().into_iter().map(FrameElement::Pixel).collect()
     }
 
+    /// The lock screen's PIN keys as drops, moved with the right half.
+    fn lock_drops(&mut self, state: &State, frame_ns: u64, dx: f64) -> Vec<FrameElement> {
+        let mut out = Vec::new();
+        let (Some(groups), Some(texture)) = (state.lock.pad_drops(frame_ns, dx), self.wall.clone()) else { return out };
+        let wall = (&texture, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT as f64);
+        for (slot, g) in groups.iter().enumerate() {
+            if let Some(e) = state.dock.group(&mut self.renderer, 4 + slot, &g.drops, g.melt, frame_ns, g.life, 1.0, wall) {
+                out.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
+            }
+        }
+        out
+    }
+
+    /// The wallpaper under the lock screen, still, in two halves split at
+    /// the hinge's middle, each moved by its door.
+    fn lock_wall(&mut self, ldx: f64, rdx: f64) -> Vec<FrameElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        let Some(texture) = self.wall.clone() else { return Vec::new() };
+        let (w, h) = crate::layout::LAYOUT;
+        let panels = crate::layout::panels();
+        let middle = ((panels[0].loc.x + panels[0].size.w + panels[1].loc.x) / 2) as f64;
+        // Moving: new ids, so each frame takes them again.
+        if ldx != 0.0 || rdx != 0.0 || self.lock_wall_ids.is_empty() {
+            self.lock_wall_ids = vec![smithay::backend::renderer::element::Id::new(), smithay::backend::renderer::element::Id::new()];
+        }
+        let context = self.renderer.context_id();
+        let half = |id: smithay::backend::renderer::element::Id, x0: f64, width: f64, dx: f64| {
+            let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((crate::state::WALL_LEFT as f64 + x0, 0.0).into(), (width, h as f64).into());
+            FrameElement::Snapshot(TextureRenderElement::from_static_texture(id, context.clone(), ((x0 + dx) * SCALE as f64, 0.0), texture.clone(), SCALE, Transform::Normal, None, Some(src), Some((width as i32, h).into()), None, smithay::backend::renderer::element::Kind::Unspecified))
+        };
+        vec![half(self.lock_wall_ids[0].clone(), 0.0, middle, ldx), half(self.lock_wall_ids[1].clone(), middle, w as f64 - middle, rdx)]
+    }
+
     /// The wallpaper whole and still, under the first setup; fading as the
     /// setup goes (a new id each frame of it).
     fn setup_wall(&mut self, alpha: f32) -> Option<FrameElement> {
@@ -880,7 +926,10 @@ impl Screen {
         use smithay::backend::renderer::Offscreen;
         let size = self.output.current_mode()?.size;
         let mut elements: Vec<FrameElement> = Vec::new();
+        elements.extend(self.edges(0));
         elements.extend(state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        elements.extend(self.lock_drops(state, frame_ns, 0.0));
+        elements.extend(self.lock_wall(0.0, 0.0));
         let mut texture: smithay::backend::renderer::gles::GlesTexture = self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
         let mut tracker = OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Normal);
         {

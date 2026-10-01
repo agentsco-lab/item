@@ -832,6 +832,20 @@ fn main() {
             if data.state.lock.locked && data.state.lock.refresh() {
                 data.state.needs_redraw = true;
             }
+            // Locked and lit: the last notifications and what is playing,
+            // the player read again every few seconds.
+            if data.state.lock.locked && !data.state.lock.blank {
+                let mut list = data.state.notes.list();
+                list.sort_by(|a, b| b.at_ns.cmp(&a.at_ns).then(b.id.cmp(&a.id)));
+                let notes: Vec<(String, String)> = list.iter().map(|n| (n.app.clone(), n.summary.clone())).collect();
+                let media = data.state.shade.quick.media.lock().unwrap().clone().map(|m| (m.title, m.artist, m.playing));
+                if data.state.lock.set_notes(notes) | data.state.lock.set_media(media) {
+                    data.state.needs_redraw = true;
+                }
+                if data.started.elapsed().as_secs() % 3 == 0 {
+                    data.state.shade.quick.read();
+                }
+            }
             // The system screen's page is drawn on this thread (some 8 ms):
             // not while the ribbon moves, which would miss a frame for it.
             if !data.state.ribbon.moving() && data.state.system.refresh() {

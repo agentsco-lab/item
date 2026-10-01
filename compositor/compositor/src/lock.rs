@@ -17,6 +17,10 @@
 //! - Unlocked, the two halves open as doors: the left one slides out left,
 //!   the right one right, over 450 ms.
 //! - The volume keys (gpio-keys) set the volume, locked or not.
+//! - On the left half under the status line, what is playing (MPRIS) with
+//!   its buttons, which work locked; under it the last three
+//!   notifications, their app and title only - what they say is for after
+//!   the unlock.
 
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
@@ -36,6 +40,8 @@ const FLASH_NS: u64 = 300_000_000;
 /// The mark pulses this long after the lock screen shows, then rests.
 const PULSE_FOR_NS: u64 = 12_000_000_000;
 const PULSE_PERIOD_NS: u64 = 1_800_000_000;
+/// How dark the wallpaper is under the lock screen.
+const SHADE: f32 = 0.75;
 /// Unknown fingers in a row before the PIN pad comes.
 const FAILS_FOR_PIN: u32 = 5;
 /// A swipe up this far brings the pad, or a fling up.
@@ -112,7 +118,26 @@ pub struct Lock {
     relit: bool,
     /// When the last unlock began, not yet asked for.
     unlocked: Option<u64>,
+    /// The last notifications (app, title) and their labels.
+    notes: Vec<(String, String)>,
+    note_labels: Vec<(Label, Label)>,
+    /// What is playing (title, artist, playing) and its labels; its card,
+    /// a notification's, and the buttons' icons (previous, play, pause,
+    /// next).
+    media: Option<(String, String, bool)>,
+    media_labels: (Label, Label),
+    card: MemoryRenderBuffer,
+    note_card: MemoryRenderBuffer,
+    media_icons: [Option<MemoryRenderBuffer>; 4],
 }
+
+/// The lock screen's cards: their width and heights, logical px.
+const CARD_W: f64 = 520.0;
+const MEDIA_H: f64 = 76.0;
+const NOTE_H: f64 = 56.0;
+const CARDS_GAP: f64 = 10.0;
+const CARDS_TOP: f64 = 30.0;
+const MEDIA_BUTTON: f64 = 48.0;
 
 /// A symbolic icon in one colour, `size` logical px.
 pub(crate) fn tinted(path: &str, size: i32, rgb: [u8; 3]) -> Option<MemoryRenderBuffer> {
@@ -163,7 +188,11 @@ impl Lock {
         tracing::info!("lock: idle delay {}", if idle_s == 0 { "never".into() } else { format!("{idle_s} s") });
         let mut lock = Lock {
             entering: false,
-            pad: PinPad::new(),
+            pad: {
+                let mut pad = PinPad::new();
+                pad.water_bloom();
+                pad
+            },
             checking: Default::default(),
             verified: Default::default(),
             wake,
@@ -203,6 +232,13 @@ impl Lock {
             idle_ns: idle_s * 1_000_000_000,
             relit: false,
             unlocked: None,
+            notes: Vec::new(),
+            note_labels: Vec::new(),
+            media: None,
+            media_labels: (Label::new(17.0, [1.0, 1.0, 1.0, 0.92]), Label::new(14.0, [1.0, 1.0, 1.0, 0.6])),
+            card: crate::grid::rounded(CARD_W, MEDIA_H, 18.0, [22, 22, 22, 22]),
+            note_card: crate::grid::rounded(CARD_W, NOTE_H, 16.0, [18, 18, 18, 18]),
+            media_icons: ["media-skip-backward", "media-playback-start", "media-playback-pause", "media-skip-forward"].map(|n| crate::quick::symbolic(&format!("/usr/share/icons/Adwaita/symbolic/actions/{n}-symbolic.svg"), 24)),
         };
         if let Some((_, regular)) = &lock.fonts {
             lock.status.set(regular, "Enter your PIN after a restart");
@@ -240,6 +276,68 @@ impl Lock {
             self.net_icon = crate::quick::symbolic(&path(icons.1), 16);
             self.status_icons = icons;
         }
+    }
+
+    /// The last notifications, newest first: their app and title. Returns
+    /// whether they changed.
+    pub fn set_notes(&mut self, notes: Vec<(String, String)>) -> bool {
+        let notes: Vec<(String, String)> = notes.into_iter().take(3).collect();
+        if notes == self.notes {
+            return false;
+        }
+        let Some((_, regular)) = &self.fonts else { return false };
+        self.note_labels = notes
+            .iter()
+            .map(|(app, title)| {
+                let mut a = Label::new(13.0, [1.0, 1.0, 1.0, 0.55]);
+                a.set(regular, &cut(app, 40));
+                let mut t = Label::new(16.0, [1.0, 1.0, 1.0, 0.9]);
+                t.set(regular, &cut(title, 46));
+                (a, t)
+            })
+            .collect();
+        self.notes = notes;
+        true
+    }
+
+    /// What is playing: title, artist, playing. Returns whether it changed.
+    pub fn set_media(&mut self, media: Option<(String, String, bool)>) -> bool {
+        if media == self.media {
+            return false;
+        }
+        let Some((_, regular)) = &self.fonts else { return false };
+        if let Some((title, artist, _)) = &media {
+            self.media_labels.0.set(regular, &cut(title, 34));
+            self.media_labels.1.set(regular, &cut(artist, 40));
+        }
+        self.media = media;
+        true
+    }
+
+    /// The media card's place on the left panel (logical px), under the
+    /// status line.
+    fn media_rect(&self) -> Rectangle<f64, smithay::utils::Logical> {
+        let left = layout::panels()[0];
+        let top = if self.after_boot { 130.0 } else { 150.0 };
+        let y = top + 4.0 + self.time.extent.h as f64 + self.date.extent.h as f64 + 14.0 + self.battery_label.extent.h as f64 + CARDS_TOP;
+        Rectangle::new((left.loc.x as f64 + (left.size.w as f64 - CARD_W) / 2.0, y).into(), (CARD_W, MEDIA_H).into())
+    }
+
+    /// A media button's place: previous, play or pause, next, at the card's
+    /// right.
+    fn media_button_rect(&self, i: usize) -> Rectangle<f64, smithay::utils::Logical> {
+        let r = self.media_rect();
+        let x = r.loc.x + r.size.w - 12.0 - (3 - i) as f64 * MEDIA_BUTTON;
+        Rectangle::new((x, r.loc.y + (MEDIA_H - MEDIA_BUTTON) / 2.0).into(), (MEDIA_BUTTON, MEDIA_BUTTON).into())
+    }
+
+    /// The player's button under a touch on the lock screen, if any.
+    pub fn media_at(&self, x: f64, y: f64) -> Option<crate::quick::MediaButton> {
+        if self.media.is_none() || !self.holds_screen() || self.blank {
+            return None;
+        }
+        let buttons = [crate::quick::MediaButton::Previous, crate::quick::MediaButton::PlayPause, crate::quick::MediaButton::Next];
+        (0..3).find(|&i| self.media_button_rect(i).contains((x, y))).map(|i| buttons[i])
     }
 
     /// Whether the reader should listen: locked, lit, not right after a
@@ -668,6 +766,33 @@ impl Lock {
         if self.after_boot {
             put(&mut out, &self.greeting.buffer, cx(&self.greeting, left), y + 70.0 + rise, left_dx, 1.0);
         }
+        // What is playing, and the last notifications, in cards.
+        if !self.after_boot {
+            let mut cy = self.media_rect().loc.y + rise;
+            let cx0 = self.media_rect().loc.x;
+            if let Some((_, _, playing)) = &self.media {
+                put(&mut out, &self.media_labels.0.buffer, cx0 + 18.0, cy + 14.0, left_dx, 1.0);
+                put(&mut out, &self.media_labels.1.buffer, cx0 + 18.0, cy + 16.0 + self.media_labels.0.extent.h as f64, left_dx, 1.0);
+                let icons = [&self.media_icons[0], if *playing { &self.media_icons[2] } else { &self.media_icons[1] }, &self.media_icons[3]];
+                for (i, icon) in icons.into_iter().enumerate() {
+                    if let Some(icon) = icon {
+                        let b = self.media_button_rect(i);
+                        put(&mut out, icon, b.loc.x + (MEDIA_BUTTON - 24.0) / 2.0, b.loc.y + rise + (MEDIA_BUTTON - 24.0) / 2.0, left_dx, 0.9);
+                    }
+                }
+                put(&mut out, &self.card, cx0, cy, left_dx, 1.0);
+                cy += MEDIA_H + CARDS_GAP;
+            }
+            for (app, title) in &self.note_labels {
+                if cy + NOTE_H > (left.size.h - TALK_FROM_FOOT) as f64 - 20.0 {
+                    break;
+                }
+                put(&mut out, &app.buffer, cx0 + 18.0, cy + 8.0, left_dx, 1.0);
+                put(&mut out, &title.buffer, cx0 + 18.0, cy + 10.0 + app.extent.h as f64, left_dx, 1.0);
+                put(&mut out, &self.note_card, cx0, cy, left_dx, 1.0);
+                cy += NOTE_H + CARDS_GAP;
+            }
+        }
         // Talking: a passing notice, else the hint, else after a boot why
         // the PIN.
         let talk_y = (left.size.h - TALK_FROM_FOOT) as f64;
@@ -677,15 +802,62 @@ impl Lock {
             put(&mut out, &self.status.buffer, cx(&self.status, left), talk_y, left_dx, 1.0);
         }
 
-        // The two halves' black, meeting over the hinge.
+        // The two halves' dark over the wallpaper (the output's, each half's
+        // moving with it), meeting over the hinge.
         let m = (middle * SCALE as f64).round() as i32;
         let lx = (left_dx * SCALE as f64).round() as i32;
         let rx = (right_dx * SCALE as f64).round() as i32;
         let commit = CommitCounter::from((open * 1000.0) as usize);
         let lrect = Rectangle::<i32, Physical>::new((lx, 0).into(), (m, h * SCALE).into());
         let rrect = Rectangle::<i32, Physical>::new((m + rx, 0).into(), (w * SCALE - m, h * SCALE).into());
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), lrect, commit, [0.0, 0.0, 0.0, 1.0], Kind::Unspecified)));
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id_right.clone(), rrect, commit, [0.0, 0.0, 0.0, 1.0], Kind::Unspecified)));
+        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), lrect, commit, [0.0, 0.0, 0.0, SHADE], Kind::Unspecified)));
+        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id_right.clone(), rrect, commit, [0.0, 0.0, 0.0, SHADE], Kind::Unspecified)));
         out
+    }
+
+    /// Where the two halves stand while it is drawn (as doors, how far
+    /// out each has gone, logical px); None while it is not, or goes as a
+    /// picture (door.rs).
+    pub fn doors(&self, frame_ns: u64) -> Option<(f64, f64)> {
+        if !self.locked || self.turning(frame_ns).is_some() {
+            return None;
+        }
+        let open = self.fading.map(|t| ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64)).unwrap_or(0.0);
+        Some(Self::door_dx(open))
+    }
+
+    fn door_dx(open: f64) -> (f64, f64) {
+        let panels = layout::panels();
+        let middle = (panels[0].loc.x + panels[0].size.w + panels[1].loc.x) as f64 / 2.0;
+        let w = layout::LAYOUT.0 as f64;
+        (-middle * open, (w - middle) * open)
+    }
+
+    /// The PIN pad's keys as drops, moved with the right half by `dx`.
+    pub fn pad_drops(&self, frame_ns: u64, dx: f64) -> Option<Vec<crate::pinpad::Group>> {
+        if !self.entering {
+            return None;
+        }
+        let (groups, _) = self.pad.drops(frame_ns, (0.0, 0.0), 0.0)?;
+        Some(
+            groups
+                .into_iter()
+                .map(|mut g| {
+                    for d in &mut g.drops {
+                        d.0 .0 += dx;
+                    }
+                    g
+                })
+                .collect(),
+        )
+    }
+}
+
+/// `text` cut to `n` characters, an ellipsis after.
+fn cut(text: &str, n: usize) -> String {
+    if text.chars().count() <= n {
+        text.to_owned()
+    } else {
+        format!("{}…", text.chars().take(n - 1).collect::<String>())
     }
 }
