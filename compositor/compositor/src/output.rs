@@ -266,6 +266,19 @@ impl Screen {
             }
         }
         elements.extend(state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // The tour: its words and Skip, and the finger's way as a faint drop.
+        if state.tour.active() {
+            elements.extend(state.tour.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+            if let (Some((c, r, a)), Some(texture)) = (state.tour.hint(frame_ns), self.wall.clone()) {
+                let shift = crate::state::wallpaper_shift(state.ribbon.position(frame_ns));
+                let wall = (&texture, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT + shift);
+                if a > 0.01 {
+                    if let Some(e) = state.dock.group(&mut self.renderer, 11, &[(c, r, (1.0, 1.0))], 0.8, frame_ns, 0.4, (a * 0.85) as f32, 1.0, wall) {
+                        elements.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
+                    }
+                }
+            }
+        }
         // A window carried: where it would go, lit over the windows.
         if let Some((_, _, _, x)) = &state.carrying {
             let panels = crate::layout::panels();

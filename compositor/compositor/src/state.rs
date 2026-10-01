@@ -142,6 +142,8 @@ pub struct State {
     /// Who opens pages over whom (org.sfduo.Dock.Follow) and the windows
     /// asked to be shown again (org.sfduo.Phoc.Present).
     pub follow: crate::follow::Follow,
+    /// The tour after the first setup.
+    pub tour: crate::tour::Tour,
     pub asker: Asker,
     /// When the power key went down, unlocked and lit (input.rs).
     pub power_down_at: Option<u64>,
@@ -237,6 +239,7 @@ impl State {
             calls: crate::calls::Calls::new(wake.clone()),
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
+            tour: crate::tour::Tour::new(),
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),

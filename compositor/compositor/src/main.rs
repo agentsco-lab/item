@@ -63,6 +63,7 @@ mod shade;
 mod state;
 mod sysscreen;
 mod text;
+mod tour;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -282,6 +283,21 @@ impl Data {
         // The idle delay as the settings have it, none while something
         // holds the screen on; dimmed before it goes dark.
         let held = self.state.idle_held();
+        // The tour: what the user did, and the next step when back.
+        if self.state.tour.active() {
+            use crate::ribbon::Page;
+            let home = self.state.ribbon.at(self.state.ribbon.view);
+            let seen = crate::tour::Seen {
+                grid: self.state.grid.panel().is_some(),
+                shade: self.state.shade.visible(),
+                ribbon_moved: self.state.ribbon.moving(),
+                ribbon_home: !self.state.ribbon.moving() && home == [Some(&Page::Desk(0)), Some(&Page::Desk(1))],
+                carried: self.state.dock.carrying(),
+            };
+            if self.state.tour.watch(&seen, now) {
+                self.state.needs_redraw = true;
+            }
+        }
         // Pages over their leaders (follow.rs): those asked to be shown
         // again, and windows of a follower not yet over theirs.
         if self.state.follow_pages() {
@@ -418,6 +434,7 @@ impl Data {
         // The setup gone: the dock is born of its drop.
         if let Some((at, centre, r)) = self.state.setup.take_drop() {
             self.state.dock.born(at, centre, r);
+            self.state.tour.start(at + 2_500_000_000);
             self.state.needs_redraw = true;
         }
         if let Some(pin) = self.state.setup.take_pin() {
@@ -645,7 +662,7 @@ impl Data {
         if self.state.setup.active && self.state.dock.lone_moving(self.pacing.target_ns) {
             self.state.needs_redraw = true;
         }
-        if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) {
+        if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.tour.settle() {
             self.state.needs_redraw = true;
         }
         let count = self.state.walls.names.len();
@@ -990,6 +1007,10 @@ fn main() {
         Ok("pin") => data.state.dialog.ask_pin("Authentication required", "Authentication is required to change the system's settings."),
         Ok("text") => data.state.dialog.ask_text("Wi-Fi password", "“Home network” needs a password to connect.", "Connect", "Tap the field to see what you type."),
         _ => {}
+    }
+    // TOUR=1: the tour, as after the setup.
+    if std::env::var_os("TOUR").is_some() {
+        data.state.tour.start(hybris_hwc::now_ns() + 2_000_000_000);
     }
     // CALL_TEST=5 (incoming) or 1 (active): the phone locked and a call over
     // it, to look at it (its buttons go to no call).

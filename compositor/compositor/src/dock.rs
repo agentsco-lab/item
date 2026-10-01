@@ -834,6 +834,11 @@ impl Dock {
         crate::fingerprint::buzz("button-pressed");
     }
 
+    /// Whether an icon is carried.
+    pub fn carrying(&self) -> bool {
+        self.carry.is_some()
+    }
+
     pub fn carries(&self, slot: TouchSlot) -> bool {
         self.carry.as_ref().is_some_and(|c| c.slot == slot)
     }
