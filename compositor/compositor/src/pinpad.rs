@@ -55,6 +55,8 @@ pub struct PinPad {
     key_bg: MemoryRenderBuffer,
     key_on: MemoryRenderBuffer,
     dot: MemoryRenderBuffer,
+    /// The dots while a wrong PIN shakes them.
+    dot_red: MemoryRenderBuffer,
     /// The backspace key's icon (the fonts have no arrow).
     erase: Option<MemoryRenderBuffer>,
     shown_since: u64,
@@ -81,6 +83,7 @@ impl PinPad {
             key_bg: crate::grid::rounded(KEY, KEY, KEY / 2.0, [30, 30, 30, 30]),
             key_on: crate::grid::rounded(KEY, KEY, KEY / 2.0, [77, 77, 77, 77]),
             dot: crate::grid::rounded(12.0, 12.0, 6.0, [240, 240, 240, 240]),
+            dot_red: crate::grid::rounded(12.0, 12.0, 6.0, [235, 80, 70, 255]),
             erase: crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/ui/edit-clear-symbolic.svg", 28)
                 .or_else(|| crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/actions/edit-clear-symbolic.svg", 28)),
             shown_since: 0,
@@ -97,7 +100,12 @@ impl PinPad {
 
     /// It comes in now, empty.
     pub fn show(&mut self) {
-        self.shown_since = hybris_hwc::now_ns();
+        self.show_at(hybris_hwc::now_ns());
+    }
+
+    /// It comes in at `t` (ns), empty.
+    pub fn show_at(&mut self, t: u64) {
+        self.shown_since = t;
         self.clear();
     }
 
@@ -170,7 +178,7 @@ impl PinPad {
     }
 
     pub fn buffers(&self) -> impl Iterator<Item = &MemoryRenderBuffer> {
-        [&self.key_bg, &self.key_on, &self.dot].into_iter().chain(self.erase.iter()).chain(self.keys.iter().map(|l| &l.buffer)).chain(std::iter::once(&self.message.buffer))
+        [&self.key_bg, &self.key_on, &self.dot, &self.dot_red].into_iter().chain(self.erase.iter()).chain(self.keys.iter().map(|l| &l.buffer)).chain(std::iter::once(&self.message.buffer))
     }
 
     /// The pad, moved `dx` logical px (with its half of the screen).
@@ -186,11 +194,15 @@ impl PinPad {
                 out.push(ShellElement::Text(e));
             }
         };
-        // What is typed, as dots; what is going on, under them.
+        // What is typed, as dots (red while a wrong PIN shakes them); what
+        // is going on, under them.
+        let shaking = self.shaken_at.is_some_and(|t| frame_ns < t + SHAKE_NS);
+        let dot = if shaking { &self.dot_red } else { &self.dot };
+        // A wrong PIN's dots stay to be seen red, cleared after.
         let n = self.pin.len() as f64;
         let dots_w = n * 12.0 + (n - 1.0).max(0.0) * 10.0;
         for i in 0..self.pin.len() {
-            put(&mut out, &self.dot, right.loc.x as f64 + (right.size.w as f64 - dots_w) / 2.0 + i as f64 * 22.0, DOTS_Y);
+            put(&mut out, dot, right.loc.x as f64 + (right.size.w as f64 - dots_w) / 2.0 + i as f64 * 22.0, DOTS_Y);
         }
         put(&mut out, &self.message.buffer, (right.loc.x + (right.size.w - self.message.extent.w) / 2) as f64, DOTS_Y + 36.0);
         for (i, l) in self.keys.iter().enumerate() {

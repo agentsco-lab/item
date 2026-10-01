@@ -10,9 +10,19 @@
 //!   password. The login keyring's password follows it through
 //!   gnome-keyring's ChangeWithMasterPassword, so that after the next boot
 //!   the PIN still opens it. The PIN is never logged.
-//! - **A finger**, through Droidian's reader daemon (fingerprint.rs): the
-//!   mark on the left fills as the reader takes the finger; "Later" skips it.
-//! - **Done**: `~/.config/item/setup-done` is written, and the setup fades.
+//! - **A finger**, through Droidian's reader daemon (fingerprint.rs).
+//! - **Done**: `~/.config/item/setup-done` is written, and the setup goes
+//!   in a wave from its circle.
+//!
+//! **Motion.** One circle carries the setup through (orb.frag): on the
+//! welcome it grows out of a point and breathes; for the PIN it shrinks to a
+//! step mark at the top; for the finger it becomes the ring that fills as
+//! the reader takes it; at the end it closes, green, and the wave that
+//! opens the desktop starts from it. Words leave quickly (180 ms, drifting
+//! up), and the next come in after them, one after another (280 ms each,
+//! rising 12 px, 60 ms apart); the right panel follows the left by 80 ms.
+//! Colours only where they mean something: blue for progress and the
+//! buttons, green for done, red for a wrong PIN.
 //!
 //! `SETUP=1` shows it though it was done; `SETUP_DRY=1` changes nothing (no
 //! PIN set, no finger enrolled, the reader's progress made up, nothing
@@ -34,19 +44,32 @@ use crate::text::{Font, Label};
 
 const DEFAULT_PIN: &str = "1234";
 const MIN_PIN: usize = 4;
-/// A step's things coming in, and the setup going.
-const STEP_IN_NS: u64 = 300_000_000;
-const OUT_NS: u64 = 500_000_000;
-/// The welcome's two halves meeting over the hinge.
-const MEET_NS: u64 = 900_000_000;
-const DISC: f64 = 120.0;
+/// Words: the old ones going, the new ones coming one after another, the
+/// right panel after the left.
+const WORDS_OUT_NS: u64 = 180_000_000;
+const WORDS_IN_NS: u64 = 280_000_000;
+const WORDS_GAP_NS: u64 = 60_000_000;
+const RIGHT_AFTER_NS: u64 = 80_000_000;
+const RISE: f64 = 12.0;
+/// The circle easing to where it goes, and its breath on the welcome.
+const ORB_TAU_NS: f64 = 140_000_000.0;
+const BREATH_NS: f64 = 3_200_000_000.0;
+/// The wave from the circle at the end.
+const WAVE_NS: u64 = 850_000_000;
 const BUTTON_W: f64 = 240.0;
 const BUTTON_H: f64 = 56.0;
-const BIG_MARK: f64 = 168.0;
+const BIG_MARK: f64 = 150.0;
+/// The finger's ring and mark, the welcome's circle, on the left panel.
+const FINGER_Y: f64 = 480.0;
+const WELCOME_Y: f64 = 250.0;
 /// The reader, under the power key (lock.rs's POWER_Y).
 const READER_Y: f64 = 455.0;
 const MARK_ICON: &str = "/usr/share/icons/Adwaita/symbolic/devices/auth-fingerprint-symbolic.svg";
 const ARROW_ICON: &str = "/usr/share/icons/Adwaita/symbolic/actions/go-next-symbolic.svg";
+
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const BLUE: [f32; 4] = [0.208, 0.518, 0.894, 1.0];
+const GREEN: [f32; 4] = [0.180, 0.761, 0.494, 1.0];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Step {
@@ -114,12 +137,55 @@ fn set_pin(old: &str, new: &str) -> Result<(), String> {
     change_keyring(old, new).map_err(|e| format!("the keyring: {e}"))
 }
 
+/// The circle: where it is and what it looks like (orb.frag's uniforms),
+/// logical px.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Orb {
+    pub x: f64,
+    pub y: f64,
+    pub r: f64,
+    pub thickness: f64,
+    pub progress: f64,
+    pub segments: f64,
+    pub base: [f32; 4],
+    pub accent: [f32; 4],
+}
+
+impl Orb {
+    fn towards(&mut self, to: &Orb, k: f64) {
+        let mix = |a: &mut f64, b: f64| *a += (b - *a) * k;
+        mix(&mut self.x, to.x);
+        mix(&mut self.y, to.y);
+        mix(&mut self.r, to.r);
+        mix(&mut self.thickness, to.thickness);
+        mix(&mut self.progress, to.progress);
+        self.segments = to.segments;
+        for i in 0..4 {
+            self.base[i] += (to.base[i] - self.base[i]) * k as f32;
+            self.accent[i] += (to.accent[i] - self.accent[i]) * k as f32;
+        }
+    }
+
+    fn near(&self, to: &Orb) -> bool {
+        (self.x - to.x).abs() < 0.2 && (self.y - to.y).abs() < 0.2 && (self.r - to.r).abs() < 0.2 && (self.progress - to.progress).abs() < 0.002 && (self.thickness - to.thickness).abs() < 0.002
+    }
+}
+
+/// A step's words, and when they come in.
+#[derive(Clone)]
+struct Words {
+    title: Label,
+    lines: Vec<Label>,
+    button: Label,
+    at: u64,
+    /// Where the title stands.
+    top: f64,
+}
+
 pub struct Setup {
     pub active: bool,
     dry: bool,
     step: Step,
-    step_since: u64,
-    started: u64,
     leaving: Option<u64>,
     pad: PinPad,
     /// The new PIN, between its two entries.
@@ -138,12 +204,14 @@ pub struct Setup {
     /// The fingers enrolled, for the lock's mark.
     pub fingers: usize,
     fonts: Option<(Font, Font)>,
-    title: Label,
-    lines: Vec<Label>,
-    button: Label,
+    words: Words,
+    /// The step before's words going, since when.
+    old: Option<(Words, u64)>,
     note: Label,
+    orb: Orb,
+    orb_ns: u64,
+    started: u64,
     button_bg: MemoryRenderBuffer,
-    disc: MemoryRenderBuffer,
     mark_dim: Option<MemoryRenderBuffer>,
     mark_lit: Option<MemoryRenderBuffer>,
     arrow: Option<MemoryRenderBuffer>,
@@ -164,12 +232,11 @@ impl Setup {
             let n = pixmap.width() as i32;
             Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (n, n), SCALE, smithay::utils::Transform::Normal, None))
         };
+        let blank = Words { title: Label::new(44.0, WHITE), lines: Vec::new(), button: Label::new(19.0, WHITE), at: 0, top: 0.0 };
         Setup {
             active: false,
             dry: std::env::var_os("SETUP_DRY").is_some(),
             step: Step::Welcome,
-            step_since: 0,
-            started: 0,
             leaving: None,
             pad: PinPad::new(),
             first: String::new(),
@@ -182,12 +249,13 @@ impl Setup {
             enrolling: false,
             fingers: 0,
             fonts: thin.zip(regular),
-            title: Label::new(44.0, [1.0, 1.0, 1.0, 0.95]),
-            lines: Vec::new(),
-            button: Label::new(19.0, [1.0, 1.0, 1.0, 1.0]),
+            words: blank,
+            old: None,
             note: Label::new(16.0, [1.0, 1.0, 1.0, 0.6]),
+            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: BLUE },
+            orb_ns: 0,
+            started: 0,
             button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [0x35, 0x84, 0xe4, 255]),
-            disc: crate::grid::rounded(DISC, DISC, DISC / 2.0, [235, 235, 235, 235]),
             mark_dim: tint([70, 74, 80], MARK_ICON, BIG_MARK),
             mark_lit: tint([240, 240, 240], MARK_ICON, BIG_MARK),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
@@ -201,6 +269,11 @@ impl Setup {
         self.active = true;
         self.fingers = fingers;
         self.started = hybris_hwc::now_ns();
+        let left = layout::panels()[0];
+        // The circle grows out of a point in the left panel's middle.
+        self.orb.x = left.loc.x as f64 + left.size.w as f64 / 2.0;
+        self.orb.r = 0.0;
+        self.orb_ns = self.started;
         tracing::info!("setup: shown{}", if self.dry { " (dry: nothing is changed)" } else { "" });
         let slot = self.is_default.clone();
         let wake = self.wake.clone();
@@ -217,10 +290,17 @@ impl Setup {
         self.active && self.leaving.is_none()
     }
 
-    fn text(&mut self, title: &str, lines: &[&str], button: &str) {
+    /// A step's words: the old ones go, these come after them.
+    fn text(&mut self, title: &str, lines: &[&str], button: &str, top: f64) {
         let Some((thin, regular)) = &self.fonts else { return };
-        self.title.set(thin, title);
-        self.lines = lines
+        let now = hybris_hwc::now_ns();
+        let changed = self.words.title.extent.w > 0 && (title != "" || !self.words.lines.is_empty());
+        if changed {
+            self.old = Some((self.words.clone(), now));
+        }
+        let mut words = Words { title: Label::new(44.0, [1.0, 1.0, 1.0, 0.95]), lines: Vec::new(), button: Label::new(19.0, WHITE), at: now + if changed { WORDS_OUT_NS - 20_000_000 } else { 0 }, top };
+        words.title.set(thin, title);
+        words.lines = lines
             .iter()
             .map(|l| {
                 let mut label = Label::new(19.0, [1.0, 1.0, 1.0, 0.7]);
@@ -228,7 +308,8 @@ impl Setup {
                 label
             })
             .collect();
-        self.button.set(regular, button);
+        words.button.set(regular, button);
+        self.words = words;
         self.note.set(regular, "");
     }
 
@@ -238,16 +319,24 @@ impl Setup {
         }
     }
 
+    /// When the right panel's things come in: after the left's.
+    fn right_at(&self) -> u64 {
+        self.words.at + RIGHT_AFTER_NS + WORDS_GAP_NS * (1 + self.words.lines.len() as u64)
+    }
+
     fn go(&mut self, step: Step) {
         tracing::info!("setup: {step:?}");
+        let was = self.step;
         self.step = step;
-        self.step_since = hybris_hwc::now_ns();
         match step {
-            Step::Welcome => self.text("Welcome", &["Let's set up your Duo.", "It takes a minute."], "Get started"),
-            Step::Checking => self.text("Your PIN", &["One moment…"], ""),
+            Step::Welcome => self.text("Welcome", &["Let's set up your Duo.", "It takes a minute."], "Get started", WELCOME_Y + 90.0),
+            Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
             Step::PinNew => {
-                self.text("Create a PIN", &["Your PIN unlocks the phone after a restart,", "and whenever your finger isn't recognized."], "");
-                self.pad.show();
+                if was != Step::PinAgain && was != Step::Saving {
+                    self.text("Create a PIN", &["Your PIN unlocks the phone after a restart,", "and whenever your finger isn't recognized."], "", 150.0);
+                }
+                let at = self.right_at();
+                self.pad.show_at(at);
                 self.pad.say("Enter a new PIN");
             }
             Step::PinAgain => {
@@ -255,19 +344,56 @@ impl Setup {
                 self.pad.say("Enter it again");
             }
             Step::PinCurrent => {
-                self.text("Your PIN", &["Enter the PIN you use now.", "It unlocks the phone after a restart."], "");
-                self.pad.show();
+                if was != Step::Saving {
+                    self.text("Your PIN", &["Enter the PIN you use now.", "It unlocks the phone after a restart."], "", 150.0);
+                }
+                let at = self.right_at();
+                self.pad.show_at(at);
                 self.pad.say("Enter PIN");
             }
             Step::Saving => self.pad.say("Saving…"),
             Step::Finger => {
-                self.text("Add a fingerprint", &["Touch the sensor under the power key,", "lifting your finger and moving it", "a little each time."], "Later");
+                self.text("Add a fingerprint", &["Touch the sensor under the power key,", "lifting your finger and moving it", "a little each time."], "Later", 150.0);
                 self.progress = 0;
                 self.dry_next = hybris_hwc::now_ns() + 1_500_000_000;
                 self.enrolling = true;
             }
-            Step::Done => self.text("All set", &["Touch the sensor to unlock,", "or swipe up for your PIN."], "Start"),
+            Step::Done => self.text("All set", &["Touch the sensor to unlock,", "or swipe up for your PIN."], "Start", WELCOME_Y + 90.0),
         }
+    }
+
+    /// Where the circle goes for the step, and how it looks.
+    fn orb_target(&self, frame_ns: u64) -> Orb {
+        let left = layout::panels()[0];
+        let x = left.loc.x as f64 + left.size.w as f64 / 2.0;
+        let dim = |a: f32| [a, a, a, a];
+        match self.step {
+            Step::Welcome => {
+                let t = frame_ns.saturating_sub(self.started) as f64;
+                let breath = 1.0 + 0.025 * (t / BREATH_NS * std::f64::consts::TAU).sin();
+                Orb { x, y: WELCOME_Y, r: 52.0 * breath, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: BLUE }
+            }
+            Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
+                let lit = match self.step {
+                    Step::PinAgain | Step::Saving => 2.0 / 3.0,
+                    _ => 1.0 / 3.0,
+                };
+                Orb { x, y: 90.0, r: 13.0, thickness: 0.34, progress: lit, segments: 3.0, base: dim(0.22), accent: BLUE }
+            }
+            Step::Finger => Orb { x, y: FINGER_Y, r: BIG_MARK * 0.72, thickness: 0.035, progress: self.progress as f64 / 100.0, segments: 0.0, base: dim(0.16), accent: BLUE },
+            Step::Done => Orb { x, y: WELCOME_Y, r: 52.0, thickness: 0.09, progress: 1.0, segments: 0.0, base: dim(0.16), accent: GREEN },
+        }
+    }
+
+    /// The circle now, for the output to draw (orb.frag), with the setup's
+    /// alpha.
+    pub fn orb(&self) -> Option<Orb> {
+        (self.active && self.leaving.is_none() && self.orb.r > 0.3).then_some(self.orb)
+    }
+
+    /// The circle as it stands, leaving or not: the wave's picture has it.
+    pub fn orb_at_rest(&self) -> Option<Orb> {
+        (self.active && self.orb.r > 0.3).then_some(self.orb)
     }
 
     /// Answers from the threads, and the made-up reader; whether anything
@@ -451,27 +577,45 @@ impl Setup {
         self.leaving = Some(hybris_hwc::now_ns());
     }
 
+    /// The setup going in a wave from its circle: the wave's style, how far
+    /// (unused by a wave), since when, and from where (logical px).
+    pub fn turning(&self, _frame_ns: u64) -> Option<(crate::door::Style, f64, u64, (f64, f64))> {
+        let t = self.leaving?;
+        let style = crate::door::Style { mode: crate::door::Mode::Wave, ns: WAVE_NS, ..Default::default() };
+        Some((style, 0.0, t, (self.orb.x, self.orb.y)))
+    }
+
     /// After a frame: whether it still moves.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
         if !self.active {
             return false;
         }
         if let Some(t) = self.leaving {
-            if frame_ns >= t + OUT_NS {
+            if frame_ns >= t + WAVE_NS {
                 self.active = false;
                 self.leaving = None;
             }
             return true;
         }
-        frame_ns < self.started + MEET_NS + STEP_IN_NS
-            || frame_ns < self.step_since + STEP_IN_NS
+        // The circle eases to its place, as a spring with no overshoot.
+        let target = self.orb_target(frame_ns);
+        let dt = frame_ns.saturating_sub(self.orb_ns) as f64;
+        self.orb_ns = frame_ns;
+        self.orb.towards(&target, 1.0 - (-dt / ORB_TAU_NS).exp());
+        let words_moving = frame_ns < self.right_at() + WORDS_IN_NS + 200_000_000 || self.old.as_ref().is_some_and(|(_, t)| frame_ns < t + WORDS_OUT_NS);
+        if self.old.as_ref().is_some_and(|(_, t)| frame_ns >= t + WORDS_OUT_NS) {
+            self.old = None;
+        }
+        words_moving
+            || !self.orb.near(&target)
+            || self.step == Step::Welcome
             || (self.has_pad() && self.pad.moving(frame_ns))
             // The arrow to the reader bobs while a finger is awaited.
             || self.step == Step::Finger
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.button_bg, &self.disc]
+        [&self.button_bg]
             .into_iter()
             .chain(self.mark_dim.iter())
             .chain(self.mark_lit.iter())
@@ -482,78 +626,96 @@ impl Setup {
     }
 
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
-        if !self.active {
+        if !self.active || self.leaving.is_some() {
             return Vec::new();
         }
+        self.picture(renderer, frame_ns)
+    }
+
+    /// The setup as it stands (the wave's picture of it, too); the circle is
+    /// the output's to draw (orb.frag).
+    pub fn picture(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
         let panels = layout::panels();
         let (left, right) = (panels[0], panels[1]);
-        let middle = (left.loc.x + left.size.w + right.loc.x) as f64 / 2.0;
-        let out_alpha = self.leaving.map(|t| 1.0 - ease(frame_ns.saturating_sub(t) as f64 / OUT_NS as f64)).unwrap_or(1.0);
-        let step_alpha = ease(frame_ns.saturating_sub(self.step_since) as f64 / STEP_IN_NS as f64);
-        let meet = ease(frame_ns.saturating_sub(self.started) as f64 / MEET_NS as f64);
-        // The words come after the halves have met, on the first screen.
-        let words = if self.step == Step::Welcome {
-            ease(frame_ns.saturating_sub(self.started + MEET_NS * 2 / 3) as f64 / STEP_IN_NS as f64)
-        } else {
-            step_alpha
-        };
         let mut out = if self.has_pad() { self.pad.elements(renderer, frame_ns, 0.0) } else { Vec::new() };
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, alpha: f64, src: Option<Rectangle<f64, smithay::utils::Logical>>| {
+            if alpha <= 0.001 {
+                return;
+            }
             let size = src.map(|s| s.size.to_i32_round());
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * SCALE as f64).round(), (y * SCALE as f64).round()), b, Some((alpha * out_alpha) as f32), src, size, Kind::Unspecified) {
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * SCALE as f64).round(), (y * SCALE as f64).round()), b, Some(alpha as f32), src, size, Kind::Unspecified) {
                 out.push(ShellElement::Text(e));
             }
         };
         let cx = |w: i32, p: Rectangle<i32, smithay::utils::Logical>| (p.loc.x + (p.size.w - w) / 2) as f64;
+        // A thing coming in at `at`: its alpha and how far below it still is.
+        let coming = |at: u64| {
+            let k = ease(frame_ns.saturating_sub(at) as f64 / WORDS_IN_NS as f64);
+            let k = if frame_ns < at { 0.0 } else { k };
+            (k, RISE * (1.0 - k))
+        };
 
-        // The left panel: what and why.
-        let ty = if self.step == Step::Welcome { 330.0 } else { 140.0 };
-        put(&mut out, &self.title.buffer, cx(self.title.extent.w, left), ty, words, None);
-        let mut y = ty + self.title.extent.h as f64 + 22.0;
-        for l in &self.lines {
-            put(&mut out, &l.buffer, cx(l.extent.w, left), y, words, None);
+        // The words going: quickly, drifting up.
+        if let Some((old, t)) = &self.old {
+            let k = ease(frame_ns.saturating_sub(*t) as f64 / WORDS_OUT_NS as f64);
+            let (alpha, dy) = (1.0 - k, -8.0 * k);
+            put(&mut out, &old.title.buffer, cx(old.title.extent.w, left), old.top + dy, alpha, None);
+            let mut y = old.top + old.title.extent.h as f64 + 22.0;
+            for l in &old.lines {
+                put(&mut out, &l.buffer, cx(l.extent.w, left), y + dy, alpha, None);
+                y += l.extent.h as f64 + 6.0;
+            }
+            if old.button.extent.w > 0 {
+                let b = Self::button_rect();
+                put(&mut out, &old.button.buffer, b.loc.x + (BUTTON_W - old.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - old.button.extent.h as f64) / 2.0 + dy, alpha, None);
+                put(&mut out, &self.button_bg, b.loc.x, b.loc.y + dy, alpha, None);
+            }
+        }
+
+        // The words coming: the title, then each line, 60 ms apart.
+        let w = &self.words;
+        let (a, dy) = coming(w.at);
+        put(&mut out, &w.title.buffer, cx(w.title.extent.w, left), w.top + dy, a, None);
+        let mut y = w.top + w.title.extent.h as f64 + 22.0;
+        for (i, l) in w.lines.iter().enumerate() {
+            let (a, dy) = coming(w.at + WORDS_GAP_NS * (i as u64 + 1));
+            put(&mut out, &l.buffer, cx(l.extent.w, left), y + dy, a, None);
             y += l.extent.h as f64 + 6.0;
         }
 
-        // The welcome: two halves of a disc coming to meet over the hinge.
-        if self.step == Step::Welcome {
-            let r = DISC / 2.0;
-            let reach = 420.0 * (1.0 - meet);
-            let half = |x0: f64| Some(Rectangle::new((x0, 0.0).into(), (r, DISC).into()));
-            put(&mut out, &self.disc, middle - r - reach, 170.0, meet, half(0.0));
-            put(&mut out, &self.disc, middle + reach, 170.0, meet, half(r));
-        }
-
-        // A finger: the mark on the left filling from below as it is taken;
-        // on the right, an arrow bobbing at the reader.
+        // A finger: the mark in the circle's ring, filling from below as it
+        // is taken; on the right, an arrow bobbing at the reader.
         if self.step == Step::Finger {
-            let (mx, my) = (cx(BIG_MARK as i32, left), y + 40.0);
+            let (a, dy) = coming(w.at + WORDS_GAP_NS * 2);
+            let (mx, my) = (cx(BIG_MARK as i32, left), FINGER_Y - BIG_MARK / 2.0 + dy);
             // Topmost first: the lit part over the dim mark.
             if let (Some(lit), true) = (&self.mark_lit, self.progress > 0) {
                 let h = BIG_MARK * self.progress as f64 / 100.0;
-                put(&mut out, lit, mx, my + BIG_MARK - h, step_alpha, Some(Rectangle::new((0.0, BIG_MARK - h).into(), (BIG_MARK, h).into())));
+                put(&mut out, lit, mx, my + BIG_MARK - h, a, Some(Rectangle::new((0.0, BIG_MARK - h).into(), (BIG_MARK, h).into())));
             }
             if let Some(dim) = &self.mark_dim {
-                put(&mut out, dim, mx, my, step_alpha, None);
+                put(&mut out, dim, mx, my, a, None);
             }
-            put(&mut out, &self.note.buffer, cx(self.note.extent.w, left), my + BIG_MARK + 24.0, step_alpha, None);
+            put(&mut out, &self.note.buffer, cx(self.note.extent.w, left), FINGER_Y + BIG_MARK * 0.72 + 24.0, a, None);
             if let Some(arrow) = &self.arrow {
+                let (a, _) = coming(self.right_at());
                 let bob = 8.0 * (frame_ns as f64 / 1e9 * std::f64::consts::TAU / 1.2).sin().abs();
-                put(&mut out, arrow, (right.loc.x + right.size.w) as f64 - 60.0 + bob, READER_Y - 16.0, step_alpha, None);
+                put(&mut out, arrow, (right.loc.x + right.size.w) as f64 - 60.0 + bob, READER_Y - 16.0, a, None);
             }
         }
 
-        // The right panel's button.
-        if matches!(self.step, Step::Welcome | Step::Finger | Step::Done) {
+        // The right panel's button, after the left's words.
+        if w.button.extent.w > 0 {
+            let (a, dy) = coming(self.right_at());
             let b = Self::button_rect();
-            put(&mut out, &self.button.buffer, b.loc.x + (BUTTON_W - self.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - self.button.extent.h as f64) / 2.0, words, None);
-            put(&mut out, &self.button_bg, b.loc.x, b.loc.y, words, None);
+            put(&mut out, &w.button.buffer, b.loc.x + (BUTTON_W - w.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - w.button.extent.h as f64) / 2.0 + dy, a, None);
+            put(&mut out, &self.button_bg, b.loc.x, b.loc.y + dy, a, None);
         }
 
         // Black over everything else.
-        let (w, h) = layout::LAYOUT;
-        let rect = Rectangle::<i32, Physical>::from_size((w * SCALE, h * SCALE).into());
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, CommitCounter::from((out_alpha * 1000.0) as usize), [0.0, 0.0, 0.0, out_alpha as f32], Kind::Unspecified)));
+        let (lw, lh) = layout::LAYOUT;
+        let rect = Rectangle::<i32, Physical>::from_size((lw * SCALE, lh * SCALE).into());
+        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, CommitCounter::default(), [0.0, 0.0, 0.0, 1.0], Kind::Unspecified)));
         out
     }
 }

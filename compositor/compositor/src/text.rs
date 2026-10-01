@@ -75,6 +75,7 @@ impl Font {
 }
 
 /// A line of text as a texture, remade only when the text changes.
+#[derive(Clone)]
 pub struct Label {
     size: f32,
     color: [f32; 4],

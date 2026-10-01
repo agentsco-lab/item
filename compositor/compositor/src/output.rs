@@ -53,6 +53,8 @@ render_elements! {
     Moving=RelocateRenderElement<RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>>,
     /// A texture through a shader of ours: the lock screen's wave (wave.frag).
     Shaded=smithay::backend::renderer::gles::element::TextureShaderElement,
+    /// Drawn by a shader of ours alone: the first setup's circle (orb.frag).
+    Pixel=smithay::backend::renderer::gles::element::PixelShaderElement,
 }
 
 /// The rows of the screen's bottom a run of frames keeps: the dock and above.
@@ -127,6 +129,7 @@ pub struct Screen {
     door: Option<(u64, smithay::backend::renderer::gles::GlesTexture)>,
     door_ids: Vec<smithay::backend::renderer::element::Id>,
     wave_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
+    orb_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
     wave_id: smithay::backend::renderer::element::Id,
     _hwc: HwcOutput,
 }
@@ -184,7 +187,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, wave_id: smithay::backend::renderer::element::Id::new(), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -199,23 +202,32 @@ impl Screen {
         // The lock screen over everything.
         // The volume bar over everything, the lock screen next.
         let mut elements: Vec<FrameElement> = state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        // The first setup: its circle over its words (setup.rs, orb.frag).
+        if let Some(orb) = state.setup.orb() {
+            elements.extend(self.orb_element(&orb));
+        }
         elements.extend(state.setup.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        // The doors turning in depth: strips of a picture of the lock screen
-        // taken as they began (door.rs).
-        if let Some((style, k, start)) = state.lock.turning(frame_ns) {
+        // The lock screen, or the setup, going: a picture of it taken as it
+        // began, in a wave from where it was touched, or as doors (door.rs).
+        let turn = state
+            .setup
+            .turning(frame_ns)
+            .map(|(style, k, start, from)| (style, k, start, from, true))
+            .or_else(|| state.lock.turning(frame_ns).map(|(style, k, start)| (style, k, start, state.lock.touched_at(), false)));
+        if let Some((style, k, start, from, setup)) = turn {
             if self.door.as_ref().map(|d| d.0) != Some(start) {
-                self.door = self.lock_picture(state, start).map(|t| (start, t));
+                self.door = self.cover_picture(state, start, setup).map(|t| (start, t));
             }
             if let Some((_, texture)) = &self.door {
                 let texture = texture.clone();
                 if style.mode == crate::door::Mode::Wave {
-                    elements.extend(self.wave(state, frame_ns, start, &style, texture));
+                    elements.extend(self.wave(from, frame_ns, start, &style, texture));
                 } else {
                     elements.extend(self.door_strips(&style, k, texture));
                 }
             }
-        } else if self.door.is_some() && !state.lock.locked {
+        } else if self.door.is_some() && !state.lock.locked && !state.setup.active {
             self.door = None;
         }
         elements.extend(state.back.elements(&mut self.renderer).into_iter().map(FrameElement::from));
@@ -434,12 +446,56 @@ impl Screen {
         }
     }
 
-    /// The lock screen as it stood at `frame_ns`, in a texture the size of
-    /// the output.
-    fn lock_picture(&mut self, state: &State, frame_ns: u64) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+    /// The first setup's circle (orb.frag) over the left panel.
+    fn orb_element(&mut self, orb: &crate::setup::Orb) -> Option<FrameElement> {
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        if self.orb_program.is_none() {
+            let names = [
+                UniformName::new("centre", UniformType::_2f),
+                UniformName::new("radius", UniformType::_1f),
+                UniformName::new("thickness", UniformType::_1f),
+                UniformName::new("progress", UniformType::_1f),
+                UniformName::new("segments", UniformType::_1f),
+                UniformName::new("base", UniformType::_4f),
+                UniformName::new("accent", UniformType::_4f),
+            ];
+            match self.renderer.compile_custom_pixel_shader(include_str!("orb.frag"), &names) {
+                Ok(p) => self.orb_program = Some(p),
+                Err(e) => {
+                    tracing::warn!("setup: the circle's shader: {e}");
+                    return None;
+                }
+            }
+        }
+        let left = crate::layout::panels()[0];
+        // smithay gives the shader the area's size in logical px.
+        let uniforms = vec![
+            Uniform::new("centre", ((orb.x - left.loc.x as f64) as f32, orb.y as f32)),
+            Uniform::new("radius", orb.r as f32),
+            Uniform::new("thickness", orb.thickness as f32),
+            Uniform::new("progress", orb.progress as f32),
+            Uniform::new("segments", orb.segments as f32),
+            Uniform::new("base", (orb.base[0], orb.base[1], orb.base[2], orb.base[3])),
+            Uniform::new("accent", (orb.accent[0], orb.accent[1], orb.accent[2], orb.accent[3])),
+        ];
+        let program = self.orb_program.clone()?;
+        Some(FrameElement::Pixel(smithay::backend::renderer::gles::element::PixelShaderElement::new(program, left, None, 1.0, uniforms, smithay::backend::renderer::element::Kind::Unspecified)))
+    }
+
+    /// The lock screen, or the setup with its circle, as it stood at
+    /// `frame_ns`, in a texture the size of the output.
+    fn cover_picture(&mut self, state: &State, frame_ns: u64, setup: bool) -> Option<smithay::backend::renderer::gles::GlesTexture> {
         use smithay::backend::renderer::Offscreen;
         let size = self.output.current_mode()?.size;
-        let elements: Vec<FrameElement> = state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        let mut elements: Vec<FrameElement> = Vec::new();
+        if setup {
+            if let Some(orb) = state.setup.orb_at_rest() {
+                elements.extend(self.orb_element(&orb));
+            }
+            elements.extend(state.setup.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        } else {
+            elements.extend(state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        }
         let mut texture: smithay::backend::renderer::gles::GlesTexture = self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
         let mut tracker = OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Normal);
         {
@@ -471,12 +527,12 @@ impl Screen {
     }
 
     /// The lock screen's picture going in a wave from where it was touched.
-    fn wave(&mut self, state: &State, frame_ns: u64, start: u64, style: &crate::door::Style, texture: smithay::backend::renderer::gles::GlesTexture) -> Vec<FrameElement> {
+    fn wave(&mut self, from: (f64, f64), frame_ns: u64, start: u64, style: &crate::door::Style, texture: smithay::backend::renderer::gles::GlesTexture) -> Vec<FrameElement> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         use smithay::backend::renderer::gles::Uniform;
         let Some(program) = self.wave_program() else { return Vec::new() };
         let (w, h) = crate::layout::LAYOUT;
-        let (cx, cy) = state.lock.touched_at();
+        let (cx, cy) = from;
         // To the farthest corner, and its edge past it.
         let far = [(0.0, 0.0), (w as f64, 0.0), (0.0, h as f64), (w as f64, h as f64)]
             .iter()
@@ -574,6 +630,7 @@ impl Screen {
     pub fn warm_up(&mut self, state: &State) {
         let t = hybris_hwc::now_ns();
         let _ = self.wave_program();
+        let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4] });
         let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer) + state.pen.warm_up(&mut self.renderer) + state.setup.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }
