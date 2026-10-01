@@ -945,7 +945,7 @@ class NextUpCard:
         GLib.idle_add(show)
 
 
-RELEASES = "https://api.github.com/repos/iverbovoy/surfaceduo-droidian/releases/latest"
+RELEASES = "https://api.github.com/repos/agentsco-lab/surfaceduo-droidian/releases/latest"
 UPDATE_EVERY_S = 86400                    # GitHub is asked at most once a day
 POSTURE_NAMES = {"closed": "closed", "laptop": "laptop", "flat": "flat", "folded": "folded back"}
 
@@ -1157,7 +1157,7 @@ class WeatherCard:
         self.city.set_text(location.get_city_name() or location.get_name())
         self.info = GWeather.Info.new(location)
         self.info.set_application_id("org.sfduo.SystemScreen")
-        self.info.set_contact_info("https://github.com/iverbovoy/surfaceduo-droidian")
+        self.info.set_contact_info("https://github.com/agentsco-lab/surfaceduo-droidian")
         # as the desktop clock: met.no, not GWeather's default of an airport's
         # report and a service for the United States
         self.info.set_enabled_providers(GWeather.Provider.METAR | GWeather.Provider.MET_NO)

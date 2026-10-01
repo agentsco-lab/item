@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build item-shell_<ver>_arm64.deb into out/: the two-panel shell for the
 # Surface Duo 1, on top of the port (adaptation-droidian-surfaceduo, from
-# iverbovoy/surfaceduo-droidian), which runs Droidian's own phosh on the two
+# agentsco-lab/surfaceduo-droidian), which runs Droidian's own phosh on the two
 # panels by itself.
 #
 # What this adds: the dock, the system screen, the pen's sheet, the port's
