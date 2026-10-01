@@ -89,6 +89,7 @@ const DEFAULT: [&[&str]; 2] = [
     &["org.gnome.Epiphany.desktop", "org.gnome.Settings.desktop", "org.gnome.Weather.desktop"],
 ];
 
+#[derive(Clone)]
 struct App {
     name: String,
     exec: String,
@@ -113,6 +114,11 @@ enum Mode {
 
 struct Half {
     apps: Vec<App>,
+    /// Apps running that are on neither half, after its own (each with the
+    /// app id it is for), on the half of the panel they were opened onto.
+    extra: Vec<(String, App)>,
+    /// The width it is going to, as apps come and go (logical px).
+    target_w: i32,
     /// The slab with its inner corners (the right ones for the left half,
     /// the left for the right) at each of RADII; its outer ones round.
     slabs: Vec<MemoryRenderBuffer>,
@@ -120,6 +126,27 @@ struct Half {
     size: (i32, i32),
     /// The icon a finger is on, and the finger.
     pressed: Option<(usize, TouchSlot, Point<f64, Logical>)>,
+}
+
+impl Half {
+    fn len(&self) -> usize {
+        self.apps.len() + self.extra.len()
+    }
+
+    /// Its icons, its own and then the running ones.
+    fn items(&self) -> impl Iterator<Item = &App> {
+        self.apps.iter().chain(self.extra.iter().map(|(_, a)| a))
+    }
+
+    fn item(&self, i: usize) -> &App {
+        if i < self.apps.len() { &self.apps[i] } else { &self.extra[i - self.apps.len()].1 }
+    }
+}
+
+/// A half's width for `n` icons, logical px.
+fn half_width(n: usize) -> i32 {
+    let n = n as i32;
+    if n == 0 { 0 } else { 2 * PAD + n * ICON + (n - 1) * GAP }
 }
 
 /// A half's place at a moment: its slab's left edge and top, logical px;
@@ -246,6 +273,9 @@ pub struct Dock {
     /// flows.
     lone: std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>,
     lone_flow: std::cell::Cell<Flow>,
+    /// Running apps' dock items by app id, found once (None: no desktop
+    /// file for it).
+    found: std::collections::HashMap<String, Option<App>>,
     /// The same for groups of drops drawn freely (`group`), by slot.
     groups: std::cell::RefCell<Vec<std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>>>,
 }
@@ -291,10 +321,10 @@ impl Dock {
                 // The left half meets the other with its right side, the
                 // right half with its left.
                 let slabs = RADII.iter().map(|&r| if p == 0 { slab(w, h, RADIUS as f64, r) } else { slab(w, h, r, RADIUS as f64) }).collect();
-                Half { apps, slabs, size: (w, h), pressed: None }
+                Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -577,6 +607,19 @@ impl Dock {
 
     /// After a frame for `frame_ns`: whether the halves are still moving.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
+        // A half making room for a running app, or closing up after one.
+        let mut widening = false;
+        for half in &mut self.halves {
+            let d = half.target_w - half.size.0;
+            if d != 0 {
+                let step = ((d.abs() as f64 * 0.16).ceil() as i32).max(1);
+                half.size.0 += d.signum() * step.min(d.abs());
+                widening = true;
+            }
+        }
+        if widening {
+            return true;
+        }
         if let Some((at, ..)) = self.birth {
             if frame_ns >= at + BIRTH_FALL_NS + BIRTH_SPREAD_NS + MOVE_NS + BIRTH_ICONS_NS {
                 self.birth = None;
@@ -658,7 +701,7 @@ impl Dock {
             if !slab.contains(pos) {
                 continue;
             }
-            let icon = (0..self.halves[h].apps.len()).find(|&i| self.cell(i, &p).contains(pos));
+            let icon = (0..self.halves[h].len()).find(|&i| self.cell(i, &p).contains(pos));
             self.halves[h].pressed = icon.map(|i| (i, slot, pos));
             // Touched, the drops come alive.
             self.touched.set(hybris_hwc::now_ns());
@@ -694,7 +737,7 @@ impl Dock {
                     popped[h] = now;
                     self.popped.set(popped);
                     let panel = layout::panel_at(at).unwrap_or(0);
-                    let app = &half.apps[i];
+                    let app = half.item(i);
                     return Some(Tap::Launch(app.exec.clone(), panel, app.large.clone(), app.ids.clone()));
                 }
             }
@@ -710,6 +753,26 @@ impl Dock {
                 popped[h] = now;
                 self.popped.set(popped);
             }
+        }
+    }
+
+    /// The apps running, each with the panel it was opened onto: those on
+    /// neither half get an icon at the end of that panel's half, which
+    /// makes room for it; gone, it closes up again.
+    pub fn set_running(&mut self, running: &[(String, usize)]) {
+        let own: Vec<String> = self.halves.iter().flat_map(|h| h.apps.iter().flat_map(|a| a.ids.iter().cloned())).collect();
+        for h in 0..2 {
+            let want: Vec<&String> = running.iter().filter(|(id, p)| *p == h && !id.is_empty() && !own.contains(id)).map(|(id, _)| id).collect();
+            let have: Vec<&String> = self.halves[h].extra.iter().map(|(id, _)| id).collect();
+            if want == have {
+                continue;
+            }
+            let extra: Vec<(String, App)> = want.iter().filter_map(|id| running_app(&mut self.found, id).map(|a| ((*id).clone(), a))).collect();
+            tracing::info!("dock {}: running {}", if h == 0 { "left" } else { "right" }, extra.iter().map(|(_, a)| a.name.as_str()).collect::<Vec<_>>().join(", "));
+            let half = &mut self.halves[h];
+            half.extra = extra;
+            half.target_w = half_width(half.len());
+            half.pressed = None;
         }
     }
 
@@ -743,7 +806,7 @@ impl Dock {
         let shape = self.shape(&places, frame_ns);
         for (h, half) in self.halves.iter().enumerate() {
             let p = places[h];
-            if p.y >= bottom || half.apps.is_empty() {
+            if p.y >= bottom || half.len() == 0 {
                 continue;
             }
             let (bx, by, bw, bh) = shape.boxes[h];
@@ -752,12 +815,16 @@ impl Dock {
             let foot = by + bh;
             let tx = |x: f64| mid + (p.anchor + (x - p.anchor) * p.scale - mid) * sx;
             let ty = |y: f64| foot - (foot - y) * sy;
-            for (i, app) in half.apps.iter().enumerate() {
+            let own = half.apps.len();
+            for (i, app) in half.items().enumerate() {
                 let c = self.cell(i, &p);
+                // A running app's icon comes up as the drop makes room for
+                // it, and goes as it closes up.
+                let room = if i < own { 1.0 } else { ((half.size.0 as f64 - (PAD + i as i32 * (ICON + GAP)) as f64) / (ICON + PAD) as f64).clamp(0.0, 1.0) };
                 let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
                 // By the hinge an icon goes under with the water: it fades
                 // as it nears the edge, and comes out again past it.
-                let shown = (1.0 - hinge_cover(cx, ICON as f64 / 2.0)) * self.icons_shown(h, frame_ns);
+                let shown = (1.0 - hinge_cover(cx, ICON as f64 / 2.0)) * self.icons_shown(h, frame_ns) * room;
                 if shown <= 0.01 {
                     continue;
                 }
@@ -795,7 +862,7 @@ impl Dock {
             let (w, ht) = (self.halves[h].size.0 as f64, self.halves[h].size.1 as f64);
             (p.anchor + (p.x - p.anchor) * p.scale, p.y, w * p.scale, ht)
         });
-        let shown = [0, 1].map(|h| places[h].y < bottom && !self.halves[h].apps.is_empty());
+        let shown = [0, 1].map(|h| places[h].y < bottom && self.halves[h].len() > 0);
 
         // Moving, a drop stretches along its way: its speed, smoothed; and
         // which way it goes.
@@ -1370,13 +1437,24 @@ fn config() -> [Vec<String>; 2] {
     }
 }
 
+/// A running app's dock item, by the app id its window gave: the desktop
+/// file of that name, or the one whose StartupWMClass it is.
+fn running_app(found: &mut std::collections::HashMap<String, Option<App>>, id: &str) -> Option<App> {
+    found
+        .entry(id.to_owned())
+        .or_insert_with(|| crate::apps::all().into_iter().find(|e| e.ids.iter().any(|i| i == id)).map(app_of))
+        .clone()
+}
+
 /// A dock item from its desktop file (apps.rs), with its icons at the
 /// dock's and the curtain's sizes.
 fn app(desktop: &str) -> Option<App> {
-    let e = crate::apps::entry(desktop)?;
-    let small = e.icon.as_deref().and_then(|n| crate::apps::icon(n, ICON));
+    crate::apps::entry(desktop).map(app_of)
+}
+
+fn app_of(e: crate::apps::Entry) -> App {    let small = e.icon.as_deref().and_then(|n| crate::apps::icon(n, ICON));
     let large = e.icon.as_deref().and_then(|n| crate::apps::icon(n, crate::curtain::ICON));
-    Some(App { name: e.name, exec: e.exec, ids: e.ids, icon: small, large })
+    App { name: e.name, exec: e.exec, ids: e.ids, icon: small, large }
 }
 
 /// The slab: a rectangle `w` by `h` logical px, its left corners of radius

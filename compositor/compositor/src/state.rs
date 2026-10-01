@@ -144,6 +144,9 @@ pub struct State {
     pub walls: crate::walls::Walls,
     /// The desktop's editing: choosing the wallpaper (picker.rs).
     pub picker: crate::picker::Picker,
+    /// The panel each window was last opened onto: the dock's half its
+    /// app's icon goes to while it runs. (Its app id comes after it opens.)
+    pub opened_on: Vec<(Window, usize)>,
     /// Every page in one row, the panels a window onto it (ribbon.rs).
     pub ribbon: crate::ribbon::Ribbon,
     /// The panel the next window goes to, asked for by a launch from the
@@ -227,6 +230,7 @@ impl State {
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),
+            opened_on: Default::default(),
             bottom_start: None,
             launch_to: None,
             socket_name: Default::default(),
@@ -326,7 +330,21 @@ impl State {
     /// along, the grid coming up, a window going away) it follows the
     /// motion between the two ends; else it moves on its own to where it
     /// stands for the panels now.
+    /// A window opened onto a panel, for its app's icon in the dock.
+    fn opened_onto(&mut self, window: &Window, panel: usize) {
+        self.opened_on.retain(|(w, _)| w != window);
+        self.opened_on.push((window.clone(), panel));
+    }
+
     pub fn place_dock(&mut self, frame_ns: u64) {
+        // The apps running, on the half of the panel each was opened onto
+        // (the right one if not known).
+        let windows = self.windows();
+        self.opened_on.retain(|(w, _)| windows.contains(w));
+        let mut running: Vec<(String, usize)> = windows.iter().map(|w| (app_id(w), self.opened_on.iter().find(|(o, _)| o == w).map(|(_, p)| *p).unwrap_or(1))).collect();
+        running.sort();
+        running.dedup_by(|a, b| a.0 == b.0);
+        self.dock.set_running(&running);
         let view = self.ribbon.view;
         if let Some((v, k)) = self.ribbon.scrolling(frame_ns) {
             let (from, to) = (self.dock_taken(v), self.dock_taken(v + 1));
@@ -563,6 +581,7 @@ impl State {
         // Its page to the panel asked for, the row running there.
         if self.ribbon.on(panel) != Some(&crate::ribbon::Page::App(window.clone())) {
             self.ribbon.open(window.clone(), panel);
+            self.opened_onto(&window, panel);
         }
         let surface = window.toplevel().unwrap().wl_surface().clone();
         self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
@@ -604,6 +623,7 @@ impl State {
         window.toplevel().unwrap().with_pending_state(|s| s.size = Some(rect.size));
         window.toplevel().unwrap().send_pending_configure();
         self.ribbon.open(window.clone(), panel);
+        self.opened_onto(&window, panel);
         self.space.map_element(window.clone(), rect.loc, true);
         self.gestures.bring_back(window.clone(), panel, hybris_hwc::now_ns());
         let surface = window.toplevel().unwrap().wl_surface().clone();
@@ -824,6 +844,7 @@ impl XdgShellHandler for State {
         self.boost.kick(hybris_hwc::now_ns());
         let p = panels.iter().position(|r| *r == panel).unwrap_or(0);
         self.ribbon.open(window.clone(), p);
+        self.opened_onto(&window, p);
         self.space.map_element(window.clone(), panel.loc, true);
         self.needs_redraw = true;
         tracing::info!(
