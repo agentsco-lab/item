@@ -609,8 +609,13 @@ impl ClientData for ClientState {
 /// The wallpaper's shift for the ribbon at `position` (pages): it moves a
 /// little with the row, behind it (wallpaper.glsl).
 pub fn wallpaper_shift(position: f64) -> f64 {
-    (position - 1.0) * crate::ribbon::PAGE * 0.12
+    ((position - 1.0) * crate::ribbon::PAGE * 0.12).clamp(-WALL_LEFT, WALL_RIGHT)
 }
+
+/// How far the wallpaper may move each way (its texture is that much wider
+/// than the screen, output.rs).
+pub const WALL_LEFT: f64 = 100.0;
+pub const WALL_RIGHT: f64 = 200.0;
 
 pub fn app_id(window: &Window) -> String {
     with_states(window.toplevel().unwrap().wl_surface(), |states| {

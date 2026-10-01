@@ -32,8 +32,8 @@ pub const PAGE: f64 = 717.0;
 /// A release faster than this (logical px per ms) goes on a page.
 const FLICK: f64 = 0.35;
 /// A run's longest and shortest time.
-const RUN_MAX_NS: f64 = 380e6;
-const RUN_MIN_NS: f64 = 180e6;
+const RUN_MAX_NS: f64 = 520e6;
+const RUN_MIN_NS: f64 = 260e6;
 /// Past either end, the row follows the finger this much.
 const RUBBER: f64 = 0.3;
 /// The dots under the row, after a move.
@@ -282,7 +282,7 @@ impl Ribbon {
         let now = hybris_hwc::now_ns();
         self.begin(now);
         self.drag = None;
-        self.run = Some(Run { from: before, start_ns: now, duration_ns: 300_000_000, v0: 0.0, scroll: false });
+        self.run = Some(Run { from: before, start_ns: now, duration_ns: 440_000_000, v0: 0.0, scroll: false });
         self.unsettled = true;
     }
 

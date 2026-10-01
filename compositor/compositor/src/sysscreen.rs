@@ -135,6 +135,11 @@ impl SystemScreen {
         self.wanted = out;
     }
 
+    /// The page as drawn, to be sent to the GPU ahead of its first frame.
+    pub fn page_buffer(&self) -> Option<&MemoryRenderBuffer> {
+        self.page.as_ref()
+    }
+
     /// Read now, for the ribbon to show the page as it comes; the page is
     /// kept up to date while it may.
     pub fn ready(&mut self) {

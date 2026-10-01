@@ -58,8 +58,9 @@ const RADIUS: f32 = 20.0;
 /// desktop's black - opaque, so the halves and the neck between them can
 /// overlap without darker seams.
 const SLAB: [u8; 4] = [37, 46, 42, 255];
-/// How long a move takes (item's MOVE_CROSS_MS).
-const MOVE_NS: u64 = 440_000_000;
+/// How long a move takes (item's MOVE_CROSS_MS was 440 ms; drops of water
+/// go slower).
+const MOVE_NS: u64 = 640_000_000;
 /// The hinge as the halves cross it: a tunnel an icon long (item's TUNNEL_PX).
 const TUNNEL: f64 = (ICON + 2) as f64;
 /// The arriving half's inner padding, tucked under where the two meet
@@ -148,7 +149,7 @@ const INTO: f64 = 12.0;
 const CLING: f64 = 0.42;
 const LET_GO: f64 = 10.0;
 const SPOT: f64 = 18.0;
-const WET_NS: u64 = 1_800_000_000;
+const WET_NS: u64 = 2_400_000_000;
 /// A jolt (letting go, the thread breaking): a bounce.
 const POP: f64 = 0.14;
 /// Two drops: apart they do not reach for each other (a px, for a clean
@@ -158,14 +159,14 @@ const POP: f64 = 0.14;
 const APART_MELT: f64 = 0.8;
 const PINCH_MELT: f64 = 30.0;
 const BREAK_GAP: f64 = 24.0;
-const MERGE_FILL_NS: f64 = 45e6;
+const MERGE_FILL_NS: f64 = 90e6;
 const MERGE_BULGE: f64 = 6.0;
-const MERGE_SETTLE_NS: f64 = 170e6;
-const MERGE_PERIOD_NS: f64 = 260e6;
-const MERGE_NS: u64 = 700_000_000;
-const WOBBLE_NS: u64 = 650_000_000;
+const MERGE_SETTLE_NS: f64 = 260e6;
+const MERGE_PERIOD_NS: f64 = 380e6;
+const MERGE_NS: u64 = 1_000_000_000;
+const WOBBLE_NS: u64 = 1_000_000_000;
 const WOBBLE: f64 = 0.07;
-const WOBBLE_PERIOD_NS: f64 = 260e6;
+const WOBBLE_PERIOD_NS: f64 = 380e6;
 /// Water's body: a faint cool tint, mostly clear.
 const BODY: [f32; 4] = [0.82, 0.9, 0.95, 0.14];
 /// A drop's ends: round, half its height.
@@ -174,7 +175,7 @@ const DROP_RADIUS: f32 = 36.0;
 /// and at most; how fast the stretch follows the speed.
 const STRETCH: f64 = 0.09;
 const STRETCH_MAX: f64 = 0.16;
-const STRETCH_FOLLOW: f64 = 0.35;
+const STRETCH_FOLLOW: f64 = 0.22;
 /// The icons seen through the water: a little larger.
 const LENS: f64 = 1.04;
 /// Alive while a finger is on a drop and a while after, calming over the
@@ -836,10 +837,42 @@ impl Dock {
             }
         }
         let (width, height) = layout::LAYOUT;
-        // The bottom of the screen: the drops, their shadow, their breath.
-        let top = height - 140;
-        let area = Rectangle::<i32, Logical>::new((0, top).into(), (width, height - top).into());
+        // Drawn over as little as it can: the drops, the wet spot, and room
+        // round them for the shadow, the thread, the ripple and the breath;
+        // in whole steps, so the area moves less often than the drops.
+        let mut bounds: Option<(f64, f64, f64, f64)> = None;
+        let mut add = |b: &[f64; 4]| {
+            if b[0] < -500.0 {
+                return;
+            }
+            let r = (b[0], b[1], b[0] + b[2], b[1] + b[3]);
+            bounds = Some(match bounds {
+                Some(o) => (o.0.min(r.0), o.1.min(r.1), o.2.max(r.2), o.3.max(r.3)),
+                None => r,
+            });
+        };
+        for (b, (sx, sy)) in &shape.drops {
+            // Squashed about the bottom middle: as wide and high as that.
+            let (w, h) = (b[2] * sx, b[3] * sy);
+            add(&[b[0] + b[2] / 2.0 - w / 2.0, b[1] + b[3] - h, w, h]);
+        }
+        if let Some((b, ..)) = shape.one {
+            add(&b);
+        }
+        if shape.trail.1 > 0.0 {
+            add(&shape.trail.0);
+        }
+        let step = 32.0;
+        let (x0, y0, x1, y1) = bounds.unwrap_or((0.0, height as f64 - 1.0, 1.0, height as f64));
+        let pad = 28.0;
+        let snap_lo = |v: f64| ((v - pad) / step).floor() * step;
+        let snap_hi = |v: f64| ((v + pad) / step).ceil() * step;
+        let (ax0, ay0) = (snap_lo(x0).max(0.0) as i32, snap_lo(y0).max(0.0) as i32);
+        let (ax1, ay1) = (snap_hi(x1).min(width as f64) as i32, snap_hi(y1).min(height as f64) as i32);
+        let area = Rectangle::<i32, Logical>::new((ax0, ay0).into(), ((ax1 - ax0).max(1), (ay1 - ay0).max(1)).into());
+        let (left, top) = (ax0, ay0);
         let y = |v: f64| (v - top as f64) as f32;
+        let x = |v: f64| (v - left as f64) as f32;
         let far = ([-1000.0, 0.0, 10.0, 10.0], (1.0, 1.0));
         let d: Vec<([f64; 4], (f64, f64))> = (0..4).map(|i| shape.drops.get(i).copied().unwrap_or(far)).collect();
         let (one, meet) = match shape.one {
@@ -848,14 +881,14 @@ impl Dock {
         };
         let mut v: Vec<f32> = Vec::new();
         for (b, _) in &d {
-            v.extend([b[0] as f32, y(b[1]), b[2] as f32, b[3] as f32]);
+            v.extend([x(b[0]), y(b[1]), b[2] as f32, b[3] as f32]);
         }
         v.extend([d[0].1 .0, d[0].1 .1, d[1].1 .0, d[1].1 .1, d[2].1 .0, d[2].1 .1, d[3].1 .0, d[3].1 .1].map(|x| x as f32));
-        v.extend([one[0] as f32, y(one[1]), one[2] as f32, one[3] as f32]);
-        v.extend(meet.map(|x| x as f32));
+        v.extend([x(one[0]), y(one[1]), one[2] as f32, one[3] as f32]);
+        v.extend([meet[0] as f32, meet[1] as f32, x(meet[2]), meet[3] as f32]);
         let t = shape.trail.0;
-        v.extend([t[0] as f32, y(t[1]), t[2] as f32, t[3] as f32, shape.trail.1 as f32]);
-        v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, self.life(frame_ns) as f32, self.shift as f32, top as f32]);
+        v.extend([x(t[0]), y(t[1]), t[2] as f32, t[3] as f32, shape.trail.1 as f32]);
+        v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, self.life(frame_ns) as f32, self.shift as f32, top as f32, left as f32]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -872,7 +905,7 @@ impl Dock {
                 Uniform::new("time", v[38]),
                 Uniform::new("life", v[39]),
                 Uniform::new("shift", v[40]),
-                Uniform::new("origin", (0.0f32, v[41])),
+                Uniform::new("origin", (v[42], v[41])),
                 Uniform::new("radius", DROP_RADIUS),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
@@ -882,6 +915,10 @@ impl Dock {
         let mut drops = self.drops.borrow_mut();
         match drops.as_mut() {
             Some((e, last)) => {
+                use smithay::backend::renderer::element::Element;
+                if e.geometry(1.0.into()).to_logical(1) != area {
+                    e.resize(area, None);
+                }
                 if *last != v {
                     e.update_uniforms(uniforms(&v));
                     *last = v;

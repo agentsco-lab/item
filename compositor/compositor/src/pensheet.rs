@@ -403,6 +403,11 @@ impl PenSheet {
         self.canvas();
     }
 
+    /// The canvas, to be sent to the GPU ahead of its first frame.
+    pub fn canvas_buffer(&self) -> Option<&MemoryRenderBuffer> {
+        self.canvas.as_ref()
+    }
+
     fn drawn_at(&self, renderer: &mut GlesRenderer, p: f64) -> Vec<ShellElement> {
         let Some(canvas) = &self.canvas else { return Vec::new() };
         if p <= 0.0 {

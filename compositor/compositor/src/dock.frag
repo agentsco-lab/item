@@ -91,20 +91,44 @@ float trace(vec2 p) {
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
 }
 
+// A cheap bound first: the boxes alone, no union, no ripple.
+float near(vec2 p) {
+    float d = min(box(p, b0, s01.xy), box(p, b1, s01.zw));
+    d = min(d, min(box(p, b2, s23.xy), box(p, b3, s23.zw)));
+    if (meet.x > 0.0) {
+        d = min(d, box(p, one, vec2(1.0)));
+    }
+    return d;
+}
+
 void main() {
     vec2 p = v_coords * size;
     vec2 sp = p + origin;
-    float d = field(p);
-    float below = field(p - vec2(0.0, 5.0));
-    float shadow = (1.0 - smoothstep(-4.0, 10.0, below)) * 0.4;
     float tw = trace(p);
     float wetness = wet * (1.0 - smoothstep(-9.0, 3.0, tw));
+    // Far from any drop (past its shadow, its thread, its ripple) and not
+    // wet: nothing to draw, nothing more to work out.
+    if (near(p) > 22.0 && wetness < 0.004) {
+        discard;
+    }
+    float d = field(p);
+    // The shadow only matters outside the drop.
+    float shadow = 0.0;
+    if (d > -1.0) {
+        float below = field(p - vec2(0.0, 5.0));
+        shadow = (1.0 - smoothstep(-4.0, 10.0, below)) * 0.4;
+    }
     if (d > 1.5 && shadow < 0.004 && wetness < 0.004) {
         discard;
     }
     float cover = 1.0 - smoothstep(-0.75, 0.75, d);
-    float e = 0.75;
-    vec2 g = vec2(field(p + vec2(e, 0.0)) - field(p - vec2(e, 0.0)), field(p + vec2(0.0, e)) - field(p - vec2(0.0, e))) / (2.0 * e);
+    // The surface's slope, only near the edge, where it shows: deeper in
+    // the drop is flat.
+    vec2 g = vec2(0.0);
+    if (d < 1.5 && d > -16.0) {
+        float e = 0.75;
+        g = vec2(field(p + vec2(e, 0.0)) - field(p - vec2(e, 0.0)), field(p + vec2(0.0, e)) - field(p - vec2(0.0, e))) / (2.0 * e);
+    }
     float t = clamp(-d / 12.0, 0.0, 1.0);
     float slope = 1.0 - t;
     vec3 n = normalize(vec3(g * slope * 1.6, 1.0));

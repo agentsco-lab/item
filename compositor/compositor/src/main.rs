@@ -95,6 +95,10 @@ struct Pacing {
     margin_ns: u64,
     /// A running average of the time a frame takes to render and hand over.
     render_ns: f64,
+    /// The heaviest frames lately (a peak, slowly forgotten): a frame that
+    /// redraws the screen after a rest costs much more than those before,
+    /// and drawn by the average alone it misses its vsync.
+    peak_ns: f64,
     /// The vsync the frame being drawn aims for.
     target_ns: u64,
     /// When the last frame went to hwcomposer.
@@ -134,7 +138,7 @@ impl Pacing {
     fn from_env() -> Pacing {
         let late = std::env::var("LATE").map(|v| v != "0").unwrap_or(true);
         let margin_ms: f64 = std::env::var("LATE_MARGIN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
-        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
+        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, peak_ns: 0.0, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
             callbacks: match std::env::var("CALLBACKS").as_deref() {
                 Ok("vsync") => Callbacks::Vsync,
                 Ok("after") => Callbacks::After,
@@ -146,7 +150,7 @@ impl Pacing {
     }
 
     fn budget_ns(&self) -> u64 {
-        (self.render_ns * 1.5) as u64 + self.margin_ns
+        (self.render_ns * 1.5).max(self.peak_ns * 1.1) as u64 + self.margin_ns
     }
 
     /// Whether the last frame handed to hwcomposer is still waiting for a
@@ -404,6 +408,9 @@ impl Data {
             if took < 2 * self.screen.vsync_period_ns {
                 let weight = if took as f64 > self.pacing.render_ns { 0.5 } else { 0.1 };
                 self.pacing.render_ns += (took as f64 - self.pacing.render_ns) * weight;
+                // The peak: up at once, down by 0.5 % a frame (half in some
+                // 2.3 s of motion), never past the period.
+                self.pacing.peak_ns = (self.pacing.peak_ns * 0.995).max(took as f64).min(self.screen.vsync_period_ns as f64 * 0.8);
             }
         }
         self.report.render_max_ms = self.report.render_max_ms.max(took as f64 / 1e6);
@@ -688,7 +695,10 @@ fn main() {
             if data.state.lock.locked && data.state.lock.refresh() {
                 data.state.needs_redraw = true;
             }
-            if data.state.system.refresh() {
+            // The system screen's page is drawn on this thread (some 8 ms):
+            // not while the ribbon moves, which would miss a frame for it.
+            if !data.state.ribbon.moving() && data.state.system.refresh() {
+                data.screen.warm_pages(&data.state);
                 data.state.needs_redraw = true;
             }
             if data.state.clock.refresh() {
@@ -716,7 +726,9 @@ fn main() {
         .insert_source(wake_source, |_, _, data: &mut Data| {
             data.state.lock.poll();
             data.take_logind_asks();
-            data.state.system.refresh();
+            if !data.state.ribbon.moving() && data.state.system.refresh() {
+                data.screen.warm_pages(&data.state);
+            }
             data.state.needs_redraw = true;
             data.on_client_frame();
         })
@@ -791,6 +803,11 @@ fn main() {
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.
     data.screen.warm_up(&data.state);
+    // The system screen's page read and drawn now, at rest: the first swipe
+    // to it does not wait for it.
+    data.state.system.ready();
+    data.state.pen.ready();
+    data.screen.warm_pages(&data.state);
     // The first frame, which starts hwcomposer's vsyncs.
     data.draw_if_needed();
     event_loop
