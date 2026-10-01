@@ -13,9 +13,10 @@
 //! an icon long, so an icon goes all the way in before any of it comes out.
 //! The halves are drops of mercury (dock.frag), the mercury dock: as they
 //! near they melt into one, as drops do, and part again with a thread
-//! between them; going under the hinge a half is squashed flat, as jelly
-//! through a slot; moving it stretches along its way, and after a move it
-//! wobbles to rest. They are water: clear, a light ring along the edge,
+//! between them. Seen from above: by the hinge a drop spreads thin and
+//! flows along the slot - up it, narrower across it - and out of it gathers
+//! up with a bounce, leaving a wet trace that dries in two seconds; moving
+//! it stretches along its way, and after a move it wobbles to rest. They are water: clear, a light ring along the edge,
 //! light gathered inside along the bottom, a small sharp highlight, a soft
 //! shadow; the icons seen through it a little larger. Touched, a drop
 //! gives under the finger and springs back when let go, and comes alive -
@@ -139,10 +140,16 @@ struct Move {
     start_ns: u64,
 }
 
-/// The jelly: how flat a half goes under the hinge (its height, and its
-/// width a little wider), and its wobble to rest after a move.
-const FLATTEN: f64 = 0.72;
-const WIDEN: f64 = 0.38;
+/// By the hinge, seen from above: a drop spreads thin, and flows along the
+/// slot - up it (ALONG of its height more) and narrower across it (its
+/// width less by SQUEEZE, a little wider first as it spreads, SPREAD).
+const ALONG: f64 = 0.9;
+const SQUEEZE: f64 = 0.6;
+const SPREAD: f64 = 0.2;
+/// The wet trace a crossing leaves, drying away over WET_NS, shrinking.
+const WET_NS: u64 = 2_200_000_000;
+/// How far the trace reaches out of the hinge on either side.
+const TRACE_SIDE: f64 = 22.0;
 /// Out from under the hinge, a drop gathers up with a bounce.
 const POP: f64 = 0.14;
 const WOBBLE_NS: u64 = 650_000_000;
@@ -188,6 +195,8 @@ pub struct Dock {
     /// Each half: whether it was flat under the hinge, and when it came out.
     flat: std::cell::Cell<[bool; 2]>,
     popped: std::cell::Cell<[u64; 2]>,
+    /// The wet trace: its box (screen px) and when it was last wetted.
+    trail: std::cell::Cell<Option<([f64; 4], u64)>>,
     /// When a finger was last on a drop: they are alive for a while after.
     touched: std::cell::Cell<u64>,
     /// The wallpaper's parallax (wallpaper.glsl), for what the drops see.
@@ -228,7 +237,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flat: Default::default(), popped: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flat: Default::default(), popped: Default::default(), trail: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -465,6 +474,7 @@ impl Dock {
                 self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS)
                     || self.stretch.get().iter().any(|s| s.abs() > 0.003)
                     || self.popped.get().iter().any(|&t| t != 0 && frame_ns < t + WOBBLE_NS)
+                    || self.trail.get().is_some_and(|(_, t)| frame_ns < t + WET_NS)
                     || (self.mode != Mode::Hidden && self.life(frame_ns) > 0.0)
             }
         }
@@ -626,9 +636,9 @@ impl Dock {
                         continue;
                     }
                     // Through the water, a little larger, about its middle;
-                    // squashed with the drop, but not flattened with it.
+                    // where the drop spreads thin, sinking.
                     let sink = 1.0 - 0.45 * flat;
-                    let (iw, ih) = (ICON as f64 * p.scale * sx * LENS * sink / (1.0 + WIDEN * flat), ICON as f64 * (sy + FLATTEN * flat) * LENS * sink);
+                    let (iw, ih) = (ICON as f64 * p.scale * LENS * sink, ICON as f64 * LENS * sink);
                     let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
                     let src = Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into());
                     push(&mut out, icon, cx - iw / 2.0, cy - ih / 2.0, Some((iw, ih)), Some(src), alpha);
@@ -637,7 +647,8 @@ impl Dock {
         }
         // The drops under the icons.
         let squash = [(jelly[0].0, jelly[0].1), (jelly[1].0, jelly[1].1)];
-        if let Some(e) = self.drops(renderer, &boxes, &squash, frame_ns) {
+        let thin = [jelly[0].2, jelly[1].2];
+        if let Some(e) = self.drops(renderer, &boxes, &squash, thin, frame_ns) {
             out.push(ShellElement::Pixel(e));
         }
         out
@@ -697,7 +708,7 @@ impl Dock {
                 0.0
             };
             let wb = wobble.unwrap_or(0.0) + pop;
-            let mut s = (1.0 + WIDEN * f + stretch[h], 1.0 - FLATTEN * f - 0.6 * stretch[h]);
+            let mut s = (1.0 + SPREAD * f - SQUEEZE * f * f + stretch[h], 1.0 + ALONG * f - 0.6 * stretch[h]);
             // A finger on it: it gives a little under it.
             if self.halves[h].pressed.is_some() {
                 s = (s.0 * 1.035, s.1 * 0.93);
@@ -706,12 +717,33 @@ impl Dock {
         });
         self.flat.set(flat);
         self.popped.set(popped);
+        // The wet trace: a strip along the hinge, as high as the drop flowed
+        // up it, gathered over the crossing; a crossing after the last dried
+        // starts a new one.
+        for h in 0..2 {
+            let (sx, sy, f) = out[h];
+            if f < 0.25 {
+                continue;
+            }
+            let (w, ht) = (self.halves[h].size.0 as f64 * sx, self.halves[h].size.1 as f64 * sy);
+            let mid = places[h].x + self.halves[h].size.0 as f64 / 2.0;
+            let foot = places[h].y + self.halves[h].size.1 as f64;
+            let r = [(mid - w / 2.0).max(h0 - TRACE_SIDE), foot - ht, (mid + w / 2.0).min(h1 + TRACE_SIDE), foot];
+            if r[2] <= r[0] {
+                continue;
+            }
+            let merged = match self.trail.get() {
+                Some((t, at)) if frame_ns < at + 400_000_000 => [t[0].min(r[0]), t[1].min(r[1]), t[2].max(r[2]), t[3].max(r[3])],
+                _ => r,
+            };
+            self.trail.set(Some((merged, frame_ns)));
+        }
         out
     }
 
     /// The drops, through dock.frag: an element over the screen's bottom,
     /// its uniforms set again only when they change.
-    fn drops(&self, renderer: &mut GlesRenderer, boxes: &[(f64, f64, f64, f64)], jelly: &[(f64, f64); 2], frame_ns: u64) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
+    fn drops(&self, renderer: &mut GlesRenderer, boxes: &[(f64, f64, f64, f64)], jelly: &[(f64, f64); 2], thin: [f64; 2], frame_ns: u64) -> Option<smithay::backend::renderer::gles::element::PixelShaderElement> {
         use smithay::backend::renderer::gles::element::PixelShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         if self.program.borrow().is_none() {
@@ -729,6 +761,10 @@ impl Dock {
                 UniformName::new("time", UniformType::_1f),
                 UniformName::new("life", UniformType::_1f),
                 UniformName::new("shift", UniformType::_1f),
+                UniformName::new("thin0", UniformType::_1f),
+                UniformName::new("thin1", UniformType::_1f),
+                UniformName::new("trail", UniformType::_4f),
+                UniformName::new("wet", UniformType::_1f),
             ];
             let source = include_str!("dock.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
             match renderer.compile_custom_pixel_shader(&source, &names) {
@@ -740,8 +776,8 @@ impl Dock {
             }
         }
         let (width, height) = layout::LAYOUT;
-        // The bottom of the screen, as high as a half and a margin above.
-        let top = height - (self.halves[0].size.1 + MARGIN) - 40;
+        // The bottom of the screen, as high as a drop flowing up the hinge.
+        let top = height - 230;
         let area = Rectangle::<i32, Logical>::new((0, top).into(), (width, height - top).into());
         let y = |v: f64| (v - top as f64) as f32;
         // Apart, they melt together the more the nearer, up to MELT; once
@@ -765,7 +801,19 @@ impl Dock {
             self.life(frame_ns) as f32,
             self.shift as f32,
             top as f32,
+            thin[0] as f32, thin[1] as f32,
         ];
+        // The trace, drying: fainter, and shrinking towards its middle.
+        let (trail, wet) = match self.trail.get() {
+            Some((t, at)) if frame_ns < at + WET_NS => {
+                let k = (frame_ns - at) as f64 / WET_NS as f64;
+                let inset = k * 0.3 * (t[2] - t[0]).min(t[3] - t[1]);
+                ([t[0] + inset, t[1] + inset, t[2] - t[0] - 2.0 * inset, t[3] - t[1] - 2.0 * inset], (1.0 - k).powf(1.5))
+            }
+            _ => ([0.0; 4], 0.0),
+        };
+        let mut values = values;
+        values.extend([trail[0] as f32, y(trail[1]), trail[2] as f32, trail[3] as f32, wet as f32]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("half0", (v[0], v[1], v[2], v[3])),
@@ -781,6 +829,10 @@ impl Dock {
                 Uniform::new("time", v[13]),
                 Uniform::new("life", v[14]),
                 Uniform::new("shift", v[15]),
+                Uniform::new("thin0", v[17]),
+                Uniform::new("thin1", v[18]),
+                Uniform::new("trail", (v[19], v[20], v[21], v[22])),
+                Uniform::new("wet", v[23]),
             ]
         };
         let mut drops = self.drops.borrow_mut();
