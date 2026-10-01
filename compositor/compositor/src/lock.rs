@@ -112,7 +112,7 @@ impl Lock {
             time: Label::new(110.0, [1.0, 1.0, 1.0, 0.9]),
             date: Label::new(22.0, [1.0, 1.0, 1.0, 0.6]),
             hint: Label::new(15.0, [1.0, 1.0, 1.0, 0.45]),
-            hint_base: "Проведите вверх, чтобы разблокировать".into(),
+            hint_base: "Swipe up to unlock".into(),
             notice_until: 0,
             minute: -1,
             id: Id::new(),
@@ -125,7 +125,7 @@ impl Lock {
             for (l, k) in lock.keys.iter_mut().zip(KEYS) {
                 l.set(regular, k);
             }
-            lock.message.set(regular, "Введите PIN");
+            lock.message.set(regular, "Enter PIN");
         }
         lock.refresh();
         lock
@@ -207,7 +207,7 @@ impl Lock {
         }
         let pin = std::mem::take(&mut self.pin);
         *self.checking.lock().unwrap() = Some(None);
-        self.say("Проверка…");
+        self.say("Checking…");
         let (slot, wake) = (self.checking.clone(), self.wake.clone());
         std::thread::spawn(move || {
             let ok = crate::pam::check(&pin);
@@ -228,9 +228,9 @@ impl Lock {
                     self.fading = Some(hybris_hwc::now_ns());
                     self.unlocked = self.fading;
                     self.entering = false;
-                    self.say("Введите PIN");
+                    self.say("Enter PIN");
                 } else {
-                    self.say("Неверный PIN");
+                    self.say("Wrong PIN");
                 }
                 true
             }
@@ -279,7 +279,7 @@ impl Lock {
         self.lift = 0.0;
         self.entering = false;
         self.pin.clear();
-        self.say("Введите PIN");
+        self.say("Enter PIN");
         self.refresh();
     }
 

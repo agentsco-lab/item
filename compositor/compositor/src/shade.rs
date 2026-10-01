@@ -433,14 +433,14 @@ impl Shade {
     }
 }
 
-const WEEKDAYS: [&str; 7] = ["Воскресенье", "Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота"];
+const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const MONTHS: [&str; 12] = [
-    "января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
 ];
 
-/// "Среда, 30 сентября".
+/// "Wednesday, September 30".
 pub fn date_line(tm: &libc::tm) -> String {
-    format!("{}, {} {}", WEEKDAYS[tm.tm_wday as usize], tm.tm_mday, MONTHS[tm.tm_mon as usize])
+    format!("{}, {} {}", WEEKDAYS[tm.tm_wday as usize], MONTHS[tm.tm_mon as usize], tm.tm_mday)
 }
 
 pub fn local_time() -> libc::tm {
@@ -456,9 +456,9 @@ pub fn local_time() -> libc::tm {
 fn battery() -> String {
     let read = |f: &str| std::fs::read_to_string(format!("/sys/class/power_supply/battery/{f}")).map(|s| s.trim().to_owned());
     match (read("capacity"), read("status")) {
-        (Ok(c), Ok(s)) if s == "Charging" => format!("{c} % · заряжается"),
-        (Ok(c), Ok(s)) if s == "Full" => format!("{c} % · заряжен"),
-        (Ok(c), _) => format!("{c} %"),
+        (Ok(c), Ok(s)) if s == "Charging" => format!("{c}% · charging"),
+        (Ok(c), Ok(s)) if s == "Full" => format!("{c}% · charged"),
+        (Ok(c), _) => format!("{c}%"),
         _ => String::new(),
     }
 }

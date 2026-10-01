@@ -301,7 +301,7 @@ impl Data {
         for event in self.state.fingerprint.take_events() {
             match event {
                 fingerprint::Event::Identified => self.state.lock.unlock(),
-                fingerprint::Event::NotRecognized => self.state.lock.notice("Отпечаток не распознан"),
+                fingerprint::Event::NotRecognized => self.state.lock.notice("Not recognized"),
             }
             self.state.needs_redraw = true;
         }
@@ -697,7 +697,7 @@ fn main() {
         state.lock.lock_now();
     }
     if state.fingerprint.fingers > 0 {
-        state.lock.set_hint("Приложите палец или проведите вверх");
+        state.lock.set_hint("Touch the power key or swipe up");
     }
     // The session's manager: when it ends (a log out, or it failed), so
     // does the compositor, and the unit that started it decides what next.

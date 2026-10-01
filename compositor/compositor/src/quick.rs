@@ -70,10 +70,10 @@ impl Tile {
         match self {
             Tile::Wifi => "Wi-Fi",
             Tile::Bluetooth => "Bluetooth",
-            Tile::Mute => "Без звука",
-            Tile::Dark => "Тёмная тема",
-            Tile::Airplane => "Авиарежим",
-            Tile::Settings => "Настройки",
+            Tile::Mute => "Silent",
+            Tile::Dark => "Dark Style",
+            Tile::Airplane => "Airplane Mode",
+            Tile::Settings => "Settings",
         }
     }
 
@@ -199,7 +199,7 @@ impl Quick {
             icons,
             labels: Default::default(),
             app_icons: Default::default(),
-            empty: "Нет окон и уведомлений".into(),
+            empty: "No windows or notifications".into(),
             banner_at: std::cell::Cell::new(None),
             volume_at: std::cell::Cell::new(0),
             bar_track: crate::grid::rounded(BAR_W, BAR_H, BAR_W / 2.0, [30, 32, 36, 220]),

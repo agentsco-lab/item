@@ -270,10 +270,10 @@ impl SystemScreen {
         let h = text(&mut c, thin, &format!("{}:{:02}", now.tm_hour, now.tm_min), 72.0, ink, 0.0, 70.0, true);
         text(&mut c, regular, &date_line(now), 18.0, dim, 0.0, 70.0 + h + 2.0, true);
         let part = match now.tm_hour {
-            5..=11 => "Доброе утро",
-            12..=17 => "Добрый день",
-            18..=22 => "Добрый вечер",
-            _ => "Доброй ночи",
+            5..=11 => "Good morning",
+            12..=17 => "Good afternoon",
+            18..=22 => "Good evening",
+            _ => "Good night",
         };
         let greeting = match &f.name {
             Some(n) => format!("{part}, {n}"),
@@ -289,22 +289,22 @@ impl SystemScreen {
         if let Some(r) = rounded_path(cx * s, cy * s, cw * s, chh * s, 20.0 * s) {
             c.fill_path(&r, &white, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
         }
-        text(&mut c, regular, "Батарея", 15.0, dim, cx + 20.0, cy + 16.0, false);
+        text(&mut c, regular, "Battery", 15.0, dim, cx + 20.0, cy + 16.0, false);
         let doing = match f.status.as_str() {
             "Charging" => match hours(f.to_full_s) {
-                Some(t) => format!("{} % · полный через {t}", f.level),
-                None => format!("{} % · заряжается", f.level),
+                Some(t) => format!("{}% · full in {t}", f.level),
+                None => format!("{}% · charging", f.level),
             },
             // Full, or on the charger and holding (the port's "Not
             // charging" at 100 %).
-            "Full" | "Not charging" => format!("{} % · заряжен", f.level),
+            "Full" | "Not charging" => format!("{}% · charged", f.level),
             _ => match hours(f.to_empty_s) {
-                Some(t) => format!("{} % · хватит на {t}", f.level),
+                Some(t) => format!("{}% · {t} left", f.level),
                 None => format!("{} %", f.level),
             },
         };
         text(&mut c, regular, &doing, 22.0, ink, cx + 20.0, cy + 40.0, false);
-        text(&mut c, regular, &format!("{:.1} Вт · {:.0} °C", f.power_w, f.temp_c), 14.0, dim, cx + 20.0, cy + 76.0, false);
+        text(&mut c, regular, &format!("{:.1} W · {:.0} °C", f.power_w, f.temp_c), 14.0, dim, cx + 20.0, cy + 76.0, false);
 
         // The last 24 hours of charge.
         let (gx, gy, gw, gh) = (cx + 20.0, cy + 112.0, cw - 40.0, 150.0);
@@ -346,8 +346,8 @@ impl SystemScreen {
                 c.stroke_path(&path, &paint, &line, tiny_skia::Transform::identity(), None);
             }
         }
-        text(&mut c, regular, "24 ч назад", 11.0, dim, gx, gy + gh + 4.0, false);
-        text(&mut c, regular, "сейчас", 11.0, dim, gx + gw - 36.0, gy + gh + 4.0, false);
+        text(&mut c, regular, "24 h ago", 11.0, dim, gx, gy + gh + 4.0, false);
+        text(&mut c, regular, "now", 11.0, dim, gx + gw - 36.0, gy + gh + 4.0, false);
         Some(MemoryRenderBuffer::from_slice(c.data(), Fourcc::Abgr8888, (pw as i32, ph as i32), SCALE, Transform::Normal, None))
     }
 }
@@ -361,11 +361,11 @@ fn hours(s: i64) -> Option<String> {
     }
     let min = ((s as f64 / 60.0) / 10.0).round() as i64 * 10;
     Some(if min >= 300 {
-        format!("~{} ч", (min as f64 / 60.0).round() as i64)
+        format!("~{} h", (min as f64 / 60.0).round() as i64)
     } else if min >= 60 {
-        format!("~{} ч {} мин", min / 60, min % 60)
+        format!("~{} h {} min", min / 60, min % 60)
     } else {
-        format!("~{} мин", min.max(10))
+        format!("~{} min", min.max(10))
     })
 }
 

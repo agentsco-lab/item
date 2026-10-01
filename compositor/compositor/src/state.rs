@@ -270,7 +270,7 @@ impl State {
             .map(|w| {
                 let id = app_id(w);
                 let entry = entries.iter().find(|e| e.ids.contains(&id));
-                let name = entry.map(|e| e.name.clone()).unwrap_or_else(|| if id.is_empty() { "Окно".into() } else { id.clone() });
+                let name = entry.map(|e| e.name.clone()).unwrap_or_else(|| if id.is_empty() { "Window".into() } else { id.clone() });
                 (w.clone(), crate::quick::Row { app_id: id, name, icon: entry.and_then(|e| e.icon.clone()), detail: None })
             })
             .collect()
