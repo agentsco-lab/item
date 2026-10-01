@@ -31,7 +31,7 @@
 //! the left; one it could not take shakes the print and says why, in amber.
 //! The last lights the print whole, and a moment after the setup moves on.
 //!
-//! Colours only where they mean something: blue for progress and the
+//! Colours only where they mean something: coral for progress and the
 //! buttons, green for done, amber for a touch to do again, red for a wrong
 //! PIN.
 //!
@@ -79,13 +79,17 @@ const FLASH_NS: f64 = 700_000_000.0;
 const LAST_PAUSE_NS: u64 = 900_000_000;
 /// SETUP_DRY's touches for a whole finger.
 const DRY_TOUCHES: i32 = 8;
-/// The wave from the circle at the end.
-const WAVE_NS: u64 = 850_000_000;
+/// The setup going at the end, its drop handed to the dock.
+const LEAVE_NS: u64 = 600_000_000;
+/// The end's drop: the dock's height.
+const LAST_DROP_R: f64 = 36.0;
 const BUTTON_W: f64 = 240.0;
 const BUTTON_H: f64 = 56.0;
 /// The welcome's circle (and the end's) on the left; the PIN's step mark
 /// and the finger's ring on the right, the ring level with the reader.
 const WELCOME_Y: f64 = 250.0;
+/// How dark the wallpaper is under the setup.
+const SHADE: f32 = 0.5;
 const PIN_MARK_Y: f64 = 120.0;
 const PRINT_R: f64 = 104.0;
 /// The reader, under the power key (lock.rs's POWER_Y).
@@ -93,7 +97,10 @@ const READER_Y: f64 = 455.0;
 const ARROW_ICON: &str = "/usr/share/icons/Adwaita/symbolic/actions/go-next-symbolic.svg";
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-const BLUE: [f32; 4] = [0.208, 0.518, 0.894, 1.0];
+/// The buttons: a soft coral.
+const CORAL: [u8; 4] = [0xf0, 0x8a, 0x7b, 255];
+/// Progress, as the buttons: coral.
+const ACCENT: [f32; 4] = [0.941, 0.541, 0.482, 1.0];
 const GREEN: [f32; 4] = [0.180, 0.761, 0.494, 1.0];
 const AMBER: [f32; 4] = [0.965, 0.729, 0.290, 1.0];
 const NOTE: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
@@ -219,6 +226,9 @@ pub struct Setup {
     dry: bool,
     step: Step,
     leaving: Option<u64>,
+    /// The drop as it was when the setup went, for the dock to take: when,
+    /// its middle and radius.
+    handed: Option<(u64, (f64, f64), f64)>,
     pad: PinPad,
     /// The new PIN, between its two entries.
     first: String,
@@ -284,6 +294,7 @@ impl Setup {
             dry: std::env::var_os("SETUP_DRY").is_some(),
             step: Step::Welcome,
             leaving: None,
+            handed: None,
             pad: PinPad::new(),
             first: String::new(),
             is_default: Default::default(),
@@ -305,13 +316,13 @@ impl Setup {
             note: Label::new(19.0, NOTE),
             note_at: 0,
             old_note: None,
-            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: BLUE, print: 0.0, lit: 0.0, flash: 0.0 },
-            from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: BLUE, print: 0.0, lit: 0.0, flash: 0.0 },
+            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0 },
+            from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0 },
             moved_at: 0,
             move_ns: MOVE_MAX_NS,
             orb_ns: 0,
             started: 0,
-            button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [0x35, 0x84, 0xe4, 255]),
+            button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, CORAL),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
             id: Id::new(),
         }
@@ -404,7 +415,7 @@ impl Setup {
             self.move_ns = (MOVE_MIN_NS + far * MOVE_PER_PX_NS).min(MOVE_MAX_NS);
         }
         match step {
-            Step::Welcome => self.text("Welcome", &["Let's set up your Duo.", "It takes a minute."], "Get started", WELCOME_Y + 90.0),
+            Step::Welcome => self.text("Hello", &["Let's make this Duo yours:", "a PIN, a fingerprint, and you're in."], "Get started", WELCOME_Y + 90.0),
             Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
             Step::PinNew => {
                 if was != Step::PinAgain && was != Step::Saving {
@@ -446,7 +457,7 @@ impl Setup {
         let panels = layout::panels();
         let middle = |i: usize| panels[i].loc.x as f64 + panels[i].size.w as f64 / 2.0;
         let dim = |a: f32| [a, a, a, a];
-        let orb = Orb { x: middle(0), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: BLUE, print: 0.0, lit: self.lit, flash: 0.0 };
+        let orb = Orb { x: middle(0), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: ACCENT, print: 0.0, lit: self.lit, flash: 0.0 };
         match self.step {
             Step::Welcome => {
                 let t = frame_ns.saturating_sub(self.started) as f64;
@@ -465,10 +476,11 @@ impl Setup {
                 let flash = self.flash(frame_ns);
                 // The whole finger taken: the print turns green.
                 let green = self.last_at.map(|t| ease(frame_ns.saturating_sub(t) as f64 / 300_000_000.0) as f32).unwrap_or(0.0);
-                let accent = std::array::from_fn(|i| BLUE[i] + (GREEN[i] - BLUE[i]) * green);
+                let accent = std::array::from_fn(|i| ACCENT[i] + (GREEN[i] - ACCENT[i]) * green);
                 Orb { x: middle(1), y: READER_Y, r: PRINT_R + 5.0 * flash, thickness: 0.022, base: dim(0.2), accent, print: 1.0, flash, ..orb }
             }
-            Step::Done => Orb { thickness: 0.09, progress: 1.0, base: dim(0.16), accent: GREEN, ..orb },
+            // A drop again, the dock's size: it goes on to be the dock.
+            Step::Done => Orb { r: LAST_DROP_R, ..orb },
         }
     }
 
@@ -483,11 +495,6 @@ impl Setup {
     /// alpha.
     pub fn orb(&self) -> Option<Orb> {
         (self.active && self.leaving.is_none() && self.orb.r > 0.3).then_some(self.orb)
-    }
-
-    /// The circle as it stands, leaving or not: the wave's picture has it.
-    pub fn orb_at_rest(&self) -> Option<Orb> {
-        (self.active && self.orb.r > 0.3).then_some(self.orb)
     }
 
     /// Answers from the threads, and the made-up reader; whether anything
@@ -728,15 +735,23 @@ impl Setup {
             }
             let _ = std::fs::write(&path, "");
         }
-        self.leaving = Some(hybris_hwc::now_ns());
+        let now = hybris_hwc::now_ns();
+        self.leaving = Some(now);
+        self.handed = Some((now, (self.orb.x, self.orb.y), self.orb.r));
     }
 
-    /// The setup going in a wave from its circle: the wave's style, how far
-    /// (unused by a wave), since when, and from where (logical px).
-    pub fn turning(&self, _frame_ns: u64) -> Option<(crate::door::Style, f64, u64, (f64, f64))> {
-        let t = self.leaving?;
-        let style = crate::door::Style { mode: crate::door::Mode::Wave, ns: WAVE_NS, ..Default::default() };
-        Some((style, 0.0, t, (self.orb.x, self.orb.y)))
+    /// The drop the setup went with, once: the dock is born of it.
+    pub fn take_drop(&mut self) -> Option<(u64, (f64, f64), f64)> {
+        self.handed.take()
+    }
+
+    /// How much of the setup is still there: 1, fading to 0 as it goes.
+    pub fn shown(&self, frame_ns: u64) -> f64 {
+        match self.leaving {
+            Some(t) => 1.0 - ease(frame_ns.saturating_sub(t) as f64 / LEAVE_NS as f64),
+            None if self.active => 1.0,
+            None => 0.0,
+        }
     }
 
     /// After a frame: whether it still moves.
@@ -745,7 +760,7 @@ impl Setup {
             return false;
         }
         if let Some(t) = self.leaving {
-            if frame_ns >= t + WAVE_NS {
+            if frame_ns >= t + LEAVE_NS {
                 self.active = false;
                 self.leaving = None;
             }
@@ -803,20 +818,18 @@ impl Setup {
             .count()
     }
 
+    /// The setup as it stands, fading as it goes; the circle is the
+    /// output's to draw (orb.frag, the dock's water).
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
-        if !self.active || self.leaving.is_some() {
+        if !self.active {
             return Vec::new();
         }
-        self.picture(renderer, frame_ns)
-    }
-
-    /// The setup as it stands (the wave's picture of it, too); the circle is
-    /// the output's to draw (orb.frag).
-    pub fn picture(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
+        let fade = self.shown(frame_ns);
         let panels = layout::panels();
         let (left, right) = (panels[0], panels[1]);
         let mut out = if self.has_pad() { self.pad.elements(renderer, frame_ns, 0.0) } else { Vec::new() };
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, alpha: f64, src: Option<Rectangle<f64, smithay::utils::Logical>>| {
+            let alpha = alpha * fade;
             if alpha <= 0.001 {
                 return;
             }
@@ -887,10 +900,11 @@ impl Setup {
             put(&mut out, &self.button_bg, b.loc.x, b.loc.y + dy, a, None);
         }
 
-        // Black over everything else.
+        // The wallpaper through, darkened, over everything else (the output
+        // puts the wallpaper under it).
         let (lw, lh) = layout::LAYOUT;
         let rect = Rectangle::<i32, Physical>::from_size((lw * SCALE, lh * SCALE).into());
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, CommitCounter::default(), [0.0, 0.0, 0.0, 1.0], Kind::Unspecified)));
+        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, CommitCounter::from((fade * 1000.0) as usize), [0.0, 0.0, 0.0, SHADE * fade as f32], Kind::Unspecified)));
         out
     }
 }

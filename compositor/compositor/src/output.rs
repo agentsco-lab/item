@@ -133,6 +133,9 @@ pub struct Screen {
     door_ids: Vec<smithay::backend::renderer::element::Id>,
     wave_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     orb_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
+    /// The panels' soft edges (edge.frag), made once: over the setup, and
+    /// over the wallpaper.
+    edges: Option<[Vec<smithay::backend::renderer::gles::element::PixelShaderElement>; 2]>,
     wave_id: smithay::backend::renderer::element::Id,
     /// The screen under the shade, blurred (glass.rs), and which opening of
     /// the shade it was taken for.
@@ -143,6 +146,8 @@ pub struct Screen {
     night_was: Option<[f32; 3]>,
     /// The dimming before the screen goes dark.
     dim_id: smithay::backend::renderer::element::Id,
+    /// The wallpaper under the first setup.
+    setup_wall_id: smithay::backend::renderer::element::Id,
     /// The ribbon's dot.
     dot: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
     /// The wallpaper (walls.rs): a texture the output's scale, wider than
@@ -208,7 +213,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -251,23 +256,27 @@ impl Screen {
         }
         elements.extend(state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The first setup: its circle over its words (setup.rs, orb.frag).
-        if let Some(orb) = state.setup.orb() {
-            elements.extend(self.orb_element(&orb));
-        }
+        // Its rings over its words; its drop under the dark the setup lays
+        // over the wallpaper, darkened with what it bends.
+        let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns)).unwrap_or_default();
+        elements.extend(rings);
         elements.extend(state.setup.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        if state.setup.active {
+            elements.extend(self.edges(0));
+            elements.extend(setup_drop);
+            elements.extend(self.setup_wall(state.setup.shown(frame_ns) as f32));
+        }
+        // A call, over the lock screen (calls.rs).
+        elements.extend(state.calls.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The system's dialog, under the lock screen, over everything else.
         elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        // The lock screen, or the setup, going: a picture of it taken as it
-        // began, in a wave from where it was touched, or as doors (door.rs).
-        let turn = state
-            .setup
-            .turning(frame_ns)
-            .map(|(style, k, start, from)| (style, k, start, from, true))
-            .or_else(|| state.lock.turning(frame_ns).map(|(style, k, start)| (style, k, start, state.lock.touched_at(), false)));
-        if let Some((style, k, start, from, setup)) = turn {
+        // The lock screen going: a picture of it taken as it began, in a
+        // wave from where it was touched, or as doors (door.rs).
+        let turn = state.lock.turning(frame_ns).map(|(style, k, start)| (style, k, start, state.lock.touched_at()));
+        if let Some((style, k, start, from)) = turn {
             if self.door.as_ref().map(|d| d.0) != Some(start) {
-                self.door = self.cover_picture(state, start, setup).map(|t| (start, t));
+                self.door = self.cover_picture(state, start).map(|t| (start, t));
             }
             if let Some((_, texture)) = &self.door {
                 let texture = texture.clone();
@@ -463,6 +472,8 @@ impl Screen {
         // The wallpaper, under everything; it moves a little with the ribbon.
         let shift = crate::state::wallpaper_shift(state.ribbon.position(frame_ns)) as f32;
         let wall = self.wallpaper(shift, frame_ns);
+        // The wallpaper's edges soft into the bezel; the windows over them.
+        elements.extend(self.edges(1));
         elements.extend(wall.into_iter().map(FrameElement::Snapshot));
         let elements_ns = hybris_hwc::now_ns() - t0;
         let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
@@ -607,7 +618,8 @@ impl Screen {
         }
         let path = shot.take()?;
         // GL's rows are bottom-up: the first rows are the screen's bottom.
-        let size = if run { (size.w, FRAME_ROWS).into() } else { size };
+        // FRAMES_FULL=1: whole frames, for a move over the whole screen.
+        let size = if run && std::env::var_os("FRAMES_FULL").is_none() { (size.w, FRAME_ROWS).into() } else { size };
         let region = smithay::utils::Rectangle::from_size((size.w, size.h).into());
         match renderer.copy_framebuffer(target, region, Fourcc::Abgr8888) {
             Ok(mapping) => Some((path, mapping, size)),
@@ -704,8 +716,74 @@ impl Screen {
         out
     }
 
+    /// Each panel's edges soft, going into the bezel's dark (edge.frag).
+    fn edges(&mut self, set: usize) -> Vec<FrameElement> {
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        if self.edges.is_none() {
+            let names = [UniformName::new("soft", UniformType::_1f), UniformName::new("strength", UniformType::_1f), UniformName::new("corner", UniformType::_1f)];
+            let program = match self.renderer.compile_custom_pixel_shader(include_str!("edge.frag"), &names) {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!("edges: {e}");
+                    self.edges = Some([Vec::new(), Vec::new()]);
+                    return Vec::new();
+                }
+            };
+            let soft: f32 = std::env::var("EDGE_SOFT").ok().and_then(|v| v.parse().ok()).unwrap_or(12.0);
+            let strength: f32 = std::env::var("EDGE_STRENGTH").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+            let corner: f32 = std::env::var("EDGE_CORNER").ok().and_then(|v| v.parse().ok()).unwrap_or(24.0);
+            let make = || -> Vec<_> {
+                crate::layout::panels()
+                    .into_iter()
+                    .map(|p| smithay::backend::renderer::gles::element::PixelShaderElement::new(program.clone(), p, None, 1.0, vec![Uniform::new("soft", soft), Uniform::new("strength", strength), Uniform::new("corner", corner)], smithay::backend::renderer::element::Kind::Unspecified))
+                    .collect()
+            };
+            self.edges = Some([make(), make()]);
+        }
+        self.edges.as_ref().map(|e| e[set].clone()).unwrap_or_default().into_iter().map(FrameElement::Pixel).collect()
+    }
+
+    /// The wallpaper whole and still, under the first setup; fading as the
+    /// setup goes (a new id each frame of it).
+    fn setup_wall(&mut self, alpha: f32) -> Option<FrameElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        let (w, h) = crate::layout::LAYOUT;
+        let texture = self.wall.clone()?;
+        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((crate::state::WALL_LEFT as f64, 0.0).into(), (w as f64, h as f64).into());
+        let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((wall_width() * SCALE, h * SCALE).into());
+        if alpha <= 0.001 {
+            return None;
+        }
+        let fading = alpha < 0.999;
+        if fading {
+            self.setup_wall_id = smithay::backend::renderer::element::Id::new();
+        }
+        Some(FrameElement::Snapshot(TextureRenderElement::from_static_texture(self.setup_wall_id.clone(), self.renderer.context_id(), (0.0, 0.0), texture, SCALE, Transform::Normal, fading.then_some(alpha), Some(src), Some((w, h).into()), (!fading).then(|| vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified)))
+    }
+
+    /// The first setup's circle (its drop, its rings): a drop of water while it is whole (the
+    /// dock's water, bending the wallpaper), the rings of orb.frag as it
+    /// opens into one, the two crossing over between.
+    fn setup_orb(&mut self, state: &State, orb: &crate::setup::Orb, frame_ns: u64) -> (Vec<FrameElement>, Vec<FrameElement>) {
+        let (mut drop, mut out) = (Vec::new(), Vec::new());
+        let k = ((orb.thickness - 0.34) / 0.66).clamp(0.0, 1.0);
+        let water = (k * k * (3.0 - 2.0 * k)) as f32;
+        if water > 0.001 {
+            if let Some(texture) = self.wall.clone() {
+                let wall = (&texture, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT as f64);
+                if let Some(e) = state.dock.lone(&mut self.renderer, (orb.x, orb.y), orb.r, frame_ns, 0.6, water, wall) {
+                    drop.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
+                }
+            }
+        }
+        if water < 0.999 || self.wall.is_none() {
+            out.extend(self.orb_element(orb, if self.wall.is_none() { 1.0 } else { 1.0 - water }));
+        }
+        (drop, out)
+    }
+
     /// The first setup's circle (orb.frag).
-    fn orb_element(&mut self, orb: &crate::setup::Orb) -> Option<FrameElement> {
+    fn orb_element(&mut self, orb: &crate::setup::Orb, alpha: f32) -> Option<FrameElement> {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         if self.orb_program.is_none() {
             let names = [
@@ -747,23 +825,16 @@ impl Screen {
             Uniform::new("flash", orb.flash as f32),
         ];
         let program = self.orb_program.clone()?;
-        Some(FrameElement::Pixel(smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, None, 1.0, uniforms, smithay::backend::renderer::element::Kind::Unspecified)))
+        Some(FrameElement::Pixel(smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, None, alpha, uniforms, smithay::backend::renderer::element::Kind::Unspecified)))
     }
 
     /// The lock screen, or the setup with its circle, as it stood at
     /// `frame_ns`, in a texture the size of the output.
-    fn cover_picture(&mut self, state: &State, frame_ns: u64, setup: bool) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+    fn cover_picture(&mut self, state: &State, frame_ns: u64) -> Option<smithay::backend::renderer::gles::GlesTexture> {
         use smithay::backend::renderer::Offscreen;
         let size = self.output.current_mode()?.size;
         let mut elements: Vec<FrameElement> = Vec::new();
-        if setup {
-            if let Some(orb) = state.setup.orb_at_rest() {
-                elements.extend(self.orb_element(&orb));
-            }
-            elements.extend(state.setup.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        } else {
-            elements.extend(state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        }
+        elements.extend(state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         let mut texture: smithay::backend::renderer::gles::GlesTexture = self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
         let mut tracker = OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Normal);
         {
@@ -919,7 +990,7 @@ impl Screen {
             let size = self.output.current_mode().unwrap().size;
             self.glass = crate::glass::Glass::new(&mut self.renderer, size);
         }
-        let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4], print: 0.0, lit: 0.0, flash: 0.0 });
+        let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4], print: 0.0, lit: 0.0, flash: 0.0 }, 1.0);
         let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer) + state.pen.warm_up(&mut self.renderer) + state.setup.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }

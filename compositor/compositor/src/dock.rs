@@ -194,9 +194,20 @@ const CALM_NS: u64 = 2_500_000_000;
 /// The halves coming in from the sides after an unlock (item's RISE_MS).
 const RISE_NS: u64 = 360_000_000;
 
+/// Born of the first setup's drop: it falls to the left panel's foot, lands
+/// and spreads into the two halves as one, which then part as from a panel
+/// taken (the right one going over the hinge); each half's icons come up
+/// as it stands.
+const BIRTH_FALL_NS: u64 = 750_000_000;
+const BIRTH_SPREAD_NS: u64 = 450_000_000;
+const BIRTH_ICONS_NS: u64 = 350_000_000;
+
 pub struct Dock {
     /// When the halves start coming in from the sides (an unlock).
     rise: Option<u64>,
+    /// Born of a drop (`born`): when, where it was (its middle) and how
+    /// big (its radius), logical px.
+    birth: Option<(u64, (f64, f64), f64)>,
     halves: Vec<Half>,
     dot: MemoryRenderBuffer,
     mode: Mode,
@@ -231,6 +242,8 @@ pub struct Dock {
     /// The drops' element id and the uniforms it was drawn with: a new id
     /// when they change, so the frame takes it again.
     drops: std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>,
+    /// The same for a drop alone (the first setup's, `lone`).
+    lone: std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>,
 }
 
 /// What a touch on the dock asks for.
@@ -263,7 +276,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -314,8 +327,74 @@ impl Dock {
         self.rise = Some(at);
     }
 
+    /// The halves born of a drop of `r` about `centre` (the first setup's,
+    /// handed over as it goes), from `at`: it falls, lands, spreads into the
+    /// halves as one, and they part to where they stand.
+    pub fn born(&mut self, at: u64, centre: (f64, f64), r: f64) {
+        tracing::info!("dock: born of the setup's drop");
+        self.birth = Some((at, centre, r));
+        self.rise = None;
+        self.scrub = None;
+        self.mode = Mode::Both;
+        self.shown = Mode::Both;
+        let landed = at + BIRTH_FALL_NS;
+        self.moving = Some(Move { from: Mode::On(0), to: Mode::Both, start_ns: landed + BIRTH_SPREAD_NS });
+        // It lands with a splash: a wobble from then.
+        self.popped.set([landed, landed]);
+    }
+
+    /// While born: the halves as one drop falling and spreading.
+    fn birth_places(&self, frame_ns: u64) -> Option<[Place; 2]> {
+        let (at, (cx, cy), r) = self.birth?;
+        let t = frame_ns.saturating_sub(at);
+        if t >= BIRTH_FALL_NS + BIRTH_SPREAD_NS {
+            return None;
+        }
+        let end = self.targets(Mode::On(0));
+        let (w0, w1) = (self.halves[0].size.0 as f64, self.halves[1].size.0 as f64);
+        let h = self.halves[0].size.1 as f64;
+        // Where it lands: the middle of the two as one, at the dock's height.
+        let left = end[0].x;
+        let right = end[1].x + w1;
+        let land = ((left + right) / 2.0, end[0].y + h / 2.0);
+        // Its width as a drop: from the setup's, to the dock's height.
+        let (mid, y, width) = if t < BIRTH_FALL_NS {
+            let k = t as f64 / BIRTH_FALL_NS as f64;
+            // Across eased in and out; down as it falls, faster and faster.
+            let e = ease_in_out(k);
+            let fall = k * k;
+            (cx + (land.0 - cx) * e, cy + (land.1 - cy) * fall - h / 2.0, 2.0 * r + (h - 2.0 * r) * e)
+        } else {
+            (land.0, end[0].y, h)
+        };
+        // Spreading: each half from the drop's width to its own, out to
+        // where it stands.
+        let s = if t < BIRTH_FALL_NS { 0.0 } else { ease_out((t - BIRTH_FALL_NS) as f64 / BIRTH_SPREAD_NS as f64) };
+        let half = |i: usize| {
+            let w = if i == 0 { w0 } else { w1 };
+            let scale = width / w + (1.0 - width / w) * s;
+            // The left half grows from its left edge, the right from its
+            // right: their edges from the drop's out to their places.
+            let edge = if i == 0 { (mid - width / 2.0) + (end[0].x - (mid - width / 2.0)) * s } else { (mid + width / 2.0) + (end[1].x + w1 - (mid + width / 2.0)) * s };
+            let x = if i == 0 { edge } else { edge - w };
+            Place { x, y, tuck: end[i].tuck * s, radius: RADIUS as f64 * (1.0 - s) + end[i].radius * s, scale, anchor: edge }
+        };
+        Some([half(0), half(1)])
+    }
+
+    /// Each half's icons: shown, or coming up after a birth (the left as
+    /// it spreads, the right as it arrives over the hinge).
+    fn icons_shown(&self, h: usize, frame_ns: u64) -> f64 {
+        let Some((at, ..)) = self.birth else { return 1.0 };
+        let from = at + BIRTH_FALL_NS + if h == 0 { BIRTH_SPREAD_NS / 2 } else { BIRTH_SPREAD_NS + MOVE_NS * 3 / 4 };
+        ease_out(frame_ns.saturating_sub(from) as f64 / BIRTH_ICONS_NS as f64)
+    }
+
     /// Each half's place at `frame_ns`: its path, and the rise over it.
     fn places(&self, frame_ns: u64) -> [Place; 2] {
+        if let Some(p) = self.birth_places(frame_ns) {
+            return p;
+        }
         let mut p = self.path(frame_ns);
         if let Some(at) = self.rise {
             let k = (frame_ns.saturating_sub(at) as f64 / RISE_NS as f64).clamp(0.0, 1.0);
@@ -480,6 +559,18 @@ impl Dock {
 
     /// After a frame for `frame_ns`: whether the halves are still moving.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
+        if let Some((at, ..)) = self.birth {
+            if frame_ns >= at + BIRTH_FALL_NS + BIRTH_SPREAD_NS + MOVE_NS + BIRTH_ICONS_NS {
+                self.birth = None;
+            } else {
+                // Its parting ends as a move does: it wobbles to rest.
+                if self.moving.as_ref().is_some_and(|m| frame_ns >= m.start_ns + Self::duration(m)) {
+                    self.landed = Some(frame_ns);
+                    self.moving = None;
+                }
+                return true;
+            }
+        }
         if let Some(at) = self.rise {
             if frame_ns >= at + RISE_NS {
                 self.rise = None;
@@ -648,7 +739,7 @@ impl Dock {
                 let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
                 // By the hinge an icon goes under with the water: it fades
                 // as it nears the edge, and comes out again past it.
-                let shown = 1.0 - hinge_cover(cx, ICON as f64 / 2.0);
+                let shown = (1.0 - hinge_cover(cx, ICON as f64 / 2.0)) * self.icons_shown(h, frame_ns);
                 if shown <= 0.01 {
                     continue;
                 }
@@ -668,7 +759,8 @@ impl Dock {
             }
         }
         // The drops under the icons.
-        if let Some(e) = wall.and_then(|w| self.drops(renderer, &shape, frame_ns, w)) {
+        let life = self.life(frame_ns);
+        if let Some(e) = wall.and_then(|w| self.drops(renderer, &shape, frame_ns, w, life, DROP_RADIUS, 1.0, &self.drops)) {
             out.push(ShellElement::Shaded(e));
         }
         out
@@ -870,7 +962,16 @@ impl Dock {
 
     /// The drops, through dock.frag: an element over the screen's bottom,
     /// its uniforms set again only when they change.
-    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+    /// A drop alone, round, `r` about `centre` (logical px), as alive as
+    /// `life` (0 still, 1 as the dock's after a touch): the first setup's.
+    pub fn lone(&self, renderer: &mut GlesRenderer, centre: (f64, f64), r: f64, frame_ns: u64, life: f64, alpha: f32, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+        let b = [centre.0 - r, centre.1 - r, 2.0 * r, 2.0 * r];
+        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(1.0, 1.0); 2], drops: vec![(b, (1.0, 1.0))], melt: 0.0, one: None, trail: ([-1000.0, 0.0, 10.0, 10.0], 0.0) };
+        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, &self.lone)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64), life: f64, radius: f32, alpha: f32, cache: &std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         use smithay::backend::renderer::gles::element::TextureShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
@@ -940,8 +1041,8 @@ impl Dock {
         let t = shape.trail.0;
         v.extend([x(t[0]), y(t[1]), t[2] as f32, t[3] as f32, shape.trail.1 as f32]);
         let (texture, texl, woff) = wall;
-        v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, self.life(frame_ns) as f32, woff as f32, top as f32, left as f32]);
-        v.extend([texl.0 as f32, texl.1 as f32, (woff + left as f64) as f32, top as f32]);
+        v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, life as f32, woff as f32, top as f32, left as f32]);
+        v.extend([texl.0 as f32, texl.1 as f32, (woff + left as f64) as f32, top as f32, alpha, radius]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -961,14 +1062,14 @@ impl Dock {
                 Uniform::new("origin", (v[42], v[41])),
                 Uniform::new("texl", (v[43], v[44])),
                 Uniform::new("src0", (v[45], v[46])),
-                Uniform::new("radius", DROP_RADIUS),
+                Uniform::new("radius", radius),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
             ]
         };
         // A new id when anything changed: the frame takes the area again.
-        let mut drops = self.drops.borrow_mut();
+        let mut drops = cache.borrow_mut();
         let id = match drops.as_mut() {
             Some((id, last)) if *last == v => id.clone(),
             _ => {
@@ -988,7 +1089,7 @@ impl Dock {
             texture.clone(),
             SCALE,
             Transform::Normal,
-            None,
+            (alpha < 1.0).then_some(alpha),
             Some(src),
             Some(area.size),
             None,
@@ -1156,4 +1257,14 @@ fn slab(w: i32, h: i32, rl: f64, rr: f64) -> MemoryRenderBuffer {
         pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, tiny_skia::Transform::identity(), None);
     }
     MemoryRenderBuffer::from_slice(pixmap.data(), Fourcc::Abgr8888, (pw as i32, ph as i32), SCALE, Transform::Normal, None)
+}
+
+fn ease_in_out(k: f64) -> f64 {
+    let k = k.clamp(0.0, 1.0);
+    if k < 0.5 { 4.0 * k * k * k } else { 1.0 - (-2.0 * k + 2.0).powi(3) / 2.0 }
+}
+
+fn ease_out(k: f64) -> f64 {
+    let k = k.clamp(0.0, 1.0);
+    1.0 - (1.0 - k).powi(3)
 }

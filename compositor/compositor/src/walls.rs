@@ -88,6 +88,9 @@ fn decode(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((pixels, w as u32, h as u32))
 }
 
+/// The picture on until one is chosen (and under the first setup).
+const DEFAULT: &str = "009.jpg";
+
 impl Walls {
     pub fn new(wake: Ping) -> Walls {
         let dir = home().join(".local/share/item/walls");
@@ -97,7 +100,7 @@ impl Walls {
         files.sort();
         let mut names = vec![AURORA.to_owned()];
         names.extend(files);
-        let current = std::fs::read_to_string(kept()).map(|s| s.trim().to_owned()).ok().filter(|n| names.contains(n)).unwrap_or_else(|| AURORA.to_owned());
+        let current = std::fs::read_to_string(kept()).map(|s| s.trim().to_owned()).ok().filter(|n| names.contains(n)).unwrap_or_else(|| if names.iter().any(|n| n == DEFAULT) { DEFAULT.to_owned() } else { AURORA.to_owned() });
         tracing::info!("walls: {} pictures, {current} on", names.len() - 1);
         let n = names.len();
         let mut walls = Walls { dir, names, current: String::new(), loaded: Default::default(), thumbs_loaded: Default::default(), thumbs: vec![None; n], thumbs_asked: false, wake };

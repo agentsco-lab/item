@@ -141,12 +141,15 @@ void main() {
     float cover = 1.0 - smoothstep(-0.75, 0.75, d);
     // The surface's slope, only near the edge, where it shows: deeper in
     // the drop is flat.
+    // How deep the curve goes in: 12 px for the dock's drops, deeper for a
+    // larger one (the first setup's), a dome rather than a puddle.
+    float depth = max(12.0, radius - 24.0);
     vec2 g = vec2(0.0);
-    if (d < 1.5 && d > -16.0) {
+    if (d < 1.5 && d > -depth - 4.0) {
         float e = 0.75;
         g = vec2(field(p + vec2(e, 0.0)) - field(p - vec2(e, 0.0)), field(p + vec2(0.0, e)) - field(p - vec2(0.0, e))) / (2.0 * e);
     }
-    float t = clamp(-d / 12.0, 0.0, 1.0);
+    float t = clamp(-d / depth, 0.0, 1.0);
     float slope = 1.0 - t;
     vec3 n = normalize(vec3(g * slope * 1.6, 1.0));
     vec3 l = normalize(vec3(-0.45 + life * 0.16 * sin(time * 0.9), -0.7 + life * 0.08 * cos(time * 0.7), 0.55));
@@ -158,7 +161,7 @@ void main() {
     float gather = exp(-pow((inside - 6.0) / 4.0, 2.0)) * pow(max(g.y, 0.0), 1.5) * 0.45;
     float spark = pow(max(dot(n, h), 0.0), 140.0) * 1.1 + pow(max(dot(n, h), 0.0), 24.0) * 0.12;
     float light = (ring + gather + spark) * shine;
-    vec2 bent = sp - g * slope * 26.0;
+    vec2 bent = sp - g * slope * 26.0 * depth / 12.0;
     vec3 seen = wallpaper(bent) * 1.12 + body.rgb * 0.35;
     vec4 water = vec4(seen, 1.0) + vec4(0.93, 0.97, 1.0, 1.0) * light;
 

@@ -115,7 +115,7 @@ pub struct Lock {
 }
 
 /// A symbolic icon in one colour, `size` logical px.
-fn tinted(path: &str, size: i32, rgb: [u8; 3]) -> Option<MemoryRenderBuffer> {
+pub(crate) fn tinted(path: &str, size: i32, rgb: [u8; 3]) -> Option<MemoryRenderBuffer> {
     let mut pixmap = crate::apps::icon_pixmap(path, size)?;
     for px in pixmap.pixels_mut() {
         let a = px.alpha() as u16;

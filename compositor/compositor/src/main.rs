@@ -49,6 +49,7 @@ mod quick;
 mod ribbon;
 mod sched;
 mod polkit;
+mod calls;
 mod dialog;
 mod keys;
 mod nm;
@@ -279,6 +280,22 @@ impl Data {
         // The idle delay as the settings have it, none while something
         // holds the screen on; dimmed before it goes dark.
         let held = self.state.idle_held();
+        // Calls: one coming in lights the screen and holds it lit while it
+        // rings; locked, it shows over the lock screen.
+        if let Some(rang) = self.state.calls.take(now) {
+            if rang && self.state.lock.blank {
+                self.state.lock.set_blank(false);
+            }
+            self.state.needs_redraw = true;
+        }
+        if self.state.calls.ringing() {
+            self.state.lock.last_touch_ns = now;
+        }
+        let shown = self.state.calls.holds_screen();
+        self.state.calls.show(self.state.lock.locked, now);
+        if shown != self.state.calls.holds_screen() {
+            self.state.needs_redraw = true;
+        }
         self.state.lock.idle_ns = if held { 0 } else { self.state.idle.delay_ns() };
         let dim = self.state.lock.dimming(now);
         if dim != self.dim_was {
@@ -368,6 +385,11 @@ impl Data {
         // The first setup: its threads' answers; the PIN it settled on for
         // the keyring; its fingers for the lock's mark.
         if self.state.setup.poll(&self.state.fingerprint) {
+            self.state.needs_redraw = true;
+        }
+        // The setup gone: the dock is born of its drop.
+        if let Some((at, centre, r)) = self.state.setup.take_drop() {
+            self.state.dock.born(at, centre, r);
             self.state.needs_redraw = true;
         }
         if let Some(pin) = self.state.setup.take_pin() {
@@ -591,7 +613,7 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
-        if self.state.dialog.settle(self.pacing.target_ns) {
+        if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
         }
         let count = self.state.walls.names.len();
@@ -745,9 +767,17 @@ fn main() {
                 data.screen.shot = Some(format!("/tmp/item-shot-{}.rgba", data.started.elapsed().as_secs()));
                 data.state.needs_redraw = true;
             }
-            // `touch /tmp/item-frames` asks for the next 40 frames.
+            // `touch /tmp/item-frames` asks for the next 40 frames
+            // (FRAMES_COUNT).
             if std::fs::remove_file("/tmp/item-frames").is_ok() {
-                data.screen.frames_left = 40;
+                data.screen.frames_left = std::env::var("FRAMES_COUNT").ok().and_then(|n| n.parse().ok()).unwrap_or(40);
+            }
+            // `touch /tmp/item-birth`: the dock born of a drop where the
+            // setup's last one stands, for tests.
+            if std::fs::remove_file("/tmp/item-birth").is_ok() {
+                let left = crate::layout::panels()[0];
+                data.state.dock.born(hybris_hwc::now_ns(), (left.loc.x as f64 + left.size.w as f64 / 2.0, 250.0), 36.0);
+                data.state.needs_redraw = true;
             }
             if data.state.shade.visible() && data.state.shade.refresh_text() {
                 data.state.needs_redraw = true;
@@ -783,6 +813,10 @@ fn main() {
                 data.state.needs_redraw = true;
             }
             if data.state.clock.refresh() {
+                data.state.needs_redraw = true;
+            }
+            // A call's time talked.
+            if data.state.calls.tick(hybris_hwc::now_ns()) {
                 data.state.needs_redraw = true;
             }
             // A banner up, or just gone: a frame, so it goes.
@@ -902,6 +936,12 @@ fn main() {
         Ok("pin") => data.state.dialog.ask_pin("Authentication required", "Authentication is required to change the system's settings."),
         Ok("text") => data.state.dialog.ask_text("Wi-Fi password", "“Home network” needs a password to connect.", "Connect", "Tap the field to see what you type."),
         _ => {}
+    }
+    // CALL_TEST=5 (incoming) or 1 (active): the phone locked and a call over
+    // it, to look at it (its buttons go to no call).
+    if let Some(n) = std::env::var("CALL_TEST").ok().and_then(|v| v.parse::<u32>().ok()) {
+        if std::env::var_os("CALL_UNLOCKED").is_none() { data.state.lock.lock_now(); }
+        data.state.calls.pretend(n, hybris_hwc::now_ns());
     }
     data.screen.warm_pages(&data.state);
     // The first frame, which starts hwcomposer's vsyncs.

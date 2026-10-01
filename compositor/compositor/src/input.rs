@@ -282,6 +282,10 @@ impl State {
                     if let Some(t) = self.setup_touch.take_if(|t| t.0 == slot) {
                         let fingerprint = &self.fingerprint;
                         self.setup.up(t.3, t.4, fingerprint);
+                        // Gone: the dock is born of its drop at once.
+                        if let Some((at, centre, r)) = self.setup.take_drop() {
+                            self.dock.born(at, centre, r);
+                        }
                     }
                 }
                 Contact::Cancel => self.setup_touch = None,
@@ -340,6 +344,16 @@ impl State {
                 return;
             }
             _ => {}
+        }
+        // A call over the lock screen: every touch is its own.
+        if self.calls.holds_screen() {
+            match contact {
+                Contact::Down(slot, pos, _) => self.calls.down(slot, pos),
+                Contact::Up(slot, _) => self.calls.up(slot),
+                _ => {}
+            }
+            self.needs_redraw = true;
+            return;
         }
         // Locked: every touch is the lock screen's.
         match &contact {

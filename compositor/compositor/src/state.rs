@@ -135,6 +135,8 @@ pub struct State {
     pub dialog: crate::dialog::Dialog,
     /// NetworkManager's secret agent; and who the dialog is up for.
     pub wifi: crate::nm::Wifi,
+    /// Calls, from gnome-calls, shown over the lock screen.
+    pub calls: crate::calls::Calls,
     pub asker: Asker,
     /// When the power key went down, unlocked and lit (input.rs).
     pub power_down_at: Option<u64>,
@@ -221,6 +223,7 @@ impl State {
             polkit: crate::polkit::Polkit::new(wake.clone()),
             dialog: crate::dialog::Dialog::new(),
             wifi: crate::nm::Wifi::new(wake.clone()),
+            calls: crate::calls::Calls::new(wake.clone()),
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),
