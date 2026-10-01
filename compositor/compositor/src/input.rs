@@ -91,6 +91,28 @@ pub fn init(handle: &LoopHandle<'static, Data>) {
         .expect("libinput source");
 }
 
+/// A press of the power key this long locks and blanks; shorter, the
+/// keyboard.
+const POWER_LONG_NS: u64 = 500_000_000;
+
+/// The on-screen keyboard shown or hidden, as phosh asks stevia
+/// (sm.puri.OSK0), on a thread.
+fn toggle_keyboard() {
+    std::thread::spawn(|| {
+        let Ok(bus) = zbus::blocking::Connection::session() else { return };
+        let visible = bus
+            .call_method(Some("sm.puri.OSK0"), "/sm/puri/OSK0", Some("org.freedesktop.DBus.Properties"), "Get", &("sm.puri.OSK0", "Visible"))
+            .ok()
+            .and_then(|r| r.body().deserialize::<zbus::zvariant::OwnedValue>().ok())
+            .and_then(|v| bool::try_from(v).ok())
+            .unwrap_or(false);
+        tracing::info!("power key: keyboard {}", if visible { "hidden" } else { "shown" });
+        if let Err(e) = bus.call_method(Some("sm.puri.OSK0"), "/sm/puri/OSK0", Some("sm.puri.OSK0"), "SetVisible", &(!visible)) {
+            tracing::warn!("power key: the keyboard: {e}");
+        }
+    });
+}
+
 /// A contact on the screen, from a finger or the pen: the pen is a touch of
 /// its own slot, so it taps, drags and scrolls as a finger does.
 enum Contact {
@@ -120,9 +142,31 @@ impl State {
         let contact = match event {
             // The keys: power, volume (evdev codes, +8 for xkb).
             InputEvent::Keyboard { event } => {
+                // The power key, unlocked and lit, as item's on a folding
+                // phone (phosh patch 0014): a short press shows or hides the
+                // keyboard - closing the Duo locks it, the button is free -
+                // and a long one locks and blanks. Dark or locked, it does
+                // what it did, at once.
+                if event.key_code().raw().saturating_sub(8) == 116 {
+                    let free = !self.lock.locked && !self.lock.blank && !self.setup.holds_screen();
+                    match (event.state(), free) {
+                        (KeyState::Pressed, true) => self.power_down_at = Some(hybris_hwc::now_ns()),
+                        (KeyState::Pressed, false) => self.lock.power_key(),
+                        (KeyState::Released, _) => {
+                            if let Some(at) = self.power_down_at.take() {
+                                if hybris_hwc::now_ns() - at < POWER_LONG_NS {
+                                    toggle_keyboard();
+                                } else {
+                                    self.lock.power_key();
+                                }
+                            }
+                        }
+                    }
+                    self.needs_redraw = true;
+                    return;
+                }
                 if event.state() == KeyState::Pressed {
                     match event.key_code().raw().saturating_sub(8) {
-                        116 => self.lock.power_key(),
                         115 => self.shade.quick.volume_step(true),
                         114 => self.shade.quick.volume_step(false),
                         _ => {}
@@ -218,6 +262,7 @@ impl State {
             return;
         }
         self.lock.last_touch_ns = hybris_hwc::now_ns();
+        self.idle.active(self.lock.last_touch_ns);
         // The first setup: every touch is its own (setup.rs).
         if self.setup.holds_screen() {
             match contact {
@@ -240,6 +285,34 @@ impl State {
                     }
                 }
                 Contact::Cancel => self.setup_touch = None,
+                _ => {}
+            }
+            self.needs_redraw = true;
+            return;
+        }
+        // The system's dialog: every touch is its own.
+        if self.dialog.is_open() {
+            match contact {
+                Contact::Down(slot, pos, _) => self.dialog.down(slot, pos),
+                Contact::Motion(slot, pos, _) => self.dialog.motion(slot, pos),
+                Contact::Up(slot, _) => match self.dialog.up(slot) {
+                    Some(crate::dialog::Answer::Pin(pin)) => {
+                        self.dialog.checking();
+                        self.polkit.answer(pin);
+                    }
+                    Some(crate::dialog::Answer::Text(secret)) => {
+                        self.wifi.answer(secret);
+                        self.dialog.close();
+                    }
+                    Some(crate::dialog::Answer::Cancel) => {
+                        match self.asker {
+                            crate::state::Asker::Polkit => self.polkit.dismiss(),
+                            crate::state::Asker::Wifi => self.wifi.dismiss(),
+                        }
+                        self.dialog.close();
+                    }
+                    None => {}
+                },
                 _ => {}
             }
             self.needs_redraw = true;

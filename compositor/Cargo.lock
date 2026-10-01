@@ -860,6 +860,7 @@ name = "item-compositor"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "async-channel",
  "base64",
  "bitflags 2.13.2",
  "cbc",

@@ -48,6 +48,11 @@ mod protocols;
 mod quick;
 mod ribbon;
 mod sched;
+mod polkit;
+mod dialog;
+mod keys;
+mod nm;
+mod idle;
 mod sysfacts;
 mod walls;
 mod picker;
@@ -78,6 +83,8 @@ pub struct Data {
     frames_dock_done: bool,
     /// Whether the screen was lit, as last told to the system screen.
     lit_was: bool,
+    /// Whether the screen was dimmed for idleness at the last look.
+    dim_was: bool,
     pub state: State,
     pub screen: Screen,
     started: Instant,
@@ -269,6 +276,15 @@ impl Data {
     /// draw anyway.
     fn on_watchdog(&mut self) {
         let now = hybris_hwc::now_ns();
+        // The idle delay as the settings have it, none while something
+        // holds the screen on; dimmed before it goes dark.
+        let held = self.state.idle_held();
+        self.state.lock.idle_ns = if held { 0 } else { self.state.idle.delay_ns() };
+        let dim = self.state.lock.dimming(now);
+        if dim != self.dim_was {
+            self.dim_was = dim;
+            self.state.needs_redraw = true;
+        }
         // The system screen samples the load only while the screen is lit.
         let lit = !self.state.lock.blank;
         if lit != self.lit_was {
@@ -366,6 +382,37 @@ impl Data {
             self.state.keyring.unlocked_with(pin);
         }
         self.state.keyring.service(self.state.lock.locked || self.state.setup.holds_screen());
+        // polkit's asks: the dialog, once the phone is unlocked; the PIN's
+        // answer; an ask taken back.
+        if !self.state.lock.locked && !self.state.setup.holds_screen() && !self.state.dialog.is_open() {
+            if let Some((message, _action)) = self.state.polkit.waiting() {
+                self.state.asker = state::Asker::Polkit;
+                self.state.dialog.ask_pin("Authentication required", &message);
+                self.state.needs_redraw = true;
+            } else if let Some((network, again)) = self.state.wifi.waiting() {
+                // NetworkManager's: a Wi-Fi network's password.
+                self.state.asker = state::Asker::Wifi;
+                let hint = if again { "That password did not work. Try again." } else { "Tap the field to see what you type." };
+                self.state.dialog.ask_text("Wi-Fi password", &format!("“{network}” needs a password to connect."), "Connect", hint);
+                self.state.needs_redraw = true;
+            }
+        }
+        if self.state.wifi.take_cancelled() && self.state.wifi.waiting().is_none() && self.state.asker == state::Asker::Wifi && self.state.dialog.is_open() {
+            self.state.dialog.close();
+            self.state.needs_redraw = true;
+        }
+        if let Some(ok) = self.state.polkit.take_checked() {
+            if ok {
+                self.state.dialog.close();
+            } else {
+                self.state.dialog.wrong();
+            }
+            self.state.needs_redraw = true;
+        }
+        if self.state.polkit.take_cancelled() && self.state.polkit.waiting().is_none() && self.state.asker == state::Asker::Polkit && self.state.dialog.is_open() {
+            self.state.dialog.close();
+            self.state.needs_redraw = true;
+        }
         if let Some(facts) = self.state.status.take() {
             self.state.lock.set_status(&facts);
             self.state.shade.set_status(&facts);
@@ -543,6 +590,9 @@ impl Data {
         if self.state.ribbon.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
+        }
+        if self.state.dialog.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
         }
         let count = self.state.walls.names.len();
         if self.state.picker.settle(self.pacing.target_ns, count) {
@@ -836,7 +886,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, frames_dock_done: false, lit_was: true, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, lit_was: true, dim_was: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.
@@ -845,6 +895,14 @@ fn main() {
     // to it does not wait for it.
     data.state.system.ready();
     data.state.pen.ready();
+    state::check_scopes();
+    // DIALOG_TEST=pin|text: the system's dialog up, to look at it (its
+    // answers go nowhere).
+    match std::env::var("DIALOG_TEST").as_deref() {
+        Ok("pin") => data.state.dialog.ask_pin("Authentication required", "Authentication is required to change the system's settings."),
+        Ok("text") => data.state.dialog.ask_text("Wi-Fi password", "“Home network” needs a password to connect.", "Connect", "Tap the field to see what you type."),
+        _ => {}
+    }
     data.screen.warm_pages(&data.state);
     // The first frame, which starts hwcomposer's vsyncs.
     data.draw_if_needed();

@@ -34,3 +34,5 @@ zune-jpeg = "0.4"
 zune-core = "0.4"
 # The system screen's weather (sysscreen.rs): met.no's JSON.
 serde_json = "1"
+# polkit's agent (polkit.rs): its replies wait on the dialog.
+async-channel = "2"

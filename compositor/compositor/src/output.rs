@@ -141,6 +141,8 @@ pub struct Screen {
     /// Night light's shader (night.frag), and the colour it last warmed to.
     night_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     night_was: Option<[f32; 3]>,
+    /// The dimming before the screen goes dark.
+    dim_id: smithay::backend::renderer::element::Id,
     /// The ribbon's dot.
     dot: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
     /// The wallpaper (walls.rs): a texture the output's scale, wider than
@@ -206,7 +208,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -240,13 +242,22 @@ impl Screen {
         // The shade over the launch curtain over the dock over the windows.
         // The lock screen over everything.
         // The volume bar over everything, the lock screen next.
-        let mut elements: Vec<FrameElement> = state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from).collect();
+        let mut elements: Vec<FrameElement> = Vec::new();
+        // About to go dark for idleness: dimmed over everything.
+        if state.lock.dimming(frame_ns) {
+            let (w, h) = crate::layout::LAYOUT;
+            let rect = smithay::utils::Rectangle::<i32, smithay::utils::Physical>::from_size((w * SCALE, h * SCALE).into());
+            elements.push(FrameElement::Shell(ShellElement::Solid(smithay::backend::renderer::element::solid::SolidColorRenderElement::new(self.dim_id.clone(), rect, smithay::backend::renderer::utils::CommitCounter::default(), [0.0, 0.0, 0.0, 0.55], smithay::backend::renderer::element::Kind::Unspecified))));
+        }
+        elements.extend(state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The first setup: its circle over its words (setup.rs, orb.frag).
         if let Some(orb) = state.setup.orb() {
             elements.extend(self.orb_element(&orb));
         }
         elements.extend(state.setup.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(state.lock.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // The system's dialog, under the lock screen, over everything else.
+        elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The lock screen, or the setup, going: a picture of it taken as it
         // began, in a wave from where it was touched, or as doors (door.rs).
         let turn = state

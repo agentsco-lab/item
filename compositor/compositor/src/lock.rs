@@ -456,6 +456,11 @@ impl Lock {
     }
 
     /// The idle delay passed without a touch: lock and blank.
+    /// Dimmed, the screen about to go dark for idleness.
+    pub fn dimming(&self, now_ns: u64) -> bool {
+        self.idle_ns != 0 && !self.blank && now_ns.saturating_sub(self.last_touch_ns) + crate::idle::DIM_NS >= self.idle_ns
+    }
+
     pub fn idle(&mut self, now_ns: u64) -> bool {
         if self.idle_ns == 0 || self.blank || now_ns.saturating_sub(self.last_touch_ns) < self.idle_ns {
             return false;

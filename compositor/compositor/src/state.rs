@@ -64,6 +64,11 @@ pub struct State {
     _text_input_state: TextInputManagerState,
     _virtual_keyboard_state: VirtualKeyboardManagerState,
     data_control_state: DataControlState,
+    _idle_inhibit_state: smithay::wayland::idle_inhibit::IdleInhibitManagerState,
+    /// Surfaces asking the screen to stay on (idle-inhibit), and the
+    /// idleness they and gnome-session's inhibitors hold off (idle.rs).
+    pub inhibitors: Vec<WlSurface>,
+    pub idle: crate::idle::Idle,
     /// wp_presentation: clients told when their frame reached the screen.
     _presentation_state: smithay::wayland::presentation::PresentationState,
     pub layers: crate::layers::Layers,
@@ -125,6 +130,14 @@ pub struct State {
     /// A touch in a panel's bottom band, until it shows which way it goes:
     /// up puts the window away, sideways moves the ribbon.
     pub bottom_start: Option<(smithay::backend::input::TouchSlot, Point<f64, Logical>)>,
+    /// polkit's agent, and the system's own dialog it asks through.
+    pub polkit: crate::polkit::Polkit,
+    pub dialog: crate::dialog::Dialog,
+    /// NetworkManager's secret agent; and who the dialog is up for.
+    pub wifi: crate::nm::Wifi,
+    pub asker: Asker,
+    /// When the power key went down, unlocked and lit (input.rs).
+    pub power_down_at: Option<u64>,
     /// The wallpapers, and which one is on (walls.rs).
     pub walls: crate::walls::Walls,
     /// The desktop's editing: choosing the wallpaper (picker.rs).
@@ -157,6 +170,9 @@ impl State {
             _text_input_state: TextInputManagerState::new::<State>(dh),
             _virtual_keyboard_state: VirtualKeyboardManagerState::new::<State, _>(dh, |_| true),
             data_control_state: DataControlState::new::<State, _>(dh, None, |_| true),
+            _idle_inhibit_state: smithay::wayland::idle_inhibit::IdleInhibitManagerState::new::<State>(dh),
+            inhibitors: Vec::new(),
+            idle: crate::idle::Idle::new(),
             _presentation_state: smithay::wayland::presentation::PresentationState::new::<State>(dh, libc::CLOCK_MONOTONIC as u32),
             layers: Default::default(),
             osk_applied: None,
@@ -201,6 +217,11 @@ impl State {
             paces: Default::default(),
             put_away: Vec::new(),
             ribbon: crate::ribbon::Ribbon::new(),
+            power_down_at: None,
+            polkit: crate::polkit::Polkit::new(wake.clone()),
+            dialog: crate::dialog::Dialog::new(),
+            wifi: crate::nm::Wifi::new(wake.clone()),
+            asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),
             bottom_start: None,
@@ -502,8 +523,26 @@ impl State {
         let now = hybris_hwc::now_ns();
         self.launch_to = Some((panel, now));
         self.curtain.raise(panel, icon, now);
-        self.spawn(exec);
+        self.spawn_app(exec, ids.first().map(String::as_str).unwrap_or("app"));
         self.needs_redraw = true;
+    }
+
+    /// An app started in a systemd scope of its own, as GNOME's shell does
+    /// (`app-gnome-ID-RANDOM.scope`; here `app-item-…`): xdg-desktop-portal
+    /// knows an app by its scope, and an app in the compositor's own unit
+    /// was refused the portals (GTK's settings among them). If the scope
+    /// cannot be made (no user manager: found once, at the first launch's
+    /// start, SCOPES), the app starts as before.
+    pub fn spawn_app(&self, exec: &str, id: &str) {
+        if !SCOPES.load(std::sync::atomic::Ordering::Relaxed) {
+            self.spawn(exec);
+            return;
+        }
+        // systemd's escaping for a unit name: '-' separates the parts.
+        let id: String = id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' { c.to_string() } else { format!("\\x{:02x}", c as u32) }).collect();
+        let unit = format!("app-item-{id}-{}.scope", hybris_hwc::now_ns() % 1_000_000_000);
+        let quoted = exec.replace('\'', "'\\''");
+        self.spawn(&format!("exec systemd-run --user --scope --collect --quiet --slice=app.slice --unit='{unit}' -- sh -c '{quoted}'"));
     }
 
     /// An app with a window open, called from the dock or the grid on a
@@ -636,6 +675,36 @@ pub fn wallpaper_shift(position: f64) -> f64 {
 /// than the screen, output.rs).
 pub const WALL_LEFT: f64 = 60.0;
 pub const WALL_RIGHT: f64 = 140.0;
+
+/// Who the system's dialog is up for.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Asker {
+    Polkit,
+    Wifi,
+}
+
+/// Whether apps can be started in scopes of their own (State::spawn_app):
+/// the user's systemd answers; found at the start, on a thread.
+pub static SCOPES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Finds out whether the user's systemd makes scopes.
+pub fn check_scopes() {
+    std::thread::spawn(|| {
+        let ok = std::process::Command::new("systemd-run").args(["--user", "--scope", "--collect", "--quiet", "true"]).status().map(|s| s.success()).unwrap_or(false);
+        SCOPES.store(ok, std::sync::atomic::Ordering::Relaxed);
+        tracing::info!("apps: {}", if ok { "each in a scope of its own" } else { "no scopes (no user manager): started directly" });
+    });
+}
+
+impl State {
+    /// Whether the screen may go dark when idle: no living window holds it
+    /// on, nor an inhibitor of gnome-session's.
+    pub fn idle_held(&mut self) -> bool {
+        use smithay::reexports::wayland_server::Resource;
+        self.inhibitors.retain(|s| s.is_alive());
+        !self.inhibitors.is_empty() || self.idle.session_inhibited()
+    }
+}
 
 pub fn app_id(window: &Window) -> String {
     with_states(window.toplevel().unwrap().wl_surface(), |states| {
@@ -883,4 +952,19 @@ delegate_input_method_manager!(State);
 delegate_text_input_manager!(State);
 delegate_virtual_keyboard_manager!(State);
 smithay::delegate_data_control!(State);
+
+impl smithay::wayland::idle_inhibit::IdleInhibitHandler for State {
+    fn inhibit(&mut self, surface: WlSurface) {
+        tracing::info!("idle: held off by a window");
+        if !self.inhibitors.contains(&surface) {
+            self.inhibitors.push(surface);
+        }
+    }
+
+    fn uninhibit(&mut self, surface: WlSurface) {
+        tracing::info!("idle: let go by a window");
+        self.inhibitors.retain(|s| s != &surface);
+    }
+}
+smithay::delegate_idle_inhibit!(State);
 smithay::delegate_presentation!(State);
