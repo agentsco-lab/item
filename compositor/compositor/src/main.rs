@@ -1,11 +1,16 @@
 //! item-compositor: a Wayland compositor for the Surface Duo, drawing through
 //! hwcomposer (libhybris' hwc2), on smithay. The base of item-shell.
 //!
-//! `item-compositor [--seconds N] [--spawn COMMAND]...`
+//! `item-compositor [--seconds N] [--session COMMAND] [--spawn COMMAND]...`
 //!
 //! It runs in the user's session (see `tools/session-run.sh`), listens on
 //! `wayland-item` in `$XDG_RUNTIME_DIR`, and spawns each COMMAND with
 //! `WAYLAND_DISPLAY` set.
+//!
+//! `--session COMMAND` is the session's manager, as phoc's `-E`: started
+//! once the socket is up (`gnome-session --session=item` from
+//! `session/item-session`), and the compositor ends when it does. It starts
+//! the on-screen keyboard itself then.
 //!
 //! Frames are paced by hwcomposer's vsync: the event loop sleeps until there
 //! is something to do - a client, a touch, a vsync - and at a vsync draws a
@@ -490,16 +495,18 @@ impl Data {
 
 struct Args {
     seconds: Option<u64>,
+    session: Option<String>,
     spawn: Vec<String>,
 }
 
 fn args() -> Args {
-    let mut a = Args { seconds: None, spawn: Vec::new() };
+    let mut a = Args { seconds: None, session: None, spawn: Vec::new() };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--seconds" => a.seconds = it.next().and_then(|s| s.parse().ok()),
             "--spawn" => a.spawn.extend(it.next()),
+            "--session" => a.session = it.next(),
             other => eprintln!("unknown argument: {other}"),
         }
     }
@@ -640,8 +647,29 @@ fn main() {
     // the session's WAYLAND_DISPLAY, ours for the run. A second stevia of our
     // own fought it for the input method (the second one gets "unavailable").
     // No unit: stevia started directly. NO_OSK=1 leaves it out.
-    if std::env::var_os("NO_OSK").is_none() {
+    // Under a session manager the keyboard is the session's (its target).
+    if std::env::var_os("NO_OSK").is_none() && args.session.is_none() {
         state.spawn("systemctl --user restart mobi.phosh.OSK.service 2>/dev/null || exec phosh-osk-stevia --replace");
+    }
+    // The session's manager: when it ends (a log out, or it failed), so
+    // does the compositor, and the unit that started it decides what next.
+    if let Some(command) = &args.session {
+        if let Some(mut child) = state.spawn_child(command) {
+            let (tx, rx) = smithay::reexports::calloop::channel::channel::<std::process::ExitStatus>();
+            std::thread::spawn(move || {
+                if let Ok(status) = child.wait() {
+                    let _ = tx.send(status);
+                }
+            });
+            handle
+                .insert_source(rx, |event, _, data: &mut Data| {
+                    if let smithay::reexports::calloop::channel::Event::Msg(status) = event {
+                        tracing::info!("session: its manager ended ({status}); ending");
+                        data.state.loop_signal.stop();
+                    }
+                })
+                .expect("session watch");
+        }
     }
     for command in &args.spawn {
         state.spawn(command);

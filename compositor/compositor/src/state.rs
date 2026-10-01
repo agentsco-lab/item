@@ -185,19 +185,37 @@ impl State {
     /// phosh (WebKit without its DMA-BUF renderer, GTK on GLES). CLIENT_ENV
     /// adds "KEY=VALUE ..." for tests.
     pub fn spawn(&self, command: &str) {
+        let _ = self.spawn_child(command);
+    }
+
+    /// As `spawn`, keeping the child to wait for.
+    pub fn spawn_child(&self, command: &str) -> Option<std::process::Child> {
+        // A login shell for Droidian's profile (WebKit, GLES), which also sets
+        // XDG_CURRENT_DESKTOP=Phosh:GNOME for everyone (zz-gnome-vars.sh):
+        // the desktop is ours again after it. "item:GNOME" as phosh's
+        // "Phosh:GNOME": GNOME's apps still see GNOME, and NotShowIn=item and
+        // item's portal configuration apply.
+        let command = format!("export XDG_CURRENT_DESKTOP=item:GNOME XDG_SESSION_DESKTOP=item; {command}");
         let child = std::process::Command::new("sh")
             .arg(if std::env::var_os("NO_LOGIN_SHELL").is_some() { "-c" } else { "-lc" })
-            .arg(command)
+            .arg(&command)
             .env("WAYLAND_DISPLAY", &self.socket_name)
             .env("EGL_PLATFORM", "wayland")
-            .env("XDG_CURRENT_DESKTOP", "item")
+            .env("XDG_CURRENT_DESKTOP", "item:GNOME")
+            .env("XDG_SESSION_DESKTOP", "item")
             .envs(std::env::var("CLIENT_ENV").ok().iter().flat_map(|e| {
                 e.split_whitespace().filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_owned(), v.to_owned())).collect::<Vec<_>>()
             }))
             .spawn();
         match child {
-            Ok(_) => tracing::info!("spawned: {command}"),
-            Err(e) => tracing::warn!("could not spawn {command}: {e}"),
+            Ok(child) => {
+                tracing::info!("spawned: {command}");
+                Some(child)
+            }
+            Err(e) => {
+                tracing::warn!("could not spawn {command}: {e}");
+                None
+            }
         }
     }
 

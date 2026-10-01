@@ -1,0 +1,25 @@
+#!/bin/sh
+# item-session: item on its own compositor, as phosh-session starts phosh:
+# the compositor, with gnome-session for the rest of the session (the GNOME
+# settings daemons, the on-screen keyboard, the apps that autostart).
+# item.service runs it as the user on tty7; it can also be run from a tty.
+#
+# ITEM_COMPOSITOR overrides the binary (tests run one from /tmp).
+COMPOSITOR=${ITEM_COMPOSITOR:-/usr/libexec/item/item-compositor}
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=item:GNOME
+export XDG_SESSION_DESKTOP=item
+# Hybris' EGL for the compositor; its clients are told wayland (state.rs).
+export EGL_PLATFORM=hwcomposer
+export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_libhybris.json
+
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+  echo "item-session: no session bus, starting one"
+  DBUS_RUN_SESSION="dbus-run-session --"
+fi
+
+# --no-reexec: gnome-session would run itself again through a login shell,
+# and Droidian's profile sets XDG_CURRENT_DESKTOP=Phosh:GNOME there. The
+# compositor starts it through a login shell already, with item:GNOME after.
+exec $DBUS_RUN_SESSION "$COMPOSITOR" --session "gnome-session --no-reexec --session=item" "$@"

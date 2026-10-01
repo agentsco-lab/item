@@ -3,6 +3,13 @@
 # as the user in a login session on tty7, as phosh.service runs phosh: the
 # shell stopped first, and back after, whatever happens. Nothing is installed.
 # The compositor's log is /tmp/item-compositor.log.
+#
+# SESSION=1: the whole session as item.service will run it - session/item-
+# session (from /tmp) starting gnome-session --session=item - with its files
+# in /tmp and the user's runtime systemd directory, all gone after: the
+# session file, its target's drop-in, and copies of the old GTK dock's,
+# system screen's and pen sheet's autostart files marked NotShowIn=item (the
+# compositor has its own; the package marks the originals so).
 T=${1:-60}; shift
 USER_NAME=droidian
 UID_N=$(id -u $USER_NAME)
@@ -25,11 +32,36 @@ session_env() {
     printf '[preferred]\ndefault=gtk\n' > /tmp/item-session/xdg/xdg-desktop-portal/item-portals.conf
     chmod -R a+rX /tmp/item-session
     $UB systemctl --user stop $PORTALS 2>/dev/null
-    $UB systemctl --user set-environment XDG_CURRENT_DESKTOP=item WAYLAND_DISPLAY=wayland-item \
+    $UB systemctl --user set-environment XDG_CURRENT_DESKTOP=item:GNOME WAYLAND_DISPLAY=wayland-item \
         XDG_CONFIG_DIRS=/tmp/item-session/xdg:/etc/xdg
-    $UB dbus-update-activation-environment XDG_CURRENT_DESKTOP=item WAYLAND_DISPLAY=wayland-item \
+    $UB dbus-update-activation-environment XDG_CURRENT_DESKTOP=item:GNOME WAYLAND_DISPLAY=wayland-item \
         XDG_CONFIG_DIRS=/tmp/item-session/xdg:/etc/xdg
     log "session environment: item, wayland-item, portals: gtk"
+}
+
+RUNTIME_UNITS=/run/user/$UID_N/systemd/user
+AUTOSTART_OLD="sfduo-dock sfduo-system-screen sfduo-pen-screen"
+
+session_files() {
+    mkdir -p /tmp/item-session/share/gnome-session/sessions $RUNTIME_UNITS/gnome-session@item.target.d
+    cp /tmp/item.session /tmp/item-session/share/gnome-session/sessions/
+    cp /tmp/item-session.conf $RUNTIME_UNITS/gnome-session@item.target.d/session.conf
+    cp /tmp/item-portals.conf /tmp/item-session/xdg/xdg-desktop-portal/item-portals.conf
+    chown -R $USER_NAME $RUNTIME_UNITS; chmod -R a+rX /tmp/item-session
+    $UB systemctl --user daemon-reload
+    mkdir -p /tmp/item-session/xdg/autostart
+    for a in $AUTOSTART_OLD; do
+        sed '/^NotShowIn=/d; /^\[Desktop Entry\]/a NotShowIn=item;' /etc/xdg/autostart/$a.desktop > /tmp/item-session/xdg/autostart/$a.desktop
+    done
+    chmod -R a+rX /tmp/item-session
+    log "session files: item.session, gnome-session@item.target, old autostarts not shown in item"
+}
+
+session_files_restore() {
+    $UB systemctl --user stop gnome-session@item.target 2>/dev/null
+    rm -rf $RUNTIME_UNITS/gnome-session@item.target.d
+    $UB systemctl --user daemon-reload
+    log "session files removed"
 }
 
 session_env_restore() {
@@ -49,6 +81,7 @@ rollback() {
     log "rollback"
     systemctl stop item-compositor 2>/dev/null
     pkill -9 -x item-compositor 2>/dev/null
+    [ -n "$SESSION" ] && session_files_restore
     session_env_restore
     if [ -n "$KG_OLD" ]; then
         chown root $KG; echo $KG_OLD > $KG
@@ -71,9 +104,12 @@ hwc start
 for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
 log "composer up: $(composers)"
 session_env
+[ -n "$SESSION" ] && session_files
 [ -n "$KG_OLD" ] && chown $USER_NAME $KG
 
 chmod 755 /tmp/item-compositor
+START="/tmp/item-compositor"
+[ -n "$SESSION" ] && { chmod 755 /tmp/item-session.sh; START="/tmp/item-session.sh"; }
 rm -f /tmp/item-compositor.log   # systemd writes a file: output from its start, not truncating
 systemd-run --wait --collect --unit=item-compositor \
     -p User=$USER_NAME -p PAMName=phosh -p TTYPath=/dev/tty7 -p StandardInput=tty-fail \
@@ -83,12 +119,15 @@ systemd-run --wait --collect --unit=item-compositor \
     -p Environment=__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_libhybris.json \
     -p Environment=XDG_RUNTIME_DIR=/run/user/$UID_N \
     -p Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$UID_N/bus \
-    -p Environment=XDG_SESSION_TYPE=wayland -p Environment=XDG_CURRENT_DESKTOP=item \
+    -p Environment=XDG_SESSION_TYPE=wayland -p Environment=XDG_CURRENT_DESKTOP=item:GNOME \
     ${CLIENT_ENV:+-p "Environment=CLIENT_ENV=$CLIENT_ENV"} \
     ${LATE:+-p "Environment=LATE=$LATE"} ${LATE_MARGIN_MS:+-p "Environment=LATE_MARGIN_MS=$LATE_MARGIN_MS"} \
     ${HWC_PRESENT_OR_VALIDATE:+-p "Environment=HWC_PRESENT_OR_VALIDATE=$HWC_PRESENT_OR_VALIDATE"} \
     ${TOUCHSCREEN:+-p "Environment=TOUCHSCREEN=$TOUCHSCREEN"} ${PACE_DEBUG:+-p "Environment=PACE_DEBUG=$PACE_DEBUG"} ${LOG_TIMES:+-p "Environment=LOG_TIMES=$LOG_TIMES"} ${CANVAS:+-p "Environment=CANVAS=$CANVAS"} ${LOG_BUFFERS:+-p "Environment=LOG_BUFFERS=$LOG_BUFFERS"} ${INSTANCING:+-p "Environment=INSTANCING=$INSTANCING"} ${LOG_DAMAGE:+-p "Environment=LOG_DAMAGE=$LOG_DAMAGE"} ${PARTIAL:+-p "Environment=PARTIAL=$PARTIAL"} ${NO_LOGIN_SHELL:+-p "Environment=NO_LOGIN_SHELL=$NO_LOGIN_SHELL"} ${SERVER_DEBUG:+-p "Environment=WAYLAND_DEBUG=server"} \
     ${RUST_LOG:+-p "Environment=RUST_LOG=$RUST_LOG"} ${ASAP:+-p "Environment=ASAP=$ASAP"} ${GPU_BOOST:+-p "Environment=GPU_BOOST=$GPU_BOOST"} ${CALLBACKS:+-p "Environment=CALLBACKS=$CALLBACKS"} \
     ${OSK_DEBUG:+-p "Environment=OSK_DEBUG=$OSK_DEBUG"} ${NO_OSK:+-p "Environment=NO_OSK=$NO_OSK"} ${NO_OSK_RESIZE:+-p "Environment=NO_OSK_RESIZE=$NO_OSK_RESIZE"} \
-    /tmp/item-compositor "$@"
+    ${SESSION:+-p "Environment=ITEM_COMPOSITOR=/tmp/item-compositor"} \
+    ${SESSION:+-p "Environment=XDG_DATA_DIRS=/tmp/item-session/share:/usr/local/share:/usr/share"} \
+    ${SESSION:+-p "Environment=XDG_CONFIG_DIRS=/tmp/item-session/xdg:/etc/xdg"} \
+    $START "$@"
 log "session ended"
