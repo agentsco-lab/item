@@ -146,8 +146,16 @@ struct Move {
 /// wide, letting go when it would be less than LET_GO px; the wet spot it
 /// leaves, SPOT wide, drying over WET_NS.
 const INTO: f64 = 12.0;
-const CLING: f64 = 0.42;
-const LET_GO: f64 = 10.0;
+/// The tail lingers as LINGER of the drop until less than LET_GO_SHARE of
+/// it is left, then is drawn in over SNAP_NS.
+const LINGER: f64 = 0.1;
+const LET_GO_SHARE: f64 = 0.03;
+const SNAP_NS: u64 = 110_000_000;
+/// Nearing the hinge, within APPROACH px, a drop is held: HELD_SHORT shorter
+/// along its way, HELD_FULL fuller across, at most.
+const APPROACH: f64 = 26.0;
+const HELD_SHORT: f64 = 0.1;
+const HELD_FULL: f64 = 0.08;
 const SPOT: f64 = 18.0;
 const WET_NS: u64 = 2_400_000_000;
 /// A jolt (letting go, the thread breaking): a bounce.
@@ -207,6 +215,8 @@ pub struct Dock {
     dir: std::cell::Cell<[f64; 2]>,
     clinging: std::cell::Cell<[bool; 2]>,
     popped: std::cell::Cell<[u64; 2]>,
+    /// A tail that let go: on the left edge, its size, its middle, when.
+    snap: std::cell::Cell<Option<(bool, f64, f64, f64, u64)>>,
     /// The two met (and since when), or pulled apart with a thread.
     meeting: std::cell::Cell<(bool, u64, bool)>,
     /// Whether a half is at the hinge now (for FRAMES_DOCK).
@@ -253,7 +263,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
+        Dock { rise: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), shift: 0.0, program: Default::default(), drops: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -494,6 +504,7 @@ impl Dock {
                     || self.stretch.get().iter().any(|s| s.abs() > 0.003)
                     || self.popped.get().iter().any(|&t| t != 0 && frame_ns < t + WOBBLE_NS)
                     || self.trail.get().is_some_and(|(_, t)| frame_ns < t + WET_NS)
+                    || self.snap.get().is_some()
                     || self.meeting.get().0 && frame_ns < self.meeting.get().1 + MERGE_NS
                     || (self.mode != Mode::Hidden && self.life(frame_ns) > 0.0)
             }
@@ -753,11 +764,16 @@ impl Dock {
             ([(x0 + x1) / 2.0 - w / 2.0, foot - hh, w, hh], fill, bulge, boxes[0].0 + boxes[0].2)
         });
 
-        // The hinge: a half across it is in two, each part against its
-        // edge (reaching INTO the hinge, where nothing is seen, so it ends
-        // straight at the edge). The tail clings to its edge, as water does,
-        // until it is too little and lets go; the head comes out small and
-        // round, and grows.
+        // The hinge. Nearing it, a drop meets the edge first with its front:
+        // it is held a moment, shorter along its way and fuller across.
+        // Across it, it is in two, each part against its edge (reaching INTO
+        // the hinge, where nothing is seen, so it ends straight at the edge),
+        // the water going over from one to the other: each part as much of
+        // the drop as is past the hinge's middle, round while small, long
+        // once it is as high as the drop. The tail clings to its edge, as
+        // water does - the last of it lingers - until it is too little and
+        // lets go, drawn in to the edge over SNAP_NS; the head comes out
+        // small and round, and grows.
         let panels = layout::panels();
         let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
         let mut drops: Vec<([f64; 4], (f64, f64))> = Vec::new();
@@ -772,36 +788,68 @@ impl Dock {
             let (w, ht) = (bw * sx, bh * sy);
             let (x0, x1) = (mid - w / 2.0, mid + w / 2.0);
             if x1 <= h0 || x0 >= h1 {
-                drops.push(([bx, by, bw, bh], (sx, sy)));
+                // Its front this far from the edge it goes to.
+                let front = if dir[h] > 0.0 && x1 <= h0 { h0 - x1 } else if dir[h] < 0.0 && x0 >= h1 { x0 - h1 } else { f64::MAX };
+                let k = smooth(1.0 - front / APPROACH);
+                drops.push(([bx, by, bw, bh], (sx * (1.0 - HELD_SHORT * k), sy * (1.0 + HELD_FULL * k))));
                 clinging[h] = false;
                 continue;
             }
             let (wl, wr) = ((h0 - x0).max(0.0), (x1 - h1).max(0.0));
-            // A part as much smaller as it is narrower: a bulge out of the
-            // slot, round, about the drop's middle.
-            let part = |width: f64| ht * (0.3 + 0.7 * smooth(width / (0.9 * ht)));
+            let over = if wl + wr > 0.0 { wr / (wl + wr) } else { 0.5 };
             let middle = foot - ht / 2.0;
-            // The tail: the part on the side it comes from.
+            let area = w * ht;
+            // A part of `a` of the area: round while small, then long.
+            let part = |a: f64| {
+                let d = a.max(0.0).sqrt();
+                if d <= ht { (d, d) } else { (a / ht, ht) }
+            };
+            // The tail: what is left on the side it comes from; it lingers.
             let tail_left = dir[h] > 0.0;
-            let tail = if tail_left { wl } else { wr };
-            let held = if tail < LET_GO { 0.0 } else { tail.max(CLING * ht) };
-            if clinging[h] && held == 0.0 {
-                // It let go: a wet spot where it clung, and the head jolts.
-                let edge = if tail_left { h0 - SPOT } else { h1 };
-                self.trail.set(Some(([edge, foot - 0.72 * ht, SPOT + 0.0, 0.58 * ht], frame_ns)));
-                popped[h] = frame_ns;
+            let (mut left, mut right) = (1.0 - over, over);
+            if dir[h] != 0.0 {
+                let tail = if tail_left { left } else { right };
+                let held = if tail < LET_GO_SHARE { 0.0 } else { tail.max(LINGER) };
+                if clinging[h] && held == 0.0 {
+                    // It let go: drawn in to the edge, a wet spot where it
+                    // clung, and the head jolts.
+                    let (tw, th) = part(LINGER * area);
+                    self.snap.set(Some((tail_left, tw, th, middle, frame_ns)));
+                    let edge = if tail_left { h0 - SPOT } else { h1 };
+                    self.trail.set(Some(([edge, middle - 0.3 * ht, SPOT, 0.6 * ht], frame_ns)));
+                    popped[h] = frame_ns;
+                }
+                clinging[h] = held > 0.0;
+                if tail_left {
+                    left = held;
+                } else {
+                    right = held;
+                }
             }
-            clinging[h] = held > 0.0;
-            let (wl, wr) = if tail_left { (held, wr) } else { (wl, held) };
-            if wl > 0.5 {
-                let hp = part(wl);
-                drops.push(([h0 - wl, middle - hp / 2.0, wl + INTO, hp], (1.0, 1.0)));
+            let ((lw, lh), (rw, rh)) = (part(left * area), part(right * area));
+            if lw > 0.5 {
+                drops.push(([h0 - lw, middle - lh / 2.0, lw + INTO, lh], (1.0, 1.0)));
             }
-            if wr > 0.5 {
-                let hp = part(wr);
-                drops.push(([h1 - INTO, middle - hp / 2.0, wr + INTO, hp], (1.0, 1.0)));
+            if rw > 0.5 {
+                drops.push(([h1 - INTO, middle - rh / 2.0, rw + INTO, rh], (1.0, 1.0)));
             }
         }
+        // A tail that let go, drawn in to its edge.
+        if let Some((on_left, tw, th, middle, at)) = self.snap.get() {
+            let k = frame_ns.saturating_sub(at) as f64 / SNAP_NS as f64;
+            if k < 1.0 {
+                let s = 1.0 - smooth(k);
+                let (w, ht) = (tw * s, th * (0.5 + 0.5 * s));
+                if on_left {
+                    drops.push(([h0 - w, middle - ht / 2.0, w + INTO, ht], (1.0, 1.0)));
+                } else {
+                    drops.push(([h1 - INTO, middle - ht / 2.0, w + INTO, ht], (1.0, 1.0)));
+                }
+            } else {
+                self.snap.set(None);
+            }
+        }
+        drops.truncate(4);
         self.clinging.set(clinging);
         self.popped.set(popped);
         self.at_hinge.set(drops.len() > [shown[0], shown[1]].iter().filter(|s| **s).count());
