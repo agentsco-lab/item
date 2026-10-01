@@ -269,12 +269,7 @@ impl SystemScreen {
         };
         let h = text(&mut c, thin, &format!("{}:{:02}", now.tm_hour, now.tm_min), 72.0, ink, 0.0, 70.0, true);
         text(&mut c, regular, &date_line(now), 18.0, dim, 0.0, 70.0 + h + 2.0, true);
-        let part = match now.tm_hour {
-            5..=11 => "Good morning",
-            12..=17 => "Good afternoon",
-            18..=22 => "Good evening",
-            _ => "Good night",
-        };
+        let part = part_of_day(now.tm_hour);
         let greeting = match &f.name {
             Some(n) => format!("{part}, {n}"),
             None => part.to_owned(),
@@ -404,15 +399,7 @@ fn read_facts() -> Facts {
         .filter_map(|c| Some((c.first()?.parse().ok()?, c.get(1)?.parse().ok()?, c.get(2)?.parse().ok()?)))
         .collect();
     history.sort_by_key(|h| h.0);
-    // The user's first name, unless AccountsService only knows the login.
-    let uid = unsafe { libc::getuid() };
-    let login = std::env::var("USER").unwrap_or_default();
-    let real = run("busctl", &["--system", "get-property", "org.freedesktop.Accounts", &format!("/org/freedesktop/Accounts/User{uid}"), "org.freedesktop.Accounts.User", "RealName"]);
-    let name = real
-        .trim()
-        .strip_prefix("s ")
-        .map(|v| v.trim_matches('"').split_whitespace().next().unwrap_or("").to_owned())
-        .filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case(&login));
+    let name = first_name();
     Facts {
         level: num("capacity") as u32,
         status: file("status"),
@@ -423,4 +410,25 @@ fn read_facts() -> Facts {
         name,
         history,
     }
+}
+
+/// "Good morning" and so on, by the hour.
+pub fn part_of_day(hour: i32) -> &'static str {
+    match hour {
+        5..=11 => "Good morning",
+        12..=17 => "Good afternoon",
+        18..=22 => "Good evening",
+        _ => "Good night",
+    }
+}
+
+/// The user's first name, unless AccountsService only knows the login.
+pub fn first_name() -> Option<String> {
+    let uid = unsafe { libc::getuid() };
+    let login = std::env::var("USER").unwrap_or_default();
+    let real = run("busctl", &["--system", "get-property", "org.freedesktop.Accounts", &format!("/org/freedesktop/Accounts/User{uid}"), "org.freedesktop.Accounts.User", "RealName"]);
+    real.trim()
+        .strip_prefix("s ")
+        .map(|v| v.trim_matches('"').split_whitespace().next().unwrap_or("").to_owned())
+        .filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case(&login))
 }

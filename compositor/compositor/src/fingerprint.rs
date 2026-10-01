@@ -87,16 +87,9 @@ impl Fingerprint {
                 }
             });
         }
-        let session = zbus::blocking::Connection::session().ok();
         let worker_events = events.clone();
         std::thread::spawn(move || {
             let call = |method: &str| system.call_method(Some(NAME), PATH, Some(NAME), method, &()).and_then(|r| r.body().deserialize::<i32>());
-            let buzz = |event: &str| {
-                if let Some(s) = &session {
-                    let hints: std::collections::HashMap<&str, zbus::zvariant::Value> = Default::default();
-                    let _ = s.call_method(Some("org.sigxcpu.Feedback"), "/org/sigxcpu/Feedback", Some("org.sigxcpu.Feedback"), "TriggerFeedback", &("item-compositor", event, hints, -1i32));
-                }
-            };
             let (mut wanted, mut armed) = (false, false);
             let mut next_try = Instant::now();
             loop {
@@ -113,6 +106,9 @@ impl Fingerprint {
                     Ok(Msg::Signal(member, arg)) => match (member.as_str(), arg.as_deref()) {
                         ("Identified", _) if armed => {
                             armed = false;
+                            // Not again before the loop has heard and let the
+                            // reader go.
+                            next_try = Instant::now() + Duration::from_secs(1);
                             tracing::info!("fingerprint: identified");
                             worker_events.lock().unwrap().push(Event::Identified);
                             wake.ping();
@@ -165,4 +161,14 @@ impl Fingerprint {
     pub fn take_events(&self) -> Vec<Event> {
         std::mem::take(&mut self.events.lock().unwrap())
     }
+}
+
+/// A buzz through feedbackd (its event names), on a thread of its own.
+pub fn buzz(event: &'static str) {
+    std::thread::spawn(move || {
+        if let Ok(s) = zbus::blocking::Connection::session() {
+            let hints: std::collections::HashMap<&str, zbus::zvariant::Value> = Default::default();
+            let _ = s.call_method(Some("org.sigxcpu.Feedback"), "/org/sigxcpu/Feedback", Some("org.sigxcpu.Feedback"), "TriggerFeedback", &("item-compositor", event, hints, -1i32));
+        }
+    });
 }
