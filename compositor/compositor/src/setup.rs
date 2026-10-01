@@ -101,8 +101,6 @@ const READER_Y: f64 = 455.0;
 const ARROW_ICON: &str = "/usr/share/icons/Adwaita/symbolic/actions/go-next-symbolic.svg";
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-/// The buttons: a soft coral.
-const CORAL: [u8; 4] = [0xf0, 0x8a, 0x7b, 255];
 /// Progress, as the buttons: coral.
 const ACCENT: [f32; 4] = [0.941, 0.541, 0.482, 1.0];
 const GREEN: [f32; 4] = [0.180, 0.761, 0.494, 1.0];
@@ -344,7 +342,7 @@ impl Setup {
             move_ns: MOVE_MAX_NS,
             orb_ns: 0,
             started: 0,
-            button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, CORAL),
+            button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, crate::layout::ACCENT),
             button2_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [46, 46, 46, 46]),
             button2: Label::new(19.0, WHITE),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),

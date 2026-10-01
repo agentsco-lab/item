@@ -99,7 +99,7 @@ impl PenSheet {
             icons: vec![icon("edit-clear-symbolic"), icon("edit-delete-symbolic"), icon("document-save-symbolic")],
             pen_icon: icon("document-edit-symbolic"),
             button_bg: crate::grid::rounded(BUTTON, BUTTON, BUTTON / 2.0, [40, 40, 44, 230]),
-            button_on: crate::grid::rounded(BUTTON, BUTTON, BUTTON / 2.0, [0x35, 0x84, 0xe4, 255]),
+            button_on: crate::grid::rounded(BUTTON, BUTTON, BUTTON / 2.0, crate::layout::ACCENT),
         };
         // Made, and warmed up, at the start: its first upload (10 MB) would
         // otherwise be the first frame of its slide.

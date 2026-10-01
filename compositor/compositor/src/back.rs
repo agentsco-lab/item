@@ -42,7 +42,7 @@ pub struct Back {
 
 impl Back {
     pub fn new() -> Back {
-        Back { grab: None, disc: disc([40, 40, 44, 242]), armed: disc([0x35, 0x84, 0xe4, 255]) }
+        Back { grab: None, disc: disc([40, 40, 44, 242]), armed: disc(crate::layout::ACCENT) }
     }
 
     /// Whether a point is on a panel's back strip.

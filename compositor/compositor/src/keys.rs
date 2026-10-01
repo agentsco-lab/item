@@ -69,7 +69,7 @@ impl Keys {
             bg_on: crate::grid::rounded(w, KEY_H, 12.0, [90, 90, 90, 90]),
             wide: crate::grid::rounded(w * 1.5 + GAP / 2.0, KEY_H, 12.0, [28, 28, 28, 28]),
             space: crate::grid::rounded(w * 5.0 + GAP * 4.0, KEY_H, 12.0, [40, 40, 40, 40]),
-            enter: crate::grid::rounded(w * 2.5 + GAP * 1.5, KEY_H, 12.0, [0x35, 0x84, 0xe4, 255]),
+            enter: crate::grid::rounded(w * 2.5 + GAP * 1.5, KEY_H, 12.0, crate::layout::ACCENT),
             enter_word: "Done".into(),
         }
     }

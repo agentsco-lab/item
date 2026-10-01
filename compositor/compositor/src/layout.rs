@@ -13,6 +13,9 @@ pub const SCALE: i32 = 2;
 pub const LAYOUT: (i32, i32) = (1392, 900);
 
 /// The panels, left then right.
+/// The system's accent: a soft coral (buttons that act, things on).
+pub const ACCENT: [u8; 4] = [0xf0, 0x8a, 0x7b, 255];
+
 pub fn panels() -> [Rectangle<i32, Logical>; 2] {
     [
         Rectangle::new((0, 0).into(), (675, 900).into()),

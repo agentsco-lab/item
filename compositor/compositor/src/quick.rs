@@ -275,7 +275,7 @@ impl Quick {
             media,
             jobs: tx,
             font: Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]),
-            tile_on: crate::grid::rounded(tile_w, TILE_H, 20.0, [0x35, 0x84, 0xe4, 255]),
+            tile_on: crate::grid::rounded(tile_w, TILE_H, 20.0, crate::layout::ACCENT),
             tile_off: crate::grid::rounded(tile_w, TILE_H, 20.0, [34, 34, 34, 34]),
             button: crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, [34, 34, 34, 34]),
             button_red: crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, RED),
