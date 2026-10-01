@@ -16,7 +16,10 @@
 //!   from boot, so a ledger keeps the counts the day started with
 //!   (`~/.local/state/item/traffic`), brought up to date with the samples
 //!   and written once a minute.
-//! - **Next up** (#118): Clocks' next alarm, and how long until it rings.
+//! - **Next up** (#118): Clocks' next alarm, and how long until it rings;
+//!   the calendar's next event (phosh's calendar server, which reads
+//!   Evolution's calendars: a thread keeps the week's events as it tells
+//!   them).
 //! - **This device** (#119): the hinge's angle (org.sfduo.Posture), the
 //!   uptime, the port's version and whether a newer is out (GitHub, asked at
 //!   most once a day while the page is open, the answer kept in
@@ -263,6 +266,7 @@ struct Facts {
     mobile: String,
     today: [u64; 2],
     alarm: String,
+    event: String,
     hinge: String,
     uptime: String,
     port: String,
@@ -417,6 +421,70 @@ fn network(f: &mut Facts) {
 
 /// Clocks' next alarm: its gsettings value is a list of dicts (hour,
 /// minute, active, days 0 Monday .. 6 Sunday, name).
+/// The week's events by id - what, when it starts and ends (s) - as phosh's
+/// calendar server tells them.
+type Events = Arc<Mutex<std::collections::HashMap<String, (String, i64, i64)>>>;
+
+const CALENDAR: &str = "mobi.phosh.Shell.CalendarServer";
+
+/// A thread asking phosh's calendar server for the week ahead (again every
+/// hour) and keeping what it tells.
+fn calendar() -> Events {
+    let events: Events = Default::default();
+    let e = events.clone();
+    let _ = std::thread::Builder::new().name("calendar".into()).spawn(move || {
+        let Ok(bus) = zbus::blocking::Connection::session() else { return };
+        let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(CALENDAR).map(|b| b.build());
+        let Ok(rule) = rule else { return };
+        let Ok(signals) = zbus::blocking::MessageIterator::for_match_rule(rule, &bus, Some(64)) else { return };
+        // The asking, on a thread of its own: the signals come here.
+        let asker = bus.clone();
+        let _ = std::thread::Builder::new().name("calendar ask".into()).spawn(move || loop {
+            let now = now_s() as i64;
+            let _ = asker.call_method(Some(CALENDAR), "/mobi/phosh/Shell/CalendarServer", Some(CALENDAR), "SetTimeRange", &(now - 86_400, now + 8 * 86_400, true));
+            std::thread::sleep(Duration::from_secs(3600));
+        });
+        type Event = (String, String, i64, i64, std::collections::HashMap<String, zbus::zvariant::OwnedValue>);
+        for msg in signals.flatten() {
+            let member = msg.header().member().map(|m| m.to_string()).unwrap_or_default();
+            match member.as_str() {
+                "EventsAddedOrUpdated" => {
+                    if let Ok(list) = msg.body().deserialize::<Vec<Event>>() {
+                        let mut map = e.lock().unwrap();
+                        for (id, summary, start, end, _) in list {
+                            map.insert(id, (summary, start, end));
+                        }
+                    }
+                }
+                "EventsRemoved" => {
+                    if let Ok(ids) = msg.body().deserialize::<Vec<String>>() {
+                        let mut map = e.lock().unwrap();
+                        for id in ids {
+                            map.remove(&id);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    events
+}
+
+/// The next event: under way, or the first to start.
+fn next_event(events: &Events, twelve: bool) -> String {
+    let now = now_s() as i64;
+    let map = events.lock().unwrap();
+    let on = map.values().filter(|(_, s, e)| *s <= now && *e > now).min_by_key(|(_, _, e)| *e);
+    if let Some((what, _, end)) = on {
+        return format!("{what} · now, till {}", clock_text(*end, twelve));
+    }
+    match map.values().filter(|(_, s, _)| *s > now).min_by_key(|(_, s, _)| *s) {
+        Some((what, start, _)) => format!("{what} · {} {} · {}", clock_text(*start, twelve), day_text(*start), until_text(*start)),
+        None => "Nothing this week".into(),
+    }
+}
+
 fn next_alarm(twelve: bool) -> String {
     let text = run("gsettings", &["get", "org.gnome.clocks", "alarms"]);
     let num = |d: &str, k: &str| -> Option<i64> {
@@ -679,6 +747,7 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
     let name = crate::sysscreen::first_name();
     let system = system_line();
     let mut weather_cache: Option<(Instant, Result<Weather, String>)> = None;
+    let events = calendar();
     let mut asked_update = false;
     let (mut lit, mut samples) = (true, 0u32);
     let mut next_sample = Instant::now();
@@ -704,6 +773,7 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
                 f.today = Ledger::tally(&mut ledger, false);
                 let twelve = run("gsettings", &["get", "org.gnome.desktop.interface", "clock-format"]).contains("12h");
                 f.alarm = next_alarm(twelve);
+                f.event = next_event(&events, twelve);
                 f.hinge = hinge(&bus);
                 f.uptime = uptime_text(read("/proc/uptime").split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0.0));
                 f.port = port(&mut asked_update);
@@ -963,8 +1033,9 @@ fn draw(fonts: &(Font, Font), f: &Facts, sampler: &Sampler, twelve: bool) -> Opt
     });
 
     // Next up.
-    card(&mut c, "Next up", 86.0, &mut |c, y| {
-        row(c, "Alarm", &f.alarm, DIM, y);
+    card(&mut c, "Next up", 118.0, &mut |c, y| {
+        row(c, "Event", &f.event, DIM, y);
+        row(c, "Alarm", &f.alarm, DIM, y + 32.0);
     });
 
     // This device.
