@@ -11,6 +11,10 @@
 //!
 //! A move takes 440 ms, eased in and out. The hinge is crossed as a tunnel
 //! an icon long, so an icon goes all the way in before any of it comes out.
+//! The dock is the screen's, not a page's: while the ribbon moves under a
+//! finger (ribbon.rs), the same move follows it, between where the halves
+//! stand for the pages on either side of the finger, and back if it goes
+//! back.
 //! A tap on an icon launches the app onto the panel it was tapped on.
 //!
 //! The apps are item's: `~/.config/sfduo/dock.json` (`{"left": [...],
@@ -140,6 +144,8 @@ pub struct Dock {
     /// The mode before the last Hidden, whose places Hidden dips from.
     shown: Mode,
     moving: Option<Move>,
+    /// The move scrubbed by the ribbon: from, to, how far.
+    scrub: Option<(Mode, Mode, f64)>,
 }
 
 /// What a touch on the dock asks for.
@@ -172,7 +178,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, halves, neck: Default::default(), dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None }
+        Dock { rise: None, halves, neck: Default::default(), dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -238,20 +244,33 @@ impl Dock {
 
     /// Each half's place on its path at `frame_ns` (item's `_pane_path`, `_spring`).
     fn path(&self, frame_ns: u64) -> [Place; 2] {
+        // Under the ribbon's finger: as far as it has gone, no bump.
+        if let Some((from, to, k)) = self.scrub {
+            return self.between(from, to, k, None, true);
+        }
         let Some(m) = &self.moving else { return self.targets(self.mode) };
         let all = (frame_ns.saturating_sub(m.start_ns) as f64 / Self::duration(m) as f64).clamp(0.0, 1.0);
         let travel = MOVE_NS as f64 / Self::duration(m) as f64;
         let (k, bump) = if all >= travel && Self::bumps(m) { (1.0, Some((all - travel) / (1.0 - travel))) } else { ((all / travel).min(1.0), None) };
-        let (a, b) = (self.targets(m.from), self.targets(m.to));
+        self.between(m.from, m.to, k, bump, false)
+    }
+
+    /// The halves `k` of the way from `from` to `to`, eased as item's path
+    /// (`linear`: as the finger has it, the contact's slowing only), and the
+    /// bump after arriving.
+    fn between(&self, from: Mode, to: Mode, k: f64, bump: Option<f64>, linear: bool) -> [Place; 2] {
+        let (a, b) = (self.targets(from), self.targets(to));
         let joined = |mode: Mode| matches!(mode, Mode::On(_));
-        let meeting = joined(m.from) != joined(m.to) && m.from != Mode::Hidden && m.to != Mode::Hidden;
+        let meeting = joined(from) != joined(to) && from != Mode::Hidden && to != Mode::Hidden;
         let e = if meeting {
             // The half that crosses: the one whose panel it is not.
-            let on = if let Mode::On(p) = if joined(m.to) { m.to } else { m.from } { p } else { 0 };
+            let on = if let Mode::On(p) = if joined(to) { to } else { from } { p } else { 0 };
             let mover = 1 - on;
             let dist = (squeeze(b[mover].x) - squeeze(a[mover].x)).abs();
             let delta = if dist > 0.0 { (CONTACT_PX / dist).min(0.5) } else { 0.0 };
-            if joined(m.to) { contact_ease(k, delta) } else { 1.0 - contact_ease(1.0 - k, delta) }
+            if joined(to) { contact_ease(k, delta) } else { 1.0 - contact_ease(1.0 - k, delta) }
+        } else if linear {
+            k
         } else if k < 0.5 {
             4.0 * k * k * k
         } else {
@@ -273,7 +292,7 @@ impl Dock {
         // The bump: the half that arrives pushes the one it meets, which is
         // squashed against its screen edge and pushed on a little; then the
         // arriving one rebounds, a small gap opening, and settles.
-        if let (Some(u), Mode::On(stayer)) = (bump, m.to) {
+        if let (Some(u), Mode::On(stayer)) = (bump, to) {
             let mover = 1 - stayer;
             let sign = if mover == 1 { -1.0 } else { 1.0 };
             let width = if stayer == 0 { w0 } else { w1 };
@@ -293,7 +312,7 @@ impl Dock {
         out[1].anchor = out[1].x + w1;
         // The inner corners by the gap between the visible edges: square
         // where they touch, round again from MEET_ROUND apart.
-        if meeting || matches!(self.mode, Mode::On(_)) {
+        if meeting || joined(to) {
             let r = RADIUS as f64 * (self.gap(&out) / MEET_ROUND).clamp(0.0, 1.0);
             out[0].radius = r;
             out[1].radius = r;
@@ -323,12 +342,8 @@ impl Dock {
     /// Where the halves go for the panels windows have. Returns whether they
     /// set off.
     pub fn follow(&mut self, taken: [bool; 2], now_ns: u64) -> bool {
-        let mode = match taken {
-            [false, false] => Mode::Both,
-            [false, true] => Mode::On(0),
-            [true, false] => Mode::On(1),
-            [true, true] => Mode::Hidden,
-        };
+        self.end_scrub();
+        let mode = mode_for(taken);
         if mode == self.mode {
             return false;
         }
@@ -350,16 +365,28 @@ impl Dock {
         true
     }
 
-    /// Hidden at once, no motion: the ribbon carried the halves off with
-    /// their pages, and they rise again where the panels now let them.
-    pub fn hide_now(&mut self) {
-        if self.mode != Mode::Hidden {
-            self.shown = self.mode;
+    /// The ribbon under a finger: the halves `k` of the way from where they
+    /// stand for the panels `from` has taken to where they stand for `to`'s.
+    pub fn scrub(&mut self, from: [bool; 2], to: [bool; 2], k: f64) {
+        let (from, to) = (mode_for(from), mode_for(to));
+        let k = k.clamp(0.0, 1.0);
+        if to != Mode::Hidden {
+            self.shown = to;
+        } else if from != Mode::Hidden {
+            self.shown = from;
         }
-        self.mode = Mode::Hidden;
         self.moving = None;
+        self.mode = if k >= 0.5 { to } else { from };
+        self.scrub = Some((from, to, k));
         for half in &mut self.halves {
             half.pressed = None;
+        }
+    }
+
+    /// The ribbon stopped: the halves stand where it left them.
+    pub fn end_scrub(&mut self) {
+        if let Some((from, to, k)) = self.scrub.take() {
+            self.mode = if k >= 0.5 { to } else { from };
         }
     }
 
@@ -393,7 +420,7 @@ impl Dock {
     /// A touch down: taken if it lands on a half standing still. Returns
     /// whether it was.
     pub fn down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>) -> bool {
-        if self.moving.is_some() || self.mode == Mode::Hidden {
+        if self.moving.is_some() || self.scrub.is_some() || self.mode == Mode::Hidden {
             return false;
         }
         let places = self.targets(self.mode);
@@ -586,6 +613,16 @@ fn squeeze(x: f64) -> f64 {
         half + (x - half) * TUNNEL / gap
     } else {
         x - gap + TUNNEL
+    }
+}
+
+/// Where the halves stand for the panels windows have.
+fn mode_for(taken: [bool; 2]) -> Mode {
+    match taken {
+        [false, false] => Mode::Both,
+        [false, true] => Mode::On(0),
+        [true, false] => Mode::On(1),
+        [true, true] => Mode::Hidden,
     }
 }
 

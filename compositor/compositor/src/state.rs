@@ -251,6 +251,26 @@ impl State {
         ids
     }
 
+    /// Which panels the dock may not stand on, for the ribbon at `view`:
+    /// those whose page is not a desk, but for a window on its way away;
+    /// and those under the launch curtain or the grid.
+    pub fn dock_taken(&self, view: usize) -> [bool; 2] {
+        use crate::ribbon::Page;
+        let pages = self.ribbon.at(view);
+        let mut taken = [0, 1].map(|k| match pages[k] {
+            Some(Page::Desk(_)) | None => false,
+            Some(Page::App(w)) => !self.gestures.leaving(w),
+            Some(_) => true,
+        });
+        if let Some(p) = self.curtain.panel() {
+            taken[p] = true;
+        }
+        if let Some(p) = self.grid.panel() {
+            taken[p] = true;
+        }
+        taken
+    }
+
     /// Which panels a window has. A window on its way away no longer has
     /// its panel.
     pub fn panels_taken(&self) -> [bool; 2] {
@@ -312,8 +332,7 @@ impl State {
 
     /// Where the ribbon stopped, applied: the windows on the pages shown
     /// mapped onto their panels, the others out of the space; the system
-    /// screen and the pen's sheet out if their pages are shown. The dock,
-    /// carried off with its pages, rises again where it now stands.
+    /// screen and the pen's sheet out if their pages are shown.
     pub fn apply_ribbon(&mut self) {
         use crate::ribbon::Page;
         self.ribbon.unsettled = false;
@@ -350,7 +369,6 @@ impl State {
             let next = self.top_window(0).or_else(|| self.top_window(1)).map(|w| w.toplevel().unwrap().wl_surface().clone());
             keyboard.set_focus(self, next, smithay::utils::SERIAL_COUNTER.next_serial());
         }
-        self.dock.hide_now();
         tracing::info!("ribbon: applied, {:?} | {:?}", shown[0], shown[1]);
         self.needs_redraw = true;
     }

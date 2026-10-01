@@ -367,21 +367,19 @@ impl Data {
         self.state.needs_redraw = false;
         let started = hybris_hwc::now_ns();
         self.state.follow_keyboard();
-        // The dock stands on the panels no window has, nor a launch curtain.
-        let mut taken = self.state.panels_taken();
-        if let Some(p) = self.state.curtain.panel() {
-            taken[p] = true;
+        // The dock stands on the panels whose pages are desks, nor under a
+        // launch curtain or the grid; while the ribbon moves under a finger,
+        // it moves with it between the pages on either side (dock.rs).
+        match self.state.ribbon.scrolling(self.pacing.target_ns) {
+            Some((view, k)) => {
+                let (from, to) = (self.state.dock_taken(view), self.state.dock_taken(view + 1));
+                self.state.dock.scrub(from, to, k);
+            }
+            None => {
+                let taken = self.state.dock_taken(self.state.ribbon.view);
+                self.state.dock.follow(taken, started);
+            }
         }
-        if let Some(p) = self.state.grid.panel() {
-            taken[p] = true;
-        }
-        if self.state.system.out() {
-            taken[0] = true;
-        }
-        if self.state.pen.out() {
-            taken[1] = true;
-        }
-        self.state.dock.follow(taken, started);
         // Callbacks::Draw: frame callbacks before the frame is drawn: the
         // clients' buffers for it are already taken, and a client starts on
         // its next frame while this one is drawn and presented (8-9 ms).
@@ -514,6 +512,9 @@ impl Data {
         if self.state.ribbon.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
+        }
+        if self.state.clock.fading(now) {
+            self.state.needs_redraw = true;
         }
         if self.state.ribbon.unsettled && !self.state.ribbon.moving() {
             self.state.apply_ribbon();

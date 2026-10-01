@@ -4,6 +4,8 @@
 //! and thin (the time 88 px at 62 %, the date 20 px at 45 %), 20 % down the
 //! panel, and each minute it steps up to 12 px from its place, so no pixel
 //! of it is lit all day on the OLED. It takes no touches. No weather yet.
+//! On a panel it was not on, it fades in (300 ms); carried along the ribbon
+//! with its desk, it is not faded.
 
 use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::Kind;
@@ -16,6 +18,7 @@ use crate::text::{Font, Label};
 const TOP: f64 = 0.2;
 const SHIFT: i32 = 12;
 const GAP: i32 = 6;
+const FADE_NS: u64 = 300_000_000;
 
 pub struct Clock {
     fonts: Option<(Font, Font)>,
@@ -24,6 +27,8 @@ pub struct Clock {
     /// The step aside, logical px, and the minute it was taken for.
     step: (i32, i32),
     minute: i32,
+    /// The panel it was last drawn on, and since when.
+    on: std::cell::Cell<(Option<usize>, u64)>,
 }
 
 impl Clock {
@@ -36,6 +41,7 @@ impl Clock {
             date: Label::new(20.0, [1.0, 1.0, 1.0, 0.45]),
             step: (0, 0),
             minute: -1,
+            on: std::cell::Cell::new((None, 0)),
         };
         clock.refresh();
         clock
@@ -71,9 +77,23 @@ impl Clock {
             .count()
     }
 
-    /// What it draws on `panel`, if any.
-    pub fn elements(&self, renderer: &mut GlesRenderer, panel: Option<usize>) -> Vec<ShellElement> {
+    /// Whether it is still fading in at `frame_ns`.
+    pub fn fading(&self, frame_ns: u64) -> bool {
+        let (on, since) = self.on.get();
+        on.is_some() && frame_ns < since + FADE_NS
+    }
+
+    /// What it draws on `panel`, if any, at `frame_ns`; `carried` along the
+    /// ribbon, its panel is where it came from and it is not faded.
+    pub fn elements(&self, renderer: &mut GlesRenderer, panel: Option<usize>, frame_ns: u64, carried: bool) -> Vec<ShellElement> {
+        let (was, since) = self.on.get();
+        if !carried && panel != was {
+            self.on.set((panel, if was.is_none() && since == 0 { 0 } else { frame_ns }));
+        }
         let Some(panel) = panel else { return Vec::new() };
+        let since = self.on.get().1;
+        let k = if carried || since == 0 { 1.0 } else { (frame_ns.saturating_sub(since) as f32 / FADE_NS as f32).clamp(0.0, 1.0) };
+        let alpha = k * k * (3.0 - 2.0 * k);
         let rect = layout::panels()[panel];
         let top = (rect.size.h as f64 * TOP) as i32 + self.step.1;
         let mut out = Vec::new();
@@ -84,7 +104,7 @@ impl Clock {
                 renderer,
                 ((x * SCALE) as f64, (y * SCALE) as f64),
                 &label.buffer,
-                None,
+                Some(alpha),
                 None,
                 None,
                 Kind::Unspecified,

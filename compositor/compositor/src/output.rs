@@ -347,20 +347,15 @@ impl Screen {
             elements.extend(state.pen.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         }
         elements.extend(state.grid.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
-        // The dock's halves and the clock, each with the page of its panel.
-        let hinge = (crate::layout::panels()[0].loc.x + crate::layout::panels()[0].size.w) as f64 * SCALE as f64;
-        let dock = state.dock.elements(&mut self.renderer, frame_ns, &running);
-        let clock = state.clock.elements(&mut self.renderer, state.dock.home_panel());
-        if ribbon {
-            use smithay::backend::renderer::element::Element;
-            for e in dock.into_iter().chain(clock) {
-                let k = if (e.geometry(smithay::utils::Scale::from(SCALE as f64)).loc.x as f64) < hinge { 0 } else { 1 };
-                let dx = state.ribbon.carried(k, frame_ns).unwrap_or(0.0);
-                elements.extend(carry(vec![e], dx));
-            }
-        } else {
-            elements.extend(dock.into_iter().map(FrameElement::from));
-            elements.extend(clock.into_iter().map(FrameElement::from));
+        // The dock is the screen's: where it stands (it follows the ribbon
+        // itself, dock.rs). The clock is its desk's: carried with it.
+        elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
+        let clock_panel = state.ribbon.clock_panel().or(state.dock.home_panel());
+        let carried = state.ribbon.clock_panel().is_some();
+        let clock = state.clock.elements(&mut self.renderer, clock_panel, frame_ns, carried);
+        match clock_panel.and_then(|k| state.ribbon.carried(k, frame_ns)) {
+            Some(dx) => elements.extend(carry(clock, dx)),
+            None => elements.extend(clock.into_iter().map(FrameElement::from)),
         }
         // The windows, topmost first; one put away or brought back as the
         // gesture has it (gesture.rs).

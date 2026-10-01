@@ -67,6 +67,8 @@ struct Run {
     duration_ns: u64,
     /// The start's speed, in the run's own measure (its 0 to 1) per run.
     v0: f64,
+    /// A finger's let go: the row only moves along, nothing in or out.
+    scroll: bool,
 }
 
 impl Run {
@@ -163,6 +165,37 @@ impl Ribbon {
         Some(x - panel as f64 * PAGE)
     }
 
+    /// The pages on the panels with the window onto the row at `view`.
+    pub fn at(&self, view: usize) -> [Option<&Page>; 2] {
+        [self.pages.get(view), self.pages.get(view + 1)]
+    }
+
+    /// While the row only moves along (a finger on it, or its let go): the
+    /// page position just left of where it stands, and how far on from it
+    /// (0 to 1).
+    pub fn scrolling(&self, frame_ns: u64) -> Option<(usize, f64)> {
+        let pos = if self.drag.is_some() {
+            self.pos()
+        } else if self.run.as_ref().is_some_and(|r| r.scroll) {
+            -self.xs(frame_ns).first()?.1 / PAGE
+        } else {
+            return None;
+        };
+        let max = self.max_view() as f64;
+        let pos = pos.clamp(0.0, max);
+        let base = pos.floor().min((max - 1.0).max(0.0));
+        Some((base as usize, pos - base))
+    }
+
+    /// While the row moves: the panel the desktop's clock stood on as it
+    /// began, the right one's desk before the left's (dock.rs's home).
+    pub fn clock_panel(&self) -> Option<usize> {
+        if !self.moving() {
+            return None;
+        }
+        [1, 0].into_iter().find(|&k| matches!(self.carried[k], Some(Page::Desk(_))))
+    }
+
     fn begin(&mut self, frame_ns: u64) {
         if !self.moving() {
             self.carried = [self.on(0).cloned(), self.on(1).cloned()];
@@ -223,7 +256,7 @@ impl Ribbon {
         let ns = if speed > 0.0 && dist > 0.0 { (2.0 * dist / speed * 1e6).clamp(RUN_MIN_NS, RUN_MAX_NS) } else { RUN_MAX_NS };
         let v0 = if dist > 0.0 { (speed.max(0.0) * ns / 1e6 / dist).min(2.0) } else { 0.0 };
         self.view = target as usize;
-        self.run = Some(Run { from, start_ns: now, duration_ns: ns as u64, v0 });
+        self.run = Some(Run { from, start_ns: now, duration_ns: ns as u64, v0, scroll: true });
         self.unsettled = true;
         tracing::info!("ribbon: to page {} of {} ({:?} | {:?})", self.view, self.pages.len(), self.on(0), self.on(1));
     }
@@ -240,7 +273,7 @@ impl Ribbon {
         let now = hybris_hwc::now_ns();
         self.begin(now);
         self.drag = None;
-        self.run = Some(Run { from: before, start_ns: now, duration_ns: 300_000_000, v0: 0.0 });
+        self.run = Some(Run { from: before, start_ns: now, duration_ns: 300_000_000, v0: 0.0, scroll: false });
         self.unsettled = true;
     }
 
