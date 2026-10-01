@@ -16,6 +16,9 @@
 //! - A swipe sideways moves the row with the finger - on a desk, the system
 //!   screen or the pen's sheet anywhere, on an app along the bottom edge -
 //!   and let go it runs to the nearest page, or on by the finger's speed.
+//! - A window across both panels (`span`) has two pages, its own and a
+//!   Wide one after it: shown together it stands on both panels, and as the
+//!   row moves it moves with them, half of it shown when one is.
 //! - A window put away or closed leaves the row, and the row closes up; the
 //!   system screen and the pen's sheet come only when asked for.
 //!
@@ -45,6 +48,9 @@ pub enum Page {
     /// A panel's desktop: 0 the left one's, 1 the right one's.
     Desk(usize),
     App(Window),
+    /// The second page of a window across both panels: it follows its
+    /// App page, and the window is as wide as the two.
+    Wide(Window),
     Pen,
 }
 
@@ -317,9 +323,45 @@ impl Ribbon {
         self.rearranged(before);
     }
 
+    /// Whether a window is across both panels.
+    pub fn spanned(&self, window: &Window) -> bool {
+        self.pages.iter().any(|p| matches!(p, Page::Wide(w) if w == window))
+    }
+
+    /// A window across both panels: a Wide page after its own, and the
+    /// two shown.
+    pub fn span(&mut self, window: &Window) {
+        let Some(i) = self.find(window) else { return };
+        if self.spanned(window) {
+            return;
+        }
+        let before = self.xs(hybris_hwc::now_ns());
+        self.pages.insert(i + 1, Page::Wide(window.clone()));
+        self.view = i.min(self.max_view());
+        tracing::info!("ribbon: a window across both panels, pages {i} and {}", i + 1);
+        self.rearranged(before);
+    }
+
+    /// A window across both panels back onto one.
+    pub fn unspan(&mut self, window: &Window, panel: usize) {
+        self.drop_wide(window);
+        self.open(window.clone(), panel);
+    }
+
+    /// A window's Wide page out of the row, if it has one.
+    fn drop_wide(&mut self, window: &Window) {
+        if let Some(i) = self.pages.iter().position(|p| matches!(p, Page::Wide(w) if w == window)) {
+            self.pages.remove(i);
+            if i <= self.view && self.view > 0 {
+                self.view -= 1;
+            }
+        }
+    }
+
     /// A window leaves the row (put away, or closed): the row closes up,
     /// the page beside it on the other panel staying where it is.
     pub fn remove(&mut self, window: &Window) {
+        self.drop_wide(window);
         let Some(i) = self.find(window) else { return };
         let before = self.xs(hybris_hwc::now_ns());
         self.pages.remove(i);

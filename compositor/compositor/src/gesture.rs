@@ -9,6 +9,10 @@
 //! leaves the space for the list of windows put away, its panel is free,
 //! and the dock comes back. A tap on its app in the dock brings it back
 //! with the motion reversed.
+//!
+//! A finger held still in the band instead takes the window (state.rs's
+//! carrying): let go over the hinge it goes across both panels, over a
+//! panel onto that one.
 
 use smithay::backend::input::TouchSlot;
 use smithay::desktop::Window;
@@ -24,6 +28,8 @@ const TRAVEL: f64 = 320.0;
 const FLICK: f64 = 0.3;
 /// A slower release puts away past this much of the way.
 const COMMIT: f64 = 0.3;
+/// Held still this long in the bottom band, the finger takes the window.
+const HOLD_NS: u64 = 500_000_000;
 /// The whole run's time, as phoc's minimize.
 const RUN_NS: f64 = 280e6;
 /// The window's size put away, and how far above its old bottom it ends.
@@ -34,6 +40,8 @@ struct Grab {
     slot: TouchSlot,
     window: Window,
     panel: usize,
+    /// When the finger came down: held still, it takes the window.
+    at: u64,
     start_y: f64,
     p: f64,
     last: (u64, f64),
@@ -87,7 +95,17 @@ impl Gestures {
     /// top: the swipe begins.
     pub fn down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, time_us: u64, window: Window, panel: usize) {
         self.runs.retain(|r| r.window != window);
-        self.grab = Some(Grab { slot, window, panel, start_y: pos.y, p: 0.0, last: (time_us, pos.y), velocity: 0.0 });
+        self.grab = Some(Grab { slot, window, panel, at: hybris_hwc::now_ns(), start_y: pos.y, p: 0.0, last: (time_us, pos.y), velocity: 0.0 });
+    }
+
+    /// A finger held still in the bottom band for HOLD_NS: the window is
+    /// the finger's to carry (onto the other panel, or across both), not
+    /// to put away; it, its panel and the finger are returned.
+    pub fn long_press(&mut self, now_ns: u64) -> Option<(TouchSlot, Window, usize)> {
+        let g = self.grab.as_ref().filter(|g| g.p < 0.03 && now_ns >= g.at + HOLD_NS)?;
+        let out = (g.slot, g.window.clone(), g.panel);
+        self.grab = None;
+        Some(out)
     }
 
     pub fn holds(&self, slot: TouchSlot) -> bool {

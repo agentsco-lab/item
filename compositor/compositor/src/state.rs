@@ -147,6 +147,9 @@ pub struct State {
     /// The panel each window was last opened onto: the dock's half its
     /// app's icon goes to while it runs. (Its app id comes after it opens.)
     pub opened_on: Vec<(Window, usize)>,
+    /// A window a finger carries from its bottom band: the finger, the
+    /// window, the panel it was on, where the finger is (x).
+    pub carrying: Option<(smithay::backend::input::TouchSlot, Window, usize, f64)>,
     /// Every page in one row, the panels a window onto it (ribbon.rs).
     pub ribbon: crate::ribbon::Ribbon,
     /// The panel the next window goes to, asked for by a launch from the
@@ -231,6 +234,7 @@ impl State {
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),
             opened_on: Default::default(),
+            carrying: None,
             bottom_start: None,
             launch_to: None,
             socket_name: Default::default(),
@@ -317,7 +321,7 @@ impl State {
         let pages = self.ribbon.at(view);
         let mut taken = [0, 1].map(|k| match pages[k] {
             Some(Page::Desk(_)) | None => false,
-            Some(Page::App(w)) => Some(w) == but || !self.gestures.leaving(w),
+            Some(Page::App(w)) | Some(Page::Wide(w)) => Some(w) == but || !self.gestures.leaving(w),
             Some(_) => true,
         });
         if let Some(p) = self.curtain.panel() {
@@ -330,6 +334,36 @@ impl State {
     /// along, the grid coming up, a window going away) it follows the
     /// motion between the two ends; else it moves on its own to where it
     /// stands for the panels now.
+    /// Where a carried window would go for a finger at `x`: across both
+    /// panels (None) over the hinge, else onto the panel under it.
+    pub fn carry_target(x: f64) -> Option<usize> {
+        let panels = layout::panels();
+        let hinge = (panels[0].loc.x + panels[0].size.w + panels[1].loc.x) as f64 / 2.0;
+        if (x - hinge).abs() < 150.0 {
+            None
+        } else if x < hinge {
+            Some(0)
+        } else {
+            Some(1)
+        }
+    }
+
+    /// The carried window let go at `x`.
+    pub fn carry_window_up(&mut self) {
+        let Some((_, window, from, x)) = self.carrying.take() else { return };
+        let spanned = self.ribbon.spanned(&window);
+        match Self::carry_target(x) {
+            None if !spanned => self.ribbon.span(&window),
+            Some(p) if spanned => self.ribbon.unspan(&window, p),
+            Some(p) if p != from => {
+                self.ribbon.open(window.clone(), p);
+                self.opened_onto(&window, p);
+            }
+            _ => {}
+        }
+        self.needs_redraw = true;
+    }
+
     /// A window opened onto a panel, for its app's icon in the dock.
     fn opened_onto(&mut self, window: &Window, panel: usize) {
         self.opened_on.retain(|(w, _)| w != window);
@@ -442,10 +476,38 @@ impl State {
         let shown = [self.ribbon.on(0).cloned(), self.ribbon.on(1).cloned()];
         let windows: Vec<Window> = self.ribbon.pages.iter().filter_map(|p| if let Page::App(w) = p { Some(w.clone()) } else { None }).collect();
         for w in windows {
+            // Across both panels: as wide as the two, standing where its
+            // own page is (its Wide page shown alone, half of it shows).
+            if self.ribbon.spanned(&w) {
+                let own = shown.iter().position(|s| s.as_ref() == Some(&Page::App(w.clone())));
+                let wide = shown.iter().position(|s| s.as_ref() == Some(&Page::Wide(w.clone())));
+                let x = match (own, wide) {
+                    (Some(k), _) => Some(panels[k].loc.x),
+                    (None, Some(k)) => Some(panels[k].loc.x - crate::ribbon::PAGE as i32),
+                    (None, None) => None,
+                };
+                match x {
+                    Some(x) => {
+                        let size = (layout::LAYOUT.0, layout::LAYOUT.1);
+                        let at: smithay::utils::Point<i32, Logical> = (x, 0).into();
+                        if self.space.element_location(&w) != Some(at) || w.geometry().size.w != size.0 {
+                            w.toplevel().unwrap().with_pending_state(|s| s.size = Some(size.into()));
+                            w.toplevel().unwrap().send_pending_configure();
+                            self.space.map_element(w.clone(), at, false);
+                        }
+                    }
+                    None => {
+                        if self.space.elements().any(|e| e == &w) {
+                            self.space.unmap_elem(&w);
+                        }
+                    }
+                }
+                continue;
+            }
             match shown.iter().position(|s| s.as_ref() == Some(&Page::App(w.clone()))) {
                 Some(k) => {
                     let rect = panels[k];
-                    if self.space.element_location(&w) != Some(rect.loc) {
+                    if self.space.element_location(&w) != Some(rect.loc) || w.geometry().size.w > rect.size.w {
                         let cut = match self.osk_applied {
                             Some((kp, h)) if kp == k => h,
                             _ => 0,
@@ -512,10 +574,16 @@ impl State {
     /// The window on top on a panel.
     pub fn top_window(&self, panel: usize) -> Option<Window> {
         let rect = layout::panels()[panel];
+        // Its own, or one across both panels over it.
         self.space
             .elements()
             .rev()
-            .find(|w| self.space.element_location(w).is_some_and(|loc| rect.contains(loc)))
+            .find(|w| {
+                self.space.element_location(w).is_some_and(|loc| {
+                    let width = w.geometry().size.w.max(1);
+                    loc.x < rect.loc.x + rect.size.w && loc.x + width > rect.loc.x
+                })
+            })
             .cloned()
     }
 

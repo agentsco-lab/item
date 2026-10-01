@@ -5,6 +5,8 @@ for tests with no one at the phone. Each STEP is one of
     tap:X,Y@T            a tap at physical px (X, Y), T seconds after start
     drag:X,Y0,Y1,S@T     a drag at x=X from y=Y0 to Y1 over S seconds, from T
     hdrag:Y,X0,X1,S@T    a drag at y=Y from x=X0 to X1 over S seconds, from T
+    hold:Y,X0,X1,H,S@T   a finger held still at (X0, Y) for H seconds, then
+                         moved to x=X1 over S seconds and lifted, from T
 
 (physical px of the 2784x1800 output). It prints its device node first, for
 the compositor's TOUCHSCREEN, and stays a while after the last step."""
@@ -73,6 +75,15 @@ for t, what, p in sorted(steps):
     elif what == "hdrag":
         y, x0, x1, secs = p
         at(x0, y, down=True)
+        n = max(1, int(secs / 0.008))
+        for i in range(1, n + 1):
+            time.sleep(0.008)
+            at(x0 + (x1 - x0) * i / n, y)
+        lift()
+    elif what == "hold":
+        y, x0, x1, hold, secs = p
+        at(x0, y, down=True)
+        time.sleep(hold)
         n = max(1, int(secs / 0.008))
         for i in range(1, n + 1):
             time.sleep(0.008)

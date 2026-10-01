@@ -328,6 +328,14 @@ impl Data {
                 self.state.boost.kick(now);
                 self.state.needs_redraw = true;
             }
+            // Held still in a window's bottom band: the window is carried.
+            if let Some((slot, window, panel)) = self.state.gestures.long_press(now) {
+                let x = crate::layout::panels()[panel].loc.x as f64 + crate::layout::panels()[panel].size.w as f64 / 2.0;
+                self.state.carrying = Some((slot, window, panel, x));
+                self.state.bottom_start = None;
+                crate::fingerprint::buzz("button-pressed");
+                self.state.needs_redraw = true;
+            }
             if self.state.dock.long_press(now) {
                 self.state.boost.kick(now);
                 self.state.needs_redraw = true;

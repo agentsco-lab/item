@@ -529,6 +529,11 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if let Some(c) = self.carrying.as_mut().filter(|c| c.0 == slot) {
+                    c.3 = pos.x;
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.dock.carries(slot) {
                     self.dock.carry_motion(pos, hybris_hwc::now_ns());
                     self.needs_redraw = true;
@@ -543,6 +548,10 @@ impl State {
                 touch.motion(self, under, &MotionEvent { slot, location: pos, time: msec(time) });
             }
             Contact::Up(slot, time) => {
+                if self.carrying.as_ref().is_some_and(|c| c.0 == slot) {
+                    self.carry_window_up();
+                    return;
+                }
                 if self.dock.carries(slot) {
                     self.dock.carry_up(hybris_hwc::now_ns());
                     self.needs_redraw = true;
@@ -613,6 +622,7 @@ impl State {
                 self.pen.cancel();
                 self.ribbon.cancel();
                 self.bottom_start = None;
+                self.carrying = None;
                 self.needs_redraw = true;
                 touch.cancel(self)
             }

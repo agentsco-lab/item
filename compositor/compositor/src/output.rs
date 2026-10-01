@@ -148,6 +148,8 @@ pub struct Screen {
     dim_id: smithay::backend::renderer::element::Id,
     /// The wallpaper under the first setup.
     setup_wall_id: smithay::backend::renderer::element::Id,
+    /// Where a carried window would go, lit.
+    carry_id: smithay::backend::renderer::element::Id,
     /// The ribbon's dot.
     dot: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
     /// The wallpaper (walls.rs): a texture the output's scale, wider than
@@ -213,7 +215,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -255,6 +257,18 @@ impl Screen {
             elements.push(FrameElement::Shell(ShellElement::Solid(smithay::backend::renderer::element::solid::SolidColorRenderElement::new(self.dim_id.clone(), rect, smithay::backend::renderer::utils::CommitCounter::default(), [0.0, 0.0, 0.0, 0.55], smithay::backend::renderer::element::Kind::Unspecified))));
         }
         elements.extend(state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // A window carried: where it would go, lit over the windows.
+        if let Some((_, _, _, x)) = &state.carrying {
+            let panels = crate::layout::panels();
+            let rect = match crate::state::State::carry_target(*x) {
+                Some(p) => smithay::utils::Rectangle::<i32, smithay::utils::Physical>::new(panels[p].loc.to_physical(SCALE), panels[p].size.to_physical(SCALE)),
+                None => smithay::utils::Rectangle::<i32, smithay::utils::Physical>::from_size((crate::layout::LAYOUT.0 * SCALE, crate::layout::LAYOUT.1 * SCALE).into()),
+            };
+            let a = crate::layout::ACCENT;
+            let k = 0.22f32;
+            let color = [a[0] as f32 / 255.0 * k, a[1] as f32 / 255.0 * k, a[2] as f32 / 255.0 * k, k];
+            elements.push(FrameElement::Shell(ShellElement::Solid(smithay::backend::renderer::element::solid::SolidColorRenderElement::new(self.carry_id.clone(), rect, smithay::backend::renderer::utils::CommitCounter::from((rect.loc.x + rect.size.w) as usize), color, smithay::backend::renderer::element::Kind::Unspecified))));
+        }
         // The first setup: its circle over its words (setup.rs, orb.frag).
         // Its rings over its words; its drop under the dark the setup lays
         // over the wallpaper, darkened with what it bends.
@@ -424,7 +438,9 @@ impl Screen {
         if ribbon {
             for (page, x) in &xs {
                 if let crate::ribbon::Page::App(window) = page {
-                    if !seen(*x) {
+                    // Across both panels it reaches over its Wide page too.
+                    let spanned = state.ribbon.spanned(window);
+                    if !seen(*x) && !(spanned && seen(*x + crate::ribbon::PAGE)) {
                         continue;
                     }
                     let loc = smithay::utils::Point::<i32, smithay::utils::Physical>::from(((x * SCALE as f64).round() as i32, 0));
