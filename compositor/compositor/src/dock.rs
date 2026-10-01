@@ -218,6 +218,19 @@ const LENS: f64 = 1.04;
 const ALIVE_NS: u64 = 4_000_000_000;
 const CALM_NS: u64 = 2_500_000_000;
 
+/// Carrying an icon (`lift`): held this long still, an icon lifts out as
+/// a drop; a half takes it within this much of its drop; let go this far
+/// above the dock, it is off the dock and dries away.
+pub const LIFT_NS: u64 = 500_000_000;
+const TAKE_ABOVE: f64 = 80.0;
+const TAKE_SIDE: f64 = 30.0;
+const OFF_ABOVE: f64 = 140.0;
+const CARRY_R: f64 = 32.0;
+const CARRY_IN_NS: f64 = 160e6;
+const DRY_NS: f64 = 380e6;
+/// A half's own apps at most; the rest of a panel is for running ones.
+const MAX_PER_HALF: usize = 5;
+
 /// The halves coming in from the sides after an unlock (item's RISE_MS).
 const RISE_NS: u64 = 360_000_000;
 
@@ -276,6 +289,12 @@ pub struct Dock {
     /// Running apps' dock items by app id, found once (None: no desktop
     /// file for it).
     found: std::collections::HashMap<String, Option<App>>,
+    /// An icon a finger carries; one let go off the dock, drying away
+    /// (where, its icon, since when).
+    carry: Option<Carry>,
+    drying: Option<((f64, f64), Option<MemoryRenderBuffer>, u64)>,
+    /// When the finger on an icon came down, for a long press.
+    pressed_at: u64,
     /// The same for groups of drops drawn freely (`group`), by slot.
     groups: std::cell::RefCell<Vec<std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>>>,
 }
@@ -292,6 +311,18 @@ pub struct Flow {
     snap: Option<(bool, f64, f64, f64, u64)>,
     trail: Option<([f64; 4], u64)>,
     popped: u64,
+}
+
+/// An icon carried by a finger (onto the dock from the grid, or along it,
+/// across it, or off it): the app, the half and place
+/// it came out of, the finger, since when, and the place it would go.
+struct Carry {
+    slot: TouchSlot,
+    app: App,
+    from: Option<(usize, usize)>,
+    pos: Point<f64, Logical>,
+    since: u64,
+    over: Option<(usize, usize)>,
 }
 
 /// What a touch on the dock asks for.
@@ -324,7 +355,7 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -607,6 +638,18 @@ impl Dock {
 
     /// After a frame for `frame_ns`: whether the halves are still moving.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
+        // An icon carried, or one drying away.
+        if self.carry.is_some() || self.drying.as_ref().is_some_and(|(_, _, t)| (frame_ns.saturating_sub(*t) as f64) < DRY_NS) {
+            for half in &mut self.halves {
+                let d = half.target_w - half.size.0;
+                if d != 0 {
+                    let step = ((d.abs() as f64 * 0.16).ceil() as i32).max(1);
+                    half.size.0 += d.signum() * step.min(d.abs());
+                }
+            }
+            return true;
+        }
+        self.drying = None;
         // A half making room for a running app, or closing up after one.
         let mut widening = false;
         for half in &mut self.halves {
@@ -703,8 +746,9 @@ impl Dock {
             }
             let icon = (0..self.halves[h].len()).find(|&i| self.cell(i, &p).contains(pos));
             self.halves[h].pressed = icon.map(|i| (i, slot, pos));
+            self.pressed_at = hybris_hwc::now_ns();
             // Touched, the drops come alive.
-            self.touched.set(hybris_hwc::now_ns());
+            self.touched.set(self.pressed_at);
             return true;
         }
         false
@@ -756,6 +800,121 @@ impl Dock {
         }
     }
 
+    /// A finger held still on a dock icon for LIFT_NS: it lifts out as a
+    /// drop and follows the finger (its own leave the half, which closes
+    /// up; a running one is carried to be put on it). Returns whether one
+    /// did.
+    pub fn long_press(&mut self, now_ns: u64) -> bool {
+        if self.carry.is_some() || now_ns < self.pressed_at + LIFT_NS {
+            return false;
+        }
+        let Some(h) = (0..2).find(|&h| self.halves[h].pressed.is_some()) else { return false };
+        let (i, slot, pos) = self.halves[h].pressed.take().unwrap();
+        let half = &mut self.halves[h];
+        let (app, from) = if i < half.apps.len() {
+            let app = half.apps.remove(i);
+            half.target_w = half_width(half.len());
+            (app, Some((h, i)))
+        } else {
+            (half.item(i).clone(), None)
+        };
+        tracing::info!("dock: {} lifted", app.name);
+        self.carry = Some(Carry { slot, app, from, pos, since: now_ns, over: None });
+        self.touched.set(now_ns);
+        crate::fingerprint::buzz("button-pressed");
+        true
+    }
+
+    /// An app from the grid, its finger held still on it: carried, to be
+    /// put on the dock.
+    pub fn carry_new(&mut self, slot: TouchSlot, desktop: &str, pos: Point<f64, Logical>, now_ns: u64) {
+        let Some(app) = app(desktop) else { return };
+        tracing::info!("dock: {} carried from the grid", app.name);
+        self.carry = Some(Carry { slot, app, from: None, pos, since: now_ns, over: None });
+        crate::fingerprint::buzz("button-pressed");
+    }
+
+    pub fn carries(&self, slot: TouchSlot) -> bool {
+        self.carry.as_ref().is_some_and(|c| c.slot == slot)
+    }
+
+    /// The carried icon moves: the half under it opens a place for it.
+    pub fn carry_motion(&mut self, pos: Point<f64, Logical>, frame_ns: u64) {
+        let places = self.places(frame_ns);
+        let Some(c) = self.carry.as_mut() else { return };
+        c.pos = pos;
+        let mut over = None;
+        for h in 0..2 {
+            let p = places[h];
+            let half = &self.halves[h];
+            let w = half_width(half.len().max(1)) as f64;
+            let (x0, x1) = (p.x - TAKE_SIDE, p.x + w + TAKE_SIDE);
+            let (y0, y1) = (p.y - TAKE_ABOVE, p.y + half.size.1 as f64 + 20.0);
+            if pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1 && p.y < layout::LAYOUT.1 as f64 {
+                let at = ((pos.x - p.x - PAD as f64 + (ICON + GAP) as f64 / 2.0) / (ICON + GAP) as f64).floor().max(0.0) as usize;
+                if half.apps.len() < MAX_PER_HALF || c.from.is_some_and(|(fh, _)| fh == h) {
+                    over = Some((h, at.min(half.apps.len())));
+                }
+            }
+        }
+        if over != c.over {
+            if let Some((h, _)) = c.over {
+                let half = &mut self.halves[h];
+                half.target_w = half_width(half.len());
+            }
+            if let Some((h, _)) = over {
+                let half = &mut self.halves[h];
+                half.target_w = half_width(half.len() + 1);
+                self.touched.set(frame_ns);
+            }
+            c.over = over;
+        }
+    }
+
+    /// The carried icon let go: into the place opened for it; far above
+    /// the dock, off it (it dries away); else back where it came from.
+    /// Returns whether the dock's apps changed.
+    pub fn carry_up(&mut self, now_ns: u64) -> bool {
+        let Some(c) = self.carry.take() else { return false };
+        let top = self.places(now_ns).iter().map(|p| p.y).fold(f64::MAX, f64::min);
+        let changed = match (c.over, c.from) {
+            (Some((h, at)), _) => {
+                tracing::info!("dock: {} onto the {} half", c.app.name, if h == 0 { "left" } else { "right" });
+                self.halves[h].apps.insert(at, c.app);
+                let mut popped = self.popped.get();
+                popped[h] = now_ns;
+                self.popped.set(popped);
+                true
+            }
+            (None, Some(_)) if c.pos.y < top - OFF_ABOVE => {
+                tracing::info!("dock: {} off the dock", c.app.name);
+                self.drying = Some(((c.pos.x, c.pos.y), c.app.icon.clone(), now_ns));
+                true
+            }
+            (None, Some((h, i))) => {
+                let n = self.halves[h].apps.len();
+                self.halves[h].apps.insert(i.min(n), c.app);
+                false
+            }
+            (None, None) => {
+                self.drying = Some(((c.pos.x, c.pos.y), c.app.icon.clone(), now_ns));
+                false
+            }
+        };
+        for half in &mut self.halves {
+            half.target_w = half_width(half.len());
+            half.pressed = None;
+        }
+        if changed {
+            // Running apps it was or is now among are worked out again.
+            for half in &mut self.halves {
+                half.extra.clear();
+            }
+            save_config(&self.halves);
+        }
+        changed
+    }
+
     /// The apps running, each with the panel it was opened onto: those on
     /// neither half get an icon at the end of that panel's half, which
     /// makes room for it; gone, it closes up again.
@@ -790,6 +949,17 @@ impl Dock {
     /// screen's left edge is in it, which the drops see through themselves.
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, running: &[String], wall: Option<(&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)>) -> Vec<ShellElement> {
         let mut out = Vec::new();
+        let carried = self.carry.as_ref().map(|c| ((c.pos.x, c.pos.y - 18.0), c.app.icon.clone(), (frame_ns.saturating_sub(c.since) as f64 / CARRY_IN_NS).min(1.0), 1.0f32));
+        let dried = self.drying.as_ref().map(|((x, y), icon, t)| {
+            let k = (frame_ns.saturating_sub(*t) as f64 / DRY_NS).min(1.0);
+            ((*x, *y - 30.0 * k), icon.clone(), 1.0 - k, (1.0 - k) as f32)
+        });
+        let floating: Vec<_> = carried.into_iter().chain(dried).collect();
+        let floating_drops: Vec<ShellElement> = floating
+            .iter()
+            .filter_map(|((x, y), _, k, alpha)| wall.and_then(|w| self.lone(renderer, (*x, *y), CARRY_R * (0.4 + 0.6 * k), frame_ns, 0.8, *alpha, (0.0, [0.0; 3]), w)))
+            .map(ShellElement::Shaded)
+            .collect();
         let places = self.places(frame_ns);
         let bottom = layout::LAYOUT.1 as f64;
         // Whole physical px, so a slab at rest is sharp.
@@ -801,6 +971,15 @@ impl Dock {
                 Err(e) => tracing::warn!("dock: {e}"),
             }
         };
+        // The icon a finger carries, a drop of its own over everything,
+        // lifting out; one let go off the dock, drying away.
+        for ((x, y), icon, k, alpha) in floating.iter() {
+            if let Some(icon) = icon {
+                let s = ICON as f64 * (0.6 + 0.4 * k);
+                push(&mut out, icon, x - s / 2.0, y - s / 2.0, Some((s, s)), Some(Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into())), *alpha);
+            }
+        }
+        out.extend(floating_drops);
         // The drops as they stand: each half's box, its squash, and what
         // the hinge does to it (Shape).
         let shape = self.shape(&places, frame_ns);
@@ -816,11 +995,14 @@ impl Dock {
             let tx = |x: f64| mid + (p.anchor + (x - p.anchor) * p.scale - mid) * sx;
             let ty = |y: f64| foot - (foot - y) * sy;
             let own = half.apps.len();
+            // A place opened for an icon carried over it.
+            let gap = self.carry.as_ref().and_then(|c| c.over).filter(|(oh, _)| *oh == h).map(|(_, g)| g);
             for (i, app) in half.items().enumerate() {
+                let i = if gap.is_some_and(|g| i >= g) { i + 1 } else { i };
                 let c = self.cell(i, &p);
                 // A running app's icon comes up as the drop makes room for
                 // it, and goes as it closes up.
-                let room = if i < own { 1.0 } else { ((half.size.0 as f64 - (PAD + i as i32 * (ICON + GAP)) as f64) / (ICON + PAD) as f64).clamp(0.0, 1.0) };
+                let room = if i < own || gap.is_some() { 1.0 } else { ((half.size.0 as f64 - (PAD + i as i32 * (ICON + GAP)) as f64) / (ICON + PAD) as f64).clamp(0.0, 1.0) };
                 let (cx, cy) = (tx(c.loc.x + ICON as f64 / 2.0), ty(c.loc.y + ICON as f64 / 2.0));
                 // By the hinge an icon goes under with the water: it fades
                 // as it nears the edge, and comes out again past it.
@@ -1434,6 +1616,19 @@ fn config() -> [Vec<String>; 2] {
             lists
         }
         None => DEFAULT.map(|l| l.iter().map(|s| s.to_string()).collect()),
+    }
+}
+
+/// The halves' apps to `~/.config/sfduo/dock.json`, as config() reads it.
+fn save_config(halves: &[Half]) {
+    let Ok(home) = std::env::var("HOME") else { return };
+    let list = |h: &Half| h.apps.iter().map(|a| format!("  \"{}.desktop\"", a.ids.first().cloned().unwrap_or_default())).collect::<Vec<_>>().join(",\n");
+    let text = format!("{{\n \"left\": [\n{}\n ],\n \"right\": [\n{}\n ]\n}}\n", list(&halves[0]), list(&halves[1]));
+    let dir = format!("{home}/.config/sfduo");
+    let _ = std::fs::create_dir_all(&dir);
+    match std::fs::write(format!("{dir}/dock.json"), text) {
+        Ok(()) => tracing::info!("dock: its apps kept"),
+        Err(e) => tracing::warn!("dock: its apps not kept: {e}"),
     }
 }
 

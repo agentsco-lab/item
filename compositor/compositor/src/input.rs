@@ -529,6 +529,11 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.dock.carries(slot) {
+                    self.dock.carry_motion(pos, hybris_hwc::now_ns());
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.dock.holds(slot) {
                     self.dock.motion(slot, pos);
                     self.needs_redraw = true;
@@ -538,6 +543,11 @@ impl State {
                 touch.motion(self, under, &MotionEvent { slot, location: pos, time: msec(time) });
             }
             Contact::Up(slot, time) => {
+                if self.dock.carries(slot) {
+                    self.dock.carry_up(hybris_hwc::now_ns());
+                    self.needs_redraw = true;
+                    return;
+                }
                 if self.ribbon.holds(slot) {
                     self.ribbon.up(slot);
                     self.needs_redraw = true;

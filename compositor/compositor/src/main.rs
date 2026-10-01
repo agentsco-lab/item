@@ -320,6 +320,19 @@ impl Data {
                 self.state.needs_redraw = true;
             }
         }
+        // A finger held still on an app in the grid, or on the dock: the
+        // icon is carried (dock.rs), onto the dock, along it or off it.
+        if !self.state.lock.holds_screen() && !self.state.setup.holds_screen() {
+            if let Some((slot, desktop, pos)) = self.state.grid.lift(now) {
+                self.state.dock.carry_new(slot, &desktop, pos, now);
+                self.state.boost.kick(now);
+                self.state.needs_redraw = true;
+            }
+            if self.state.dock.long_press(now) {
+                self.state.boost.kick(now);
+                self.state.needs_redraw = true;
+            }
+        }
         self.state.lock.idle(now);
         self.state.boost.tick(now);
         if now.saturating_sub(hybris_hwc::last_vsync_ns()) > 50_000_000 {

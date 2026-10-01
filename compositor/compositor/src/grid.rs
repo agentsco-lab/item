@@ -191,6 +191,19 @@ impl Grid {
         Some(slot)
     }
 
+    /// A finger held still on an app in the grid for LONG_PRESS_NS: the
+    /// grid goes down so the dock shows, and the app is the dock's to
+    /// carry - its finger, its desktop file, where the finger is.
+    pub fn lift(&mut self, now_ns: u64) -> Option<(TouchSlot, String, Point<f64, Logical>)> {
+        let p = self.pending.as_ref().filter(|p| p.on_grid && p.cell.is_some() && now_ns >= p.at + LONG_PRESS_NS)?;
+        let (slot, start, i) = (p.slot, p.start, p.cell.unwrap());
+        self.pending = None;
+        self.pressed = None;
+        self.run_to(0.0, now_ns);
+        let desktop = format!("{}.desktop", self.entries[i].ids.first().cloned().unwrap_or_default());
+        Some((slot, desktop, start))
+    }
+
     pub fn holds(&self, slot: TouchSlot) -> bool {
         self.pending.as_ref().is_some_and(|p| p.slot == slot) || self.grab.as_ref().is_some_and(|g| g.slot == slot)
     }
