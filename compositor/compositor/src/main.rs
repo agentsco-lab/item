@@ -46,6 +46,7 @@ mod pam;
 mod pensheet;
 mod protocols;
 mod quick;
+mod ribbon;
 mod shade;
 mod state;
 mod sysscreen;
@@ -508,6 +509,14 @@ impl Data {
         }
         if self.state.lock.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
+        }
+        // The ribbon: frames while it moves; where it stopped, applied.
+        if self.state.ribbon.settle(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(now);
+        }
+        if self.state.ribbon.unsettled && !self.state.ribbon.moving() {
+            self.state.apply_ribbon();
         }
         if self.state.system.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;

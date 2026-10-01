@@ -81,6 +81,8 @@ pub struct SystemScreen {
     page: Option<MemoryRenderBuffer>,
     last_read_ns: u64,
     wake: Ping,
+    /// The ribbon may bring the page: it is kept drawn.
+    wanted: bool,
     id: Id,
     fonts: Option<(Font, Font)>,
 }
@@ -99,6 +101,7 @@ impl SystemScreen {
             page: None,
             last_read_ns: 0,
             wake,
+            wanted: false,
             id: Id::new(),
             fonts: thin.zip(regular),
         }
@@ -115,6 +118,29 @@ impl SystemScreen {
                 r.from + (r.to - r.from) * (1.0 - (1.0 - k).powi(3))
             }
             None => self.p,
+        }
+    }
+
+    /// Out or not at once, as the ribbon has it (ribbon.rs): its page is
+    /// on the left panel, or not.
+    pub fn show(&mut self, out: bool) {
+        let was = self.p > 0.0;
+        self.grab = None;
+        self.run = None;
+        self.p = if out { 1.0 } else { 0.0 };
+        if out && !was {
+            self.read();
+        }
+        // Not shown, the page is kept for the ribbon to carry in again.
+        self.wanted = out;
+    }
+
+    /// Read now, for the ribbon to show the page as it comes; the page is
+    /// kept up to date while it may.
+    pub fn ready(&mut self) {
+        self.wanted = true;
+        if hybris_hwc::now_ns().saturating_sub(self.last_read_ns) > READ_EVERY_NS || self.page.is_none() {
+            self.read();
         }
     }
 
@@ -211,7 +237,7 @@ impl SystemScreen {
 
     /// The page drawn again if what it shows changed; whether it did.
     pub fn refresh(&mut self) -> bool {
-        if !self.out() {
+        if !self.out() && !self.wanted {
             return false;
         }
         let facts = self.facts.lock().unwrap().clone();
@@ -227,7 +253,15 @@ impl SystemScreen {
     }
 
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
-        let p = self.at(frame_ns);
+        self.drawn_at(renderer, self.at(frame_ns))
+    }
+
+    /// The page all the way out, wherever it is: for the ribbon to carry.
+    pub fn picture(&self, renderer: &mut GlesRenderer) -> Vec<ShellElement> {
+        self.drawn_at(renderer, 1.0)
+    }
+
+    fn drawn_at(&self, renderer: &mut GlesRenderer, p: f64) -> Vec<ShellElement> {
         if p <= 0.0 {
             return Vec::new();
         }

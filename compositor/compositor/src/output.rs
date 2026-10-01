@@ -55,6 +55,8 @@ render_elements! {
     Shaded=smithay::backend::renderer::gles::element::TextureShaderElement,
     /// Drawn by a shader of ours alone: the first setup's circle (orb.frag).
     Pixel=smithay::backend::renderer::gles::element::PixelShaderElement,
+    /// The shell's own, carried along the ribbon with its page.
+    Carried=RelocateRenderElement<ShellElement>,
 }
 
 /// The rows of the screen's bottom a run of frames keeps: the dock and above.
@@ -139,6 +141,8 @@ pub struct Screen {
     /// Night light's shader (night.frag), and the colour it last warmed to.
     night_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     night_was: Option<[f32; 3]>,
+    /// The ribbon's dot.
+    dot: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
     _hwc: HwcOutput,
 }
 
@@ -195,7 +199,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, glass_for: 0, night_program: None, night_was: None, dot: None, _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -298,11 +302,66 @@ impl Screen {
         // The keyboard and other layer surfaces, over the windows and the dock.
         elements.extend(state.layers.elements(&mut self.renderer).into_iter().map(FrameElement::Window));
         let running = state.running();
-        elements.extend(state.system.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        elements.extend(state.pen.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // The ribbon moving (ribbon.rs): each page where it is on its way,
+        // what belongs to a panel's page carried with it.
+        let ribbon = state.ribbon.moving();
+        let xs = if ribbon { state.ribbon.xs(frame_ns) } else { Vec::new() };
+        let width = crate::layout::LAYOUT.0 as f64;
+        let seen = |x: f64| x > -crate::ribbon::PAGE && x < width;
+        let carry = |parts: Vec<ShellElement>, dx: f64| -> Vec<FrameElement> {
+            let at = smithay::utils::Point::<i32, smithay::utils::Physical>::from(((dx * SCALE as f64).round() as i32, 0));
+            parts.into_iter().map(|e| FrameElement::Carried(RelocateRenderElement::from_element(e, at, Relocate::Relative))).collect()
+        };
+        // Its dots, over the bottom of the left panel.
+        if let Some((n, pos, alpha)) = state.ribbon.dots(frame_ns) {
+            let dot = self.dot.get_or_insert_with(|| crate::grid::rounded(7.0, 7.0, 3.5, [255, 255, 255, 255])).clone();
+            let left = crate::layout::panels()[0];
+            let step = 16.0;
+            let x0 = left.loc.x as f64 + (left.size.w as f64 - (n as f64 - 1.0) * step - 7.0) / 2.0;
+            for i in 0..n {
+                // The two pages shown are lit, the rest dim.
+                let near = (1.0 - (i as f64 - pos).abs()).max(0.0).max((1.0 - (i as f64 - pos - 1.0).abs()).max(0.0));
+                let a = alpha * (0.3 + 0.7 * near as f32);
+                let loc = (((x0 + i as f64 * step) * SCALE as f64).round(), ((left.size.h as f64 - 18.0) * SCALE as f64).round());
+                if let Ok(e) = smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement::from_buffer(&mut self.renderer, loc, &dot, Some(a), None, None, smithay::backend::renderer::element::Kind::Unspecified) {
+                    elements.push(FrameElement::Shell(ShellElement::Text(e)));
+                }
+            }
+        }
+        if ribbon {
+            for (page, x) in &xs {
+                match page {
+                    crate::ribbon::Page::System if seen(*x) => {
+                        let parts = state.system.picture(&mut self.renderer);
+                        elements.extend(carry(parts, *x));
+                    }
+                    crate::ribbon::Page::Pen if seen(*x) => {
+                        let parts = state.pen.picture(&mut self.renderer);
+                        elements.extend(carry(parts, *x - crate::ribbon::PAGE));
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            elements.extend(state.system.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+            elements.extend(state.pen.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        }
         elements.extend(state.grid.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
-        elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running).into_iter().map(FrameElement::from));
-        elements.extend(state.clock.elements(&mut self.renderer, state.dock.home_panel()).into_iter().map(FrameElement::from));
+        // The dock's halves and the clock, each with the page of its panel.
+        let hinge = (crate::layout::panels()[0].loc.x + crate::layout::panels()[0].size.w) as f64 * SCALE as f64;
+        let dock = state.dock.elements(&mut self.renderer, frame_ns, &running);
+        let clock = state.clock.elements(&mut self.renderer, state.dock.home_panel());
+        if ribbon {
+            use smithay::backend::renderer::element::Element;
+            for e in dock.into_iter().chain(clock) {
+                let k = if (e.geometry(smithay::utils::Scale::from(SCALE as f64)).loc.x as f64) < hinge { 0 } else { 1 };
+                let dx = state.ribbon.carried(k, frame_ns).unwrap_or(0.0);
+                elements.extend(carry(vec![e], dx));
+            }
+        } else {
+            elements.extend(dock.into_iter().map(FrameElement::from));
+            elements.extend(clock.into_iter().map(FrameElement::from));
+        }
         // The windows, topmost first; one put away or brought back as the
         // gesture has it (gesture.rs).
         let scale = smithay::utils::Scale::from(SCALE as f64);
@@ -331,7 +390,21 @@ impl Screen {
             )));
         }
         let context = self.renderer.context_id();
-        for window in state.space.elements().rev() {
+        // The ribbon moving: the windows on its pages where they are on
+        // their way, not where they stand.
+        if ribbon {
+            for (page, x) in &xs {
+                if let crate::ribbon::Page::App(window) = page {
+                    if !seen(*x) {
+                        continue;
+                    }
+                    let loc = smithay::utils::Point::<i32, smithay::utils::Physical>::from(((x * SCALE as f64).round() as i32, 0));
+                    let parts: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = window.render_elements(&mut self.renderer, loc, scale, 1.0);
+                    elements.extend(parts.into_iter().map(FrameElement::Window));
+                }
+            }
+        }
+        for window in state.space.elements().rev().filter(|_| !ribbon) {
             let Some(mut loc) = state.space.element_location(window) else { continue };
             // Its last frame, in case it closes.
             let surface = window.toplevel().unwrap().wl_surface();

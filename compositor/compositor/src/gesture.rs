@@ -94,6 +94,12 @@ impl Gestures {
         self.grab.as_ref().is_some_and(|g| g.slot == slot)
     }
 
+    /// The finger went sideways, not up: it is the ribbon's, and the window
+    /// stays where it is.
+    pub fn let_go(&mut self, slot: TouchSlot) {
+        self.grab.take_if(|g| g.slot == slot);
+    }
+
     pub fn motion(&mut self, slot: TouchSlot, y: f64, time_us: u64) {
         let Some(g) = self.grab.as_mut().filter(|g| g.slot == slot) else { return };
         let dt = time_us.saturating_sub(g.last.0) as f64 / 1000.0;

@@ -122,6 +122,11 @@ pub struct State {
     pub paces: crate::pace::Paces,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
+    /// A touch in a panel's bottom band, until it shows which way it goes:
+    /// up puts the window away, sideways moves the ribbon.
+    pub bottom_start: Option<(smithay::backend::input::TouchSlot, Point<f64, Logical>)>,
+    /// Every page in one row, the panels a window onto it (ribbon.rs).
+    pub ribbon: crate::ribbon::Ribbon,
     /// The panel the next window goes to, asked for by a launch from the
     /// dock, and when (CLOCK_MONOTONIC ns).
     pub launch_to: Option<(usize, u64)>,
@@ -191,6 +196,8 @@ impl State {
             pen_drawing: false,
             paces: Default::default(),
             put_away: Vec::new(),
+            ribbon: crate::ribbon::Ribbon::new(),
+            bottom_start: None,
             launch_to: None,
             socket_name: Default::default(),
         }
@@ -238,7 +245,7 @@ impl State {
 
     /// The app ids of the apps with a window, shown or put away.
     pub fn running(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.space.elements().chain(self.put_away.iter().map(|(w, _)| w)).map(app_id).collect();
+        let mut ids: Vec<String> = self.windows().iter().map(app_id).collect();
         ids.sort();
         ids.dedup();
         ids
@@ -274,10 +281,8 @@ impl State {
     /// The open windows, shown and put away, topmost first, as rows.
     pub fn window_rows(&self) -> Vec<(Window, crate::quick::Row)> {
         let entries = &self.entries;
-        self.space
-            .elements()
-            .rev()
-            .chain(self.put_away.iter().map(|(w, _)| w))
+        self.windows()
+            .iter()
             .map(|w| {
                 let id = app_id(w);
                 let entry = entries.iter().find(|e| e.ids.contains(&id));
@@ -285,6 +290,69 @@ impl State {
                 (w.clone(), crate::quick::Row { app_id: id, name, icon: entry.and_then(|e| e.icon.clone()), detail: None })
             })
             .collect()
+    }
+
+    /// Every window: those in the ribbon (shown first), then those put away.
+    pub fn windows(&self) -> Vec<Window> {
+        let mut out: Vec<Window> = self.space.elements().rev().cloned().collect();
+        for page in &self.ribbon.pages {
+            if let crate::ribbon::Page::App(w) = page {
+                if !out.contains(w) {
+                    out.push(w.clone());
+                }
+            }
+        }
+        for (w, _) in &self.put_away {
+            if !out.contains(w) {
+                out.push(w.clone());
+            }
+        }
+        out
+    }
+
+    /// Where the ribbon stopped, applied: the windows on the pages shown
+    /// mapped onto their panels, the others out of the space; the system
+    /// screen and the pen's sheet out if their pages are shown. The dock,
+    /// carried off with its pages, rises again where it now stands.
+    pub fn apply_ribbon(&mut self) {
+        use crate::ribbon::Page;
+        self.ribbon.unsettled = false;
+        let panels = layout::panels();
+        let shown = [self.ribbon.on(0).cloned(), self.ribbon.on(1).cloned()];
+        let windows: Vec<Window> = self.ribbon.pages.iter().filter_map(|p| if let Page::App(w) = p { Some(w.clone()) } else { None }).collect();
+        for w in windows {
+            match shown.iter().position(|s| s.as_ref() == Some(&Page::App(w.clone()))) {
+                Some(k) => {
+                    let rect = panels[k];
+                    if self.space.element_location(&w) != Some(rect.loc) {
+                        let cut = match self.osk_applied {
+                            Some((kp, h)) if kp == k => h,
+                            _ => 0,
+                        };
+                        w.toplevel().unwrap().with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - cut).into()));
+                        w.toplevel().unwrap().send_pending_configure();
+                        self.space.map_element(w.clone(), rect.loc, false);
+                    }
+                }
+                None => {
+                    if self.space.elements().any(|e| e == &w) {
+                        self.space.unmap_elem(&w);
+                    }
+                }
+            }
+        }
+        self.system.show(shown[0] == Some(Page::System));
+        self.pen.show(shown[1] == Some(Page::Pen));
+        // The keyboard to a window shown: the one it had, else the left's.
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let shown_surfaces: Vec<_> = self.space.elements().map(|w| w.toplevel().unwrap().wl_surface().clone()).collect();
+        if !keyboard.current_focus().is_some_and(|f| shown_surfaces.contains(&f)) {
+            let next = self.top_window(0).or_else(|| self.top_window(1)).map(|w| w.toplevel().unwrap().wl_surface().clone());
+            keyboard.set_focus(self, next, smithay::utils::SERIAL_COUNTER.next_serial());
+        }
+        self.dock.hide_now();
+        tracing::info!("ribbon: applied, {:?} | {:?}", shown[0], shown[1]);
+        self.needs_redraw = true;
     }
 
     /// A tap on a shade: a window closed, Settings opened.
@@ -335,6 +403,7 @@ impl State {
     pub fn put_window_away(&mut self, window: Window, panel: usize) {
         tracing::info!("put away: {} from the {} panel", app_id(&window), if panel == 0 { "left" } else { "right" });
         self.space.unmap_elem(&window);
+        self.ribbon.remove(&window);
         self.put_away.push((window.clone(), panel));
         // The keyboard goes to what is left on top.
         let keyboard = self.seat.get_keyboard().unwrap();
@@ -364,17 +433,17 @@ impl State {
     /// focus (item's "an open app, called to the other panel"). Returns
     /// whether it had one.
     pub fn call_over(&mut self, ids: &[String], panel: usize) -> bool {
-        let Some(window) = self.space.elements().rev().find(|w| ids.iter().any(|id| id == &app_id(w))).cloned() else {
+        let in_row = self.ribbon.pages.iter().rev().find_map(|p| match p {
+            crate::ribbon::Page::App(w) if ids.iter().any(|id| id == &app_id(w)) => Some(w.clone()),
+            _ => None,
+        });
+        let Some(window) = in_row else {
             return false;
         };
-        let rect = layout::panels()[panel];
-        let from = self.space.element_location(&window).unwrap_or(rect.loc);
-        if from != rect.loc {
-            window.toplevel().unwrap().with_pending_state(|s| s.size = Some(rect.size));
-            window.toplevel().unwrap().send_pending_configure();
-            self.gestures.slide(window.clone(), from.x, rect.loc.x, hybris_hwc::now_ns());
+        // Its page to the panel asked for, the row running there.
+        if self.ribbon.on(panel) != Some(&crate::ribbon::Page::App(window.clone())) {
+            self.ribbon.open(window.clone(), panel);
         }
-        self.space.map_element(window.clone(), rect.loc, true);
         let surface = window.toplevel().unwrap().wl_surface().clone();
         self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
         tracing::info!("called over: {} onto the {} panel", app_id(&window), if panel == 0 { "left" } else { "right" });
@@ -414,6 +483,7 @@ impl State {
         let rect = layout::panels()[panel];
         window.toplevel().unwrap().with_pending_state(|s| s.size = Some(rect.size));
         window.toplevel().unwrap().send_pending_configure();
+        self.ribbon.open(window.clone(), panel);
         self.space.map_element(window.clone(), rect.loc, true);
         self.gestures.bring_back(window.clone(), panel, hybris_hwc::now_ns());
         let surface = window.toplevel().unwrap().wl_surface().clone();
@@ -589,6 +659,8 @@ impl XdgShellHandler for State {
             self.curtain.adopt(p, surface.wl_surface());
         }
         let window = Window::new_wayland_window(surface);
+        let p = panels.iter().position(|r| *r == panel).unwrap_or(0);
+        self.ribbon.open(window.clone(), p);
         self.space.map_element(window.clone(), panel.loc, true);
         self.needs_redraw = true;
         tracing::info!(
@@ -602,6 +674,15 @@ impl XdgShellHandler for State {
         // The space drops the window at its next refresh; the dock may come
         // back onto its panel. Its last frame is seen closing.
         self.closing.push((surface.wl_surface().id(), hybris_hwc::now_ns()));
+        // Its page leaves the row.
+        let page = self.ribbon.pages.iter().find_map(|p| match p {
+            crate::ribbon::Page::App(w) if w.toplevel().unwrap().wl_surface() == surface.wl_surface() => Some(w.clone()),
+            _ => None,
+        });
+        if let Some(w) = page {
+            self.ribbon.remove(&w);
+        }
+        self.put_away.retain(|(w, _)| w.toplevel().unwrap().wl_surface() != surface.wl_surface());
         self.needs_redraw = true;
     }
 

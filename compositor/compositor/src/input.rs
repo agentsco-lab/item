@@ -107,6 +107,15 @@ fn pen_slot() -> TouchSlot {
 }
 
 impl State {
+    /// A finger takes the ribbon at x: the pages that may come are made
+    /// ready to be drawn.
+    fn ribbon_grab(&mut self, slot: TouchSlot, x: f64, time: u64) {
+        self.system.ready();
+        self.pen.ready();
+        self.ribbon.grab(slot, x, time);
+        self.needs_redraw = true;
+    }
+
     fn on_input(&mut self, event: InputEvent<LibinputInputBackend>) {
         let contact = match event {
             // The keys: power, volume (evdev codes, +8 for xkb).
@@ -276,14 +285,21 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
-                // The system screen, when it is out (sysscreen.rs).
-                if self.system.down(slot, pos, time) {
+                // The ribbon caught while it runs: it stops under the finger.
+                if self.ribbon.moving() {
+                    self.ribbon_grab(slot, pos.x, time);
+                    return;
+                }
+                // The pen's sheet's buttons (pensheet.rs).
+                if self.pen.down(slot, pos, time) {
                     self.needs_redraw = true;
                     return;
                 }
-                // The pen's sheet, when it is out (pensheet.rs).
-                if self.pen.down(slot, pos, time) {
-                    self.needs_redraw = true;
+                // The system screen or the pen's sheet shown: a finger on
+                // them moves the ribbon.
+                let panel = crate::layout::panel_at(pos);
+                if (self.system.out() && panel == Some(0)) || (self.pen.out() && panel == Some(1)) {
+                    self.ribbon_grab(slot, pos.x, time);
                     return;
                 }
                 if self.dock.down(slot, pos) {
@@ -304,6 +320,7 @@ impl State {
                     if let Some(panel) = crate::layout::panel_at(pos) {
                         if let Some(window) = self.top_window(panel) {
                             self.gestures.down(slot, pos, time, window, panel);
+                            self.bottom_start = Some((slot, pos));
                             return;
                         }
                     }
@@ -333,13 +350,13 @@ impl State {
                 touch.down(self, under, &DownEvent { slot, location: pos, serial, time: msec(time) });
             }
             Contact::Motion(slot, pos, time) => {
-                if self.shade.holds(slot) {
-                    self.shade.motion_at(slot, pos.x, pos.y, time);
+                if self.ribbon.holds(slot) {
+                    self.ribbon.motion(slot, pos.x, time);
                     self.needs_redraw = true;
                     return;
                 }
-                if self.system.holds(slot) {
-                    self.system.motion(slot, pos, time);
+                if self.shade.holds(slot) {
+                    self.shade.motion_at(slot, pos.x, pos.y, time);
                     self.needs_redraw = true;
                     return;
                 }
@@ -359,16 +376,10 @@ impl State {
                             self.shade.grab_from(slot, start.x, start.y, time);
                             self.shade.motion(slot, pos.y, time);
                         }
-                        // A swipe right on the left panel's desktop: the
-                        // system screen comes in with the finger.
-                        crate::grid::Ask::System(start) => {
-                            self.system.grab_from(slot, start, time);
-                            self.system.motion(slot, pos, time);
-                        }
-                        // Left on the right panel's: the pen's sheet.
-                        crate::grid::Ask::Pen(start) => {
-                            self.pen.grab_from(slot, start, time);
-                            self.pen.motion(slot, pos, time);
+                        // Sideways on a desktop: the ribbon, with the finger.
+                        crate::grid::Ask::Ribbon(start) => {
+                            self.ribbon_grab(slot, start.x, time);
+                            self.ribbon.motion(slot, pos.x, time);
                         }
                         _ => {}
                     }
@@ -376,6 +387,21 @@ impl State {
                     return;
                 }
                 if self.gestures.holds(slot) {
+                    // Sideways along the bottom edge: the ribbon, not away.
+                    if let Some((_, start)) = self.bottom_start.filter(|(s, _)| *s == slot) {
+                        let (dx, dy) = (pos.x - start.x, pos.y - start.y);
+                        if dx.abs() > 14.0 && dx.abs() > dy.abs() * 1.2 {
+                            self.bottom_start = None;
+                            self.gestures.let_go(slot);
+                            self.ribbon_grab(slot, start.x, time);
+                            self.ribbon.motion(slot, pos.x, time);
+                            self.needs_redraw = true;
+                            return;
+                        }
+                        if dy.abs() > 14.0 {
+                            self.bottom_start = None;
+                        }
+                    }
                     self.gestures.motion(slot, pos.y, time);
                     self.needs_redraw = true;
                     return;
@@ -389,15 +415,18 @@ impl State {
                 touch.motion(self, under, &MotionEvent { slot, location: pos, time: msec(time) });
             }
             Contact::Up(slot, time) => {
+                if self.ribbon.holds(slot) {
+                    self.ribbon.up(slot);
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.bottom_start.is_some_and(|(s, _)| s == slot) {
+                    self.bottom_start = None;
+                }
                 if self.shade.holds(slot) {
                     if let Some(ask) = self.shade.up(slot) {
                         self.shade_ask(ask);
                     }
-                    self.needs_redraw = true;
-                    return;
-                }
-                if self.system.holds(slot) {
-                    self.system.up(slot);
                     self.needs_redraw = true;
                     return;
                 }
@@ -444,6 +473,8 @@ impl State {
                 self.back.cancel();
                 self.system.cancel();
                 self.pen.cancel();
+                self.ribbon.cancel();
+                self.bottom_start = None;
                 self.needs_redraw = true;
                 touch.cancel(self)
             }

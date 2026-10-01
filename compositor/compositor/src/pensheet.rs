@@ -121,6 +121,17 @@ impl PenSheet {
         }
     }
 
+    /// Out or not at once, as the ribbon has it (ribbon.rs): its page is
+    /// on the right panel, or not.
+    pub fn show(&mut self, out: bool) {
+        self.grab = None;
+        self.run = None;
+        if out {
+            self.canvas();
+        }
+        self.p = if out { 1.0 } else { 0.0 };
+    }
+
     pub fn out(&self) -> bool {
         self.p > 0.0 || self.grab.is_some() || self.run.is_some()
     }
@@ -167,14 +178,15 @@ impl PenSheet {
         if !self.out() || layout::panel_at(pos) != Some(1) {
             return false;
         }
+        // A toolbar button; the rest of a finger's touches move the ribbon.
+        let _ = time_us;
         if self.open() {
             if let Some(b) = Self::button_at(pos) {
                 self.pressed = Some((slot, b));
                 return true;
             }
         }
-        self.grab_from(slot, pos, time_us);
-        true
+        false
     }
 
     pub fn holds(&self, slot: TouchSlot) -> bool {
@@ -378,7 +390,20 @@ impl PenSheet {
     }
 
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
-        let p = self.at(frame_ns);
+        self.drawn_at(renderer, self.at(frame_ns))
+    }
+
+    /// The sheet all the way out, wherever it is: for the ribbon to carry.
+    pub fn picture(&self, renderer: &mut GlesRenderer) -> Vec<ShellElement> {
+        self.drawn_at(renderer, 1.0)
+    }
+
+    /// Its canvas made, for the ribbon to show it as it comes.
+    pub fn ready(&mut self) {
+        self.canvas();
+    }
+
+    fn drawn_at(&self, renderer: &mut GlesRenderer, p: f64) -> Vec<ShellElement> {
         let Some(canvas) = &self.canvas else { return Vec::new() };
         if p <= 0.0 {
             return Vec::new();

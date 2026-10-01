@@ -54,10 +54,8 @@ pub enum Ask {
     Nothing,
     /// Pull the shade: the touch began here.
     Shade(Point<f64, Logical>),
-    /// Bring the system screen: the touch began here.
-    System(Point<f64, Logical>),
-    /// Bring the pen's sheet: the touch began here.
-    Pen(Point<f64, Logical>),
+    /// Move the ribbon sideways: the touch began here.
+    Ribbon(Point<f64, Logical>),
     /// Launch (or bring back) an app onto a panel.
     Launch { exec: String, ids: Vec<String>, icon: Option<String>, panel: usize },
 }
@@ -194,13 +192,8 @@ impl Grid {
         let p = self.pending.take().unwrap();
         self.pressed = None;
         if dy.abs() <= dx.abs() {
-            // Right on the left panel's desktop: the system screen; left on
-            // the right one's: the pen's sheet.
-            return match (p.on_grid, p.panel, dx > 0.0) {
-                (false, 0, true) => Ask::System(p.start),
-                (false, 1, false) => Ask::Pen(p.start),
-                _ => Ask::Nothing,
-            };
+            // Sideways on a desktop: the ribbon moves with the finger.
+            return if p.on_grid { Ask::Nothing } else { Ask::Ribbon(p.start) };
         }
         let now = hybris_hwc::now_ns();
         match (p.on_grid, dy < 0.0) {

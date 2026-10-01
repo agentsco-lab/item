@@ -350,6 +350,19 @@ impl Dock {
         true
     }
 
+    /// Hidden at once, no motion: the ribbon carried the halves off with
+    /// their pages, and they rise again where the panels now let them.
+    pub fn hide_now(&mut self) {
+        if self.mode != Mode::Hidden {
+            self.shown = self.mode;
+        }
+        self.mode = Mode::Hidden;
+        self.moving = None;
+        for half in &mut self.halves {
+            half.pressed = None;
+        }
+    }
+
     /// After a frame for `frame_ns`: whether the halves are still moving.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
         if let Some(at) = self.rise {
