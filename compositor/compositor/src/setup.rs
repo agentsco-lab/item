@@ -120,6 +120,8 @@ enum Step {
     /// The PIN being checked or set.
     Saving,
     Finger,
+    /// A finger is known already: on, or another.
+    FingerKnown,
     Done,
 }
 
@@ -281,6 +283,9 @@ pub struct Setup {
     orb_ns: u64,
     started: u64,
     button_bg: MemoryRenderBuffer,
+    /// A second, quieter button under the first (Add another), and its word.
+    button2_bg: MemoryRenderBuffer,
+    button2: Label,
     arrow: Option<MemoryRenderBuffer>,
     id: Id,
 }
@@ -340,6 +345,8 @@ impl Setup {
             orb_ns: 0,
             started: 0,
             button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, CORAL),
+            button2_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [46, 46, 46, 46]),
+            button2: Label::new(19.0, WHITE),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
             id: Id::new(),
         }
@@ -477,6 +484,15 @@ impl Setup {
                 }
                 self.enrolling = true;
             }
+            Step::FingerKnown => {
+                let n = self.fingers;
+                let known = if n == 1 { "A fingerprint is already added:".to_owned() } else { format!("{n} fingerprints are already added:") };
+                self.text("Your fingerprint", &[&known, "touch the sensor to unlock.", "Add another, or carry on."], "Continue", 150.0);
+                if let Some((_, regular)) = &self.fonts {
+                    self.button2.set(regular, "Add another");
+                }
+                self.lit = 1.0;
+            }
             Step::Done => self.text("All set", &["Touch the sensor to unlock,", "or swipe up for your PIN."], "Start", WELCOME_Y + 90.0),
         }
     }
@@ -515,6 +531,8 @@ impl Setup {
                 let accent = std::array::from_fn(|i| ACCENT[i] + (GREEN[i] - ACCENT[i]) * green);
                 Orb { x: middle(1), y: READER_Y, r: PRINT_R + 6.0 * flash, base: dim(0.2), accent, print: 1.0, flash, ..orb }
             }
+            // The known finger: the print whole in the drop, lit.
+            Step::FingerKnown => Orb { x: middle(1), y: READER_Y, r: PRINT_R, base: dim(0.2), print: 1.0, lit: 1.0, ..orb },
             // A drop again, the dock's size: it goes on to be the dock.
             Step::Done => Orb { r: LAST_DROP_R, ..orb },
         }
@@ -574,9 +592,13 @@ impl Setup {
                 Ok(pin) => {
                     tracing::info!("setup: the PIN {}", if self.dry { "kept (dry)" } else { "is set" });
                     self.pin_for_keyring = Some(pin);
-                    self.go(Step::Finger);
-                    if !self.dry {
-                        fingerprint.enroll(&format!("finger {}", self.fingers + 1));
+                    if self.fingers > 0 {
+                        self.go(Step::FingerKnown);
+                    } else {
+                        self.go(Step::Finger);
+                        if !self.dry {
+                            fingerprint.enroll(&format!("finger {}", self.fingers + 1));
+                        }
                     }
                 }
                 Err(e) => {
@@ -697,6 +719,12 @@ impl Setup {
         Rectangle::new(((right.loc.x as f64 + (right.size.w as f64 - BUTTON_W) / 2.0), 640.0).into(), (BUTTON_W, BUTTON_H).into())
     }
 
+    /// The second button, under the first.
+    fn button2_rect() -> Rectangle<f64, smithay::utils::Logical> {
+        let b = Self::button_rect();
+        Rectangle::new((b.loc.x, b.loc.y + BUTTON_H + 16.0).into(), b.size)
+    }
+
     fn has_pad(&self) -> bool {
         matches!(self.step, Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving)
     }
@@ -721,10 +749,19 @@ impl Setup {
             }
             return;
         }
+        if self.step == Step::FingerKnown && Self::button2_rect().contains((x, y)) {
+            tracing::info!("setup: another finger");
+            self.go(Step::Finger);
+            if !self.dry {
+                fingerprint.enroll(&format!("finger {}", self.fingers + 1));
+            }
+            return;
+        }
         if !Self::button_rect().contains((x, y)) {
             return;
         }
         match self.step {
+            Step::FingerKnown => self.go(Step::Done),
             Step::Welcome => self.go(Step::Checking),
             Step::Finger => {
                 // Later: the reader stops.
@@ -839,7 +876,7 @@ impl Setup {
         self.orb.y -= ARC * (target.x - self.from.x).abs() * (std::f64::consts::PI * e).sin();
         // The print's ridges come once the circle is nearly there; a touch
         // not taken shakes it.
-        if self.step == Step::Finger {
+        if matches!(self.step, Step::Finger | Step::FingerKnown) {
             let since = frame_ns as f64 - (self.moved_at as f64 + self.move_ns * 0.7);
             self.orb.print = ease(since / PRINT_IN_NS);
             if let Some(t) = self.poor_at {
@@ -955,6 +992,12 @@ impl Setup {
             let b = Self::button_rect();
             put(&mut out, &w.button.buffer, b.loc.x + (BUTTON_W - w.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - w.button.extent.h as f64) / 2.0 + dy, a, None);
             put(&mut out, &self.button_bg, b.loc.x, b.loc.y + dy, a, None);
+        }
+        if self.step == Step::FingerKnown {
+            let (a, dy) = coming(self.right_at() + WORDS_GAP_NS);
+            let b = Self::button2_rect();
+            put(&mut out, &self.button2.buffer, b.loc.x + (BUTTON_W - self.button2.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - self.button2.extent.h as f64) / 2.0 + dy, a, None);
+            put(&mut out, &self.button2_bg, b.loc.x, b.loc.y + dy, a, None);
         }
 
         // The wallpaper through, darkened, over everything else (the output

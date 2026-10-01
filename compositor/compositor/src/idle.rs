@@ -137,8 +137,10 @@ impl Idle {
                                 .unwrap_or(false);
                             i.store(inhibited, Ordering::Relaxed);
                         }
-                        let out = std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.session", "idle-delay"]).output();
-                        if let Some(s) = out.ok().and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().last().and_then(|v| v.parse::<u64>().ok())) {
+                        // IDLE_DELAY=S (tests): this delay, the setting left alone.
+                        let forced = std::env::var("IDLE_DELAY").ok().and_then(|v| v.parse::<u64>().ok());
+                        let out = forced.is_none().then(|| std::process::Command::new("gsettings").args(["get", "org.gnome.desktop.session", "idle-delay"]).output());
+                        if let Some(s) = forced.or_else(|| out.and_then(|o| o.ok()).and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().last().and_then(|v| v.parse::<u64>().ok()))) {
                             d.store(s * 1_000_000_000, Ordering::Relaxed);
                         }
                     }
