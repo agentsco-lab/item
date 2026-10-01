@@ -139,6 +139,9 @@ pub struct State {
     pub calls: crate::calls::Calls,
     /// The privacy dot: camera, microphone, location in use.
     pub privacy: crate::privacy::Privacy,
+    /// Who opens pages over whom (org.sfduo.Dock.Follow) and the windows
+    /// asked to be shown again (org.sfduo.Phoc.Present).
+    pub follow: crate::follow::Follow,
     pub asker: Asker,
     /// When the power key went down, unlocked and lit (input.rs).
     pub power_down_at: Option<u64>,
@@ -233,6 +236,7 @@ impl State {
             wifi: crate::nm::Wifi::new(wake.clone()),
             calls: crate::calls::Calls::new(wake.clone()),
             privacy: crate::privacy::Privacy::new(wake.clone()),
+            follow: crate::follow::Follow::new(wake.clone()),
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),
@@ -367,6 +371,44 @@ impl State {
         self.needs_redraw = true;
     }
 
+    /// Pages over their leaders (follow.rs): a window asked to be shown
+    /// again comes back, on its leader's panel; a follower's window not yet
+    /// over its leader's page goes over it. Returns whether anything did.
+    pub fn follow_pages(&mut self) -> bool {
+        let mut changed = false;
+        for id in self.follow.take_present() {
+            let leader = self.follow.leader(&id);
+            let panel = (0..2)
+                .find(|&p| matches!(self.ribbon.on(p), Some(crate::ribbon::Page::App(w)) if leader.as_deref() == Some(app_id(w).as_str())))
+                .unwrap_or(1);
+            if self.bring_back(&[id.clone()], panel) {
+                tracing::info!("follow: {id} presented");
+                changed = true;
+            }
+        }
+        let followers: Vec<(Window, Window)> = self
+            .ribbon
+            .pages
+            .iter()
+            .filter_map(|p| match p {
+                crate::ribbon::Page::App(w) if !self.ribbon.covered.iter().any(|(f, _)| f == w) => {
+                    let leader = self.follow.leader(&app_id(w))?;
+                    let l = self.ribbon.pages.iter().find_map(|q| match q {
+                        crate::ribbon::Page::App(lw) if lw != w && app_id(lw) == leader => Some(lw.clone()),
+                        _ => None,
+                    })?;
+                    Some((w.clone(), l))
+                }
+                _ => None,
+            })
+            .collect();
+        for (follower, leader) in followers {
+            self.ribbon.cover(&leader, &follower);
+            changed = true;
+        }
+        changed
+    }
+
     /// A window opened onto a panel, for its app's icon in the dock.
     fn opened_onto(&mut self, window: &Window, panel: usize) {
         self.opened_on.retain(|(w, _)| w != window);
@@ -378,7 +420,14 @@ impl State {
         // (the right one if not known).
         let windows = self.windows();
         self.opened_on.retain(|(w, _)| windows.contains(w));
-        let mut running: Vec<(String, usize)> = windows.iter().map(|w| (app_id(w), self.opened_on.iter().find(|(o, _)| o == w).map(|(_, p)| *p).unwrap_or(1))).collect();
+        let mut running: Vec<(String, usize)> = windows
+            .iter()
+            .map(|w| {
+                // A page of another app's (follow.rs) is that app running.
+                let id = app_id(w);
+                (self.follow.leader(&id).unwrap_or(id), self.opened_on.iter().find(|(o, _)| o == w).map(|(_, p)| *p).unwrap_or(1))
+            })
+            .collect();
         running.sort();
         running.dedup_by(|a, b| a.0 == b.0);
         self.dock.set_running(&running);
@@ -440,8 +489,12 @@ impl State {
     /// The open windows, shown and put away, topmost first, as rows.
     pub fn window_rows(&self) -> Vec<(Window, crate::quick::Row)> {
         let entries = &self.entries;
-        self.windows()
+        let windows = self.windows();
+        let running: Vec<String> = windows.iter().map(app_id).collect();
+        windows
             .iter()
+            // A page of another app's (follow.rs) is that app's row.
+            .filter(|w| self.follow.leader(&app_id(w)).is_none_or(|l| !running.contains(&l)))
             .map(|w| {
                 let id = app_id(w);
                 let entry = entries.iter().find(|e| e.ids.contains(&id));
@@ -459,6 +512,11 @@ impl State {
                 if !out.contains(w) {
                     out.push(w.clone());
                 }
+            }
+        }
+        for (_, w) in &self.ribbon.covered {
+            if !out.contains(w) {
+                out.push(w.clone());
             }
         }
         for (w, _) in &self.put_away {
@@ -646,6 +704,8 @@ impl State {
             crate::ribbon::Page::App(w) if ids.iter().any(|id| id == &app_id(w)) => Some(w.clone()),
             _ => None,
         });
+        // An app under a page of its own (follow.rs): the page is called.
+        let in_row = in_row.or_else(|| self.ribbon.covered.iter().find(|(_, l)| ids.iter().any(|id| id == &app_id(l))).map(|(f, _)| f.clone()));
         let Some(window) = in_row else {
             return false;
         };

@@ -19,6 +19,9 @@
 //! - A window across both panels (`span`) has two pages, its own and a
 //!   Wide one after it: shown together it stands on both panels, and as the
 //!   row moves it moves with them, half of it shown when one is.
+//! - A window that follows another (a page of the port's Settings, opened
+//!   from it: follow.rs) takes its leader's page, over it; put away or
+//!   closed, the leader's page is there again.
 //! - A window put away or closed leaves the row, and the row closes up; the
 //!   system screen and the pen's sheet come only when asked for.
 //!
@@ -98,12 +101,15 @@ pub struct Ribbon {
     carried: [Option<Page>; 2],
     /// Something moved and the state has not applied where it ended.
     pub unsettled: bool,
+    /// Windows over their leader's page (follow.rs): the follower, and the
+    /// leader whose page it took.
+    pub covered: Vec<(Window, Window)>,
     moved_at: u64,
 }
 
 impl Ribbon {
     pub fn new() -> Ribbon {
-        Ribbon { pages: vec![Page::System, Page::Desk(0), Page::Desk(1), Page::Pen], view: 1, drag: None, run: None, carried: [None, None], unsettled: false, moved_at: 0 }
+        Ribbon { pages: vec![Page::System, Page::Desk(0), Page::Desk(1), Page::Pen], view: 1, drag: None, run: None, carried: [None, None], unsettled: false, covered: Vec::new(), moved_at: 0 }
     }
 
     fn max_view(&self) -> usize {
@@ -358,9 +364,50 @@ impl Ribbon {
         }
     }
 
+    /// A window over its leader's page: it takes the page, the leader under
+    /// it, the other panel as it was.
+    pub fn cover(&mut self, leader: &Window, follower: &Window) {
+        if leader == follower || self.covered.iter().any(|(f, _)| f == follower) || self.find(leader).is_none() {
+            return;
+        }
+        let before = self.xs(hybris_hwc::now_ns());
+        self.drop_wide(follower);
+        if let Some(i) = self.find(follower) {
+            self.pages.remove(i);
+            if i < self.view {
+                self.view -= 1;
+            }
+        }
+        let Some(li) = self.find(leader) else { return };
+        self.pages[li] = Page::App(follower.clone());
+        self.covered.push((follower.clone(), leader.clone()));
+        tracing::info!("ribbon: a window over its leader's page {li}");
+        self.keep_view();
+        self.rearranged(before);
+    }
+
+    /// The window a covered one is under, if it is.
+    pub fn over(&self, leader: &Window) -> Option<&Window> {
+        self.covered.iter().find(|(_, l)| l == leader).map(|(f, _)| f)
+    }
+
     /// A window leaves the row (put away, or closed): the row closes up,
-    /// the page beside it on the other panel staying where it is.
+    /// the page beside it on the other panel staying where it is. One over
+    /// its leader gives the page back to it; a leader under one just goes.
     pub fn remove(&mut self, window: &Window) {
+        if let Some(k) = self.covered.iter().position(|(f, _)| f == window) {
+            let (_, leader) = self.covered.remove(k);
+            if let Some(i) = self.find(window) {
+                let before = self.xs(hybris_hwc::now_ns());
+                self.pages[i] = Page::App(leader);
+                self.rearranged(before);
+                return;
+            }
+        }
+        if let Some(k) = self.covered.iter().position(|(_, l)| l == window) {
+            self.covered.remove(k);
+            return;
+        }
         self.drop_wide(window);
         let Some(i) = self.find(window) else { return };
         let before = self.xs(hybris_hwc::now_ns());

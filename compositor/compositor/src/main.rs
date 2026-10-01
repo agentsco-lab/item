@@ -35,6 +35,7 @@ mod pinpad;
 mod door;
 mod logind;
 mod fingerprint;
+mod follow;
 mod status;
 mod keyring;
 mod setup;
@@ -281,6 +282,11 @@ impl Data {
         // The idle delay as the settings have it, none while something
         // holds the screen on; dimmed before it goes dark.
         let held = self.state.idle_held();
+        // Pages over their leaders (follow.rs): those asked to be shown
+        // again, and windows of a follower not yet over theirs.
+        if self.state.follow_pages() {
+            self.state.needs_redraw = true;
+        }
         // Calls: one coming in lights the screen and holds it lit while it
         // rings; locked, it shows over the lock screen.
         if let Some(rang) = self.state.calls.take(now) {
