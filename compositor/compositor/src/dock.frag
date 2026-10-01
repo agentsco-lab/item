@@ -58,6 +58,10 @@ uniform vec4 meet;      // fill, bulge, join x, unused
 uniform float radius;
 uniform float melt;
 uniform vec4 body;      // premultiplied
+// What a drop holds (the first setup's progress): the level's height in the
+// area and its colour; how much of it shows (0: nothing).
+uniform vec4 fill;
+uniform float level;
 uniform float shine;
 uniform float metal;
 uniform vec2 origin;
@@ -163,6 +167,16 @@ void main() {
     float light = (ring + gather + spark) * shine;
     vec2 bent = sp - g * slope * 26.0 * depth / 12.0;
     vec3 seen = wallpaper(bent) * 1.12 + body.rgb * 0.35;
+    if (level > 0.001) {
+        // Below a surface that sways, more when alive; lighter where the
+        // drop curves away.
+        float sway = 1.4 * sin(p.x * 0.11 + time * 2.1) + 0.7 * sin(p.x * 0.23 - time * 1.6);
+        float line = p.y - (fill.x + sway * (0.35 + 0.65 * life));
+        float below = smoothstep(-0.8, 0.8, line);
+        seen = mix(seen, fill.yzw * (1.0 + 0.3 * slope) + wallpaper(bent) * 0.1, below * level * 0.92);
+        // Its surface, a thin light line.
+        seen += vec3(1.0, 0.92, 0.88) * 0.35 * exp(-abs(line) / 1.1) * level;
+    }
     vec4 water = vec4(seen, 1.0) + vec4(0.93, 0.97, 1.0, 1.0) * light;
 
     // Soft silver.

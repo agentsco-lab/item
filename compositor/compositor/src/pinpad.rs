@@ -1,6 +1,13 @@
 //! The PIN pad on the right panel, for the lock screen (lock.rs) and the
 //! first setup (setup.rs): the digits typed as dots, a line under them, the
 //! keys; it comes in softly and shakes at a wrong PIN.
+//!
+//! In the setup its keys are water (`water`): drops born of the setup's
+//! drop over the pad - a stream comes down from it into the pad's middle,
+//! parts into a drop for each row, and each row's into its three keys,
+//! threads between them as they part; the digits come up on them once they
+//! stand. Pressed, a key's drop gives under the finger and comes alive; let
+//! go, it springs back. Leaving, they gather back the way they came.
 
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
 use smithay::backend::renderer::element::Kind;
@@ -18,6 +25,32 @@ const KEY_GAP: f64 = 22.0;
 const PAD_TOP: f64 = 330.0;
 const DOTS_Y: f64 = 220.0;
 const MAX_PIN: usize = 16;
+/// The keys born of a drop: the stream down, the rows, the keys.
+const STREAM_NS: f64 = 380e6;
+const ROWS_NS: f64 = 340e6;
+const KEYS_NS: f64 = 400e6;
+pub const SPLIT_NS: u64 = (STREAM_NS + ROWS_NS + KEYS_NS) as u64;
+/// A key's drop; the stream's at its fullest.
+const KEY_DROP_R: f64 = 33.0;
+const STREAM_R: f64 = 42.0;
+/// Melting together while parting, apart at rest.
+const PART_MELT: f64 = 26.0;
+const REST_MELT: f64 = 0.8;
+/// The digits coming up on the keys that stand.
+const LABELS_NS: f64 = 220e6;
+/// A key let go wobbles; one pressed is alive a while.
+const WOBBLE_NS: f64 = 900e6;
+const WOBBLE_PERIOD_NS: f64 = 360e6;
+const ALIVE_NS: f64 = 700e6;
+
+/// Drops drawn as one (Dock::group): each its middle, radius and squash;
+/// how much they melt together; how alive.
+pub struct Group {
+    pub drops: Vec<((f64, f64), f64, (f64, f64))>,
+    pub melt: f64,
+    pub life: f64,
+}
+
 /// Coming in, and a shake.
 pub const IN_NS: u64 = 200_000_000;
 pub const SHAKE_NS: u64 = 420_000_000;
@@ -61,6 +94,13 @@ pub struct PinPad {
     erase: Option<MemoryRenderBuffer>,
     shown_since: u64,
     shaken_at: Option<u64>,
+    /// The keys as water: born of a drop from when, gathering back from
+    /// when; each key's last press and let go.
+    water: bool,
+    split_at: Option<u64>,
+    gather_at: Option<u64>,
+    poked: [u64; 12],
+    popped: [u64; 12],
 }
 
 impl PinPad {
@@ -88,7 +128,104 @@ impl PinPad {
                 .or_else(|| crate::quick::symbolic("/usr/share/icons/Adwaita/symbolic/actions/edit-clear-symbolic.svg", 28)),
             shown_since: 0,
             shaken_at: None,
+            water: false,
+            split_at: None,
+            gather_at: None,
+            poked: [0; 12],
+            popped: [0; 12],
         }
+    }
+
+    /// Its keys as water (the first setup's).
+    pub fn water(&mut self) {
+        self.water = true;
+    }
+
+    /// The keys born of the drop from `at`.
+    pub fn split(&mut self, at: u64) {
+        self.split_at = Some(at);
+        self.gather_at = None;
+    }
+
+    /// The keys gathering back into the drop from `at`.
+    pub fn gather(&mut self, at: u64) {
+        if self.split_at.is_some() && self.gather_at.is_none() {
+            self.gather_at = Some(at);
+            self.pressed = None;
+        }
+    }
+
+    /// How far along being born the keys are, ns (SPLIT_NS: standing);
+    /// None before, or once gathered.
+    fn born(&self, frame_ns: u64) -> Option<f64> {
+        let s = self.split_at?;
+        if frame_ns < s {
+            return None;
+        }
+        let mut t = ((frame_ns - s) as f64).min(SPLIT_NS as f64);
+        if let Some(g) = self.gather_at {
+            t = t.min(SPLIT_NS as f64 - frame_ns.saturating_sub(g) as f64);
+        }
+        (t > 0.0).then_some(t)
+    }
+
+    /// Whether the keys stand (and take touches).
+    fn standing(&self, frame_ns: u64) -> bool {
+        !self.water || (self.gather_at.is_none() && self.born(frame_ns) == Some(SPLIT_NS as f64))
+    }
+
+    /// The keys as drops at `frame_ns`, the setup's drop (its middle and
+    /// radius) where they come from; whether that drop is drawn with them
+    /// (and not on its own).
+    pub fn drops(&self, frame_ns: u64, mother: (f64, f64), mother_r: f64) -> Option<(Vec<Group>, bool)> {
+        let t = self.born(frame_ns)?;
+        let centre = |i: usize| {
+            let r = Self::key_rect(i);
+            (r.loc.x + KEY / 2.0, r.loc.y + KEY / 2.0)
+        };
+        let dx = self.shaken_at.map(|t| shake(frame_ns.saturating_sub(t))).unwrap_or(0.0);
+        let mx = centre(1).0;
+        let rows: Vec<f64> = (0..4).map(|i| centre(3 * i).1).collect();
+        let middle = (mx, (rows[0] + rows[3]) / 2.0);
+        let lerp = |a: f64, b: f64, k: f64| a + (b - a) * k;
+        let since = |at: u64| if at == 0 { f64::MAX } else { frame_ns.saturating_sub(at) as f64 };
+        if t < STREAM_NS {
+            // The stream comes down from the drop, growing.
+            let k = ease(t / STREAM_NS);
+            let stream = ((lerp(mother.0, middle.0, k), lerp(mother.1, middle.1, k)), lerp(mother_r * 0.6, STREAM_R, k), (1.0, 1.0 + 0.25 * (1.0 - k) * k * 4.0));
+            let melt = lerp(PART_MELT * 1.4, PART_MELT, k);
+            return Some((vec![Group { drops: vec![(mother, mother_r, (1.0, 1.0)), stream], melt, life: 0.7 }], true));
+        }
+        if t < STREAM_NS + ROWS_NS {
+            // It parts into a drop for each row.
+            let k = ease((t - STREAM_NS) / ROWS_NS);
+            let drops = rows.iter().map(|&y| ((middle.0 + dx, lerp(middle.1, y, k)), lerp(STREAM_R * 0.75, KEY_DROP_R, k), (1.0, 1.0))).collect();
+            return Some((vec![Group { drops, melt: lerp(PART_MELT, PART_MELT * 0.7, k), life: 0.7 }], false));
+        }
+        // Each row's into its three keys; then they stand, each giving
+        // under a finger and springing back.
+        let k = ease((t - STREAM_NS - ROWS_NS) / KEYS_NS);
+        let groups = (0..4)
+            .map(|row| {
+                let mut life: f64 = if k < 1.0 { 0.7 * (1.0 - k) } else { 0.0 };
+                let drops = (0..3)
+                    .map(|col| {
+                        let i = 3 * row + col;
+                        let (x, y) = centre(i);
+                        let u = since(self.popped[i]);
+                        let wobble = if u < WOBBLE_NS { 0.12 * (-u / (WOBBLE_NS / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() } else { 0.0 };
+                        let mut sq = (1.0 - 0.6 * wobble, 1.0 + wobble);
+                        if self.pressed == Some(i) {
+                            sq = (1.07, 0.9);
+                        }
+                        life = life.max((1.0 - since(self.poked[i]) / ALIVE_NS).max(0.0));
+                        ((lerp(mx, x, k) + dx, y), KEY_DROP_R, sq)
+                    })
+                    .collect();
+                Group { drops, melt: lerp(PART_MELT * 0.7, REST_MELT, k), life }
+            })
+            .collect();
+        Some((groups, false))
     }
 
     /// The line under the dots.
@@ -142,7 +279,14 @@ impl PinPad {
 
     /// A finger down: on a key, it is pressed.
     pub fn down(&mut self, x: f64, y: f64) {
+        let now = hybris_hwc::now_ns();
+        if !self.standing(now) {
+            return;
+        }
         self.pressed = (0..KEYS.len()).find(|&i| Self::key_rect(i).contains((x, y)));
+        if let Some(i) = self.pressed {
+            self.poked[i] = now;
+        }
     }
 
     /// The finger moved off: no key.
@@ -157,6 +301,7 @@ impl PinPad {
     /// The finger let go: the key pressed, done.
     pub fn up(&mut self) -> Option<Press> {
         let i = self.pressed.take()?;
+        self.popped[i] = hybris_hwc::now_ns();
         match KEYS[i] {
             "←" => {
                 self.pin.pop();
@@ -174,7 +319,13 @@ impl PinPad {
 
     /// Whether it still moves (coming in, shaking).
     pub fn moving(&self, frame_ns: u64) -> bool {
-        frame_ns < self.shown_since + IN_NS || self.shaken_at.is_some_and(|t| frame_ns < t + SHAKE_NS)
+        let since = |at: u64| if at == 0 { f64::MAX } else { frame_ns.saturating_sub(at) as f64 };
+        frame_ns < self.shown_since + IN_NS
+            || self.shaken_at.is_some_and(|t| frame_ns < t + SHAKE_NS)
+            || (self.water && self.split_at.is_some_and(|s| frame_ns < s + SPLIT_NS + LABELS_NS as u64))
+            || self.gather_at.is_some_and(|g| frame_ns < g + SPLIT_NS)
+            || self.popped.iter().chain(self.poked.iter()).any(|&t| since(t) < WOBBLE_NS.max(ALIVE_NS))
+            || self.pressed.is_some()
     }
 
     pub fn buffers(&self) -> impl Iterator<Item = &MemoryRenderBuffer> {
@@ -205,13 +356,33 @@ impl PinPad {
             put(&mut out, dot, right.loc.x as f64 + (right.size.w as f64 - dots_w) / 2.0 + i as f64 * 22.0, DOTS_Y);
         }
         put(&mut out, &self.message.buffer, (right.loc.x + (right.size.w - self.message.extent.w) / 2) as f64, DOTS_Y + 36.0);
+        // As water, the digits only once the keys stand, on their drops
+        // (the output's).
+        let labels = if !self.water {
+            1.0
+        } else if self.gather_at.is_some() {
+            0.0
+        } else {
+            self.split_at.map(|s| ease((frame_ns as f64 - s as f64 - SPLIT_NS as f64) / LABELS_NS)).unwrap_or(0.0)
+        };
         for (i, l) in self.keys.iter().enumerate() {
             let r = Self::key_rect(i);
-            match (&self.erase, KEYS[i]) {
-                (Some(e), "←") => put(&mut out, e, r.loc.x + (KEY - 28.0) / 2.0, r.loc.y + (KEY - 28.0) / 2.0),
-                _ => put(&mut out, &l.buffer, r.loc.x + (KEY - l.extent.w as f64) / 2.0, r.loc.y + (KEY - l.extent.h as f64) / 2.0),
+            let a = alpha * labels as f32;
+            if a <= 0.001 {
+                continue;
             }
-            put(&mut out, if self.pressed == Some(i) { &self.key_on } else { &self.key_bg }, r.loc.x, r.loc.y);
+            let at = |out: &mut Vec<ShellElement>, renderer: &mut GlesRenderer, b: &MemoryRenderBuffer, x: f64, y: f64| {
+                if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (((x + dx) * SCALE as f64).round(), ((y + rise) * SCALE as f64).round()), b, Some(a), None, None, Kind::Unspecified) {
+                    out.push(ShellElement::Text(e));
+                }
+            };
+            match (&self.erase, KEYS[i]) {
+                (Some(e), "←") => at(&mut out, renderer, e, r.loc.x + (KEY - 28.0) / 2.0, r.loc.y + (KEY - 28.0) / 2.0),
+                _ => at(&mut out, renderer, &l.buffer, r.loc.x + (KEY - l.extent.w as f64) / 2.0, r.loc.y + (KEY - l.extent.h as f64) / 2.0),
+            }
+            if !self.water {
+                at(&mut out, renderer, if self.pressed == Some(i) { &self.key_on } else { &self.key_bg }, r.loc.x, r.loc.y);
+            }
         }
         out
     }

@@ -716,11 +716,12 @@ impl Screen {
         out
     }
 
-    /// Each panel's edges soft, going into the bezel's dark (edge.frag).
+    /// Each panel's outer edges soft, going into the bezel's dark
+    /// (edge.frag); not by the hinge.
     fn edges(&mut self, set: usize) -> Vec<FrameElement> {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         if self.edges.is_none() {
-            let names = [UniformName::new("soft", UniformType::_1f), UniformName::new("strength", UniformType::_1f), UniformName::new("corner", UniformType::_1f)];
+            let names = [UniformName::new("soft", UniformType::_1f), UniformName::new("strength", UniformType::_1f), UniformName::new("corner", UniformType::_1f), UniformName::new("inner", UniformType::_1f)];
             let program = match self.renderer.compile_custom_pixel_shader(include_str!("edge.frag"), &names) {
                 Ok(p) => p,
                 Err(e) => {
@@ -735,7 +736,8 @@ impl Screen {
             let make = || -> Vec<_> {
                 crate::layout::panels()
                     .into_iter()
-                    .map(|p| smithay::backend::renderer::gles::element::PixelShaderElement::new(program.clone(), p, None, 1.0, vec![Uniform::new("soft", soft), Uniform::new("strength", strength), Uniform::new("corner", corner)], smithay::backend::renderer::element::Kind::Unspecified))
+                    .enumerate()
+                    .map(|(i, p)| smithay::backend::renderer::gles::element::PixelShaderElement::new(program.clone(), p, None, 1.0, vec![Uniform::new("soft", soft), Uniform::new("strength", strength), Uniform::new("corner", corner), Uniform::new("inner", if i == 0 { 1.0f32 } else { -1.0 })], smithay::backend::renderer::element::Kind::Unspecified))
                     .collect()
             };
             self.edges = Some([make(), make()]);
@@ -768,10 +770,22 @@ impl Screen {
         let (mut drop, mut out) = (Vec::new(), Vec::new());
         let k = ((orb.thickness - 0.34) / 0.66).clamp(0.0, 1.0);
         let water = (k * k * (3.0 - 2.0 * k)) as f32;
-        if water > 0.001 {
+        // The PIN pad's keys, drops born of this one.
+        let pad = state.setup.pad_drops(frame_ns);
+        if let (Some((groups, _)), Some(texture)) = (&pad, self.wall.clone()) {
+            let wall = (&texture, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT as f64);
+            for (slot, g) in groups.iter().enumerate() {
+                if let Some(e) = state.dock.group(&mut self.renderer, slot, &g.drops, g.melt, frame_ns, g.life, 1.0, wall) {
+                    drop.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
+                }
+            }
+        }
+        let with_keys = pad.is_some_and(|(_, with)| with);
+        if water > 0.001 && !with_keys {
             if let Some(texture) = self.wall.clone() {
                 let wall = (&texture, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT as f64);
-                if let Some(e) = state.dock.lone(&mut self.renderer, (orb.x, orb.y), orb.r, frame_ns, 0.6, water, wall) {
+                let coral = [1.0f32, 0.6, 0.53];
+                if let Some(e) = state.dock.lone(&mut self.renderer, (orb.x, orb.y), orb.r, frame_ns, state.setup.life(frame_ns), water, (orb.fill, coral), wall) {
                     drop.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
                 }
             }
@@ -990,7 +1004,7 @@ impl Screen {
             let size = self.output.current_mode().unwrap().size;
             self.glass = crate::glass::Glass::new(&mut self.renderer, size);
         }
-        let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4], print: 0.0, lit: 0.0, flash: 0.0 }, 1.0);
+        let _ = self.orb_element(&crate::setup::Orb { x: 0.0, y: 0.0, r: 1.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: [0.0; 4], accent: [0.0; 4], print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 }, 1.0);
         let n = state.shade.warm_up(&mut self.renderer) + state.dock.warm_up(&mut self.renderer) + state.grid.warm_up(&mut self.renderer) + state.clock.warm_up(&mut self.renderer) + state.back.warm_up(&mut self.renderer) + state.lock.warm_up(&mut self.renderer) + state.pen.warm_up(&mut self.renderer) + state.setup.warm_up(&mut self.renderer);
         tracing::info!("warm-up: {n} textures in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
     }

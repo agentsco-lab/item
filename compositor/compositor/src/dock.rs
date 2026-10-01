@@ -242,8 +242,26 @@ pub struct Dock {
     /// The drops' element id and the uniforms it was drawn with: a new id
     /// when they change, so the frame takes it again.
     drops: std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>,
-    /// The same for a drop alone (the first setup's, `lone`).
+    /// The same for a drop alone (the first setup's, `lone`), and how it
+    /// flows.
     lone: std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>,
+    lone_flow: std::cell::Cell<Flow>,
+    /// The same for groups of drops drawn freely (`group`), by slot.
+    groups: std::cell::RefCell<Vec<std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>>>,
+}
+
+/// A lone drop's flow (`Dock::lone`): where it was and when, its stretch
+/// and way, its tail at the hinge, the tail let go, the wet spot, and its
+/// last jolt.
+#[derive(Clone, Copy, Default)]
+pub struct Flow {
+    last: Option<(u64, f64)>,
+    stretch: f64,
+    dir: f64,
+    clinging: bool,
+    snap: Option<(bool, f64, f64, f64, u64)>,
+    trail: Option<([f64; 4], u64)>,
+    popped: u64,
 }
 
 /// What a touch on the dock asks for.
@@ -276,7 +294,7 @@ impl Dock {
                 Half { apps, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -760,7 +778,7 @@ impl Dock {
         }
         // The drops under the icons.
         let life = self.life(frame_ns);
-        if let Some(e) = wall.and_then(|w| self.drops(renderer, &shape, frame_ns, w, life, DROP_RADIUS, 1.0, &self.drops)) {
+        if let Some(e) = wall.and_then(|w| self.drops(renderer, &shape, frame_ns, w, life, DROP_RADIUS, 1.0, (0.0, [0.0; 3], 0.0), &self.drops)) {
             out.push(ShellElement::Shaded(e));
         }
         out
@@ -960,25 +978,155 @@ impl Dock {
         Shape { boxes, squash, drops, melt, one, trail }
     }
 
-    /// The drops, through dock.frag: an element over the screen's bottom,
-    /// its uniforms set again only when they change.
     /// A drop alone, round, `r` about `centre` (logical px), as alive as
-    /// `life` (0 still, 1 as the dock's after a touch): the first setup's.
-    pub fn lone(&self, renderer: &mut GlesRenderer, centre: (f64, f64), r: f64, frame_ns: u64, life: f64, alpha: f32, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
-        let b = [centre.0 - r, centre.1 - r, 2.0 * r, 2.0 * r];
-        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(1.0, 1.0); 2], drops: vec![(b, (1.0, 1.0))], melt: 0.0, one: None, trail: ([-1000.0, 0.0, 10.0, 10.0], 0.0) };
-        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, &self.lone)
+    /// `life` (0 still, 1 as the dock's after a touch), holding `fill` of
+    /// `colour` (premultiplied): the first setup's. It flows as the dock's
+    /// halves do: stretched along its way, held at the hinge's edge, over it
+    /// in two parts as much as is past its middle, the tail lingering and
+    /// let go with a jolt, a wet spot drying where it clung.
+    #[allow(clippy::too_many_arguments)]
+    pub fn lone(&self, renderer: &mut GlesRenderer, centre: (f64, f64), r: f64, frame_ns: u64, life: f64, alpha: f32, fill: (f64, [f32; 3]), wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+        let mut f = self.lone_flow.get();
+        if let Some((t, was)) = f.last.filter(|(t, _)| frame_ns > *t) {
+            let ms = (frame_ns - t) as f64 / 1e6;
+            let dx = centre.0 - was;
+            let v = if ms < 100.0 { dx.abs() / ms } else { 0.0 };
+            f.stretch += ((v * STRETCH).min(STRETCH_MAX) - f.stretch) * STRETCH_FOLLOW;
+            if f.stretch < 0.002 {
+                f.stretch = 0.0;
+            }
+            if v > 0.02 {
+                f.dir = dx.signum();
+            } else if v == 0.0 && ms < 100.0 {
+                f.dir = 0.0;
+            }
+        }
+        if f.last.is_none_or(|(t, _)| frame_ns > t) {
+            f.last = Some((frame_ns, centre.0));
+        }
+        let wobble = if f.popped == 0 { 0.0 } else {
+            let u = frame_ns.saturating_sub(f.popped) as f64;
+            if u >= WOBBLE_NS as f64 { 0.0 } else { POP * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
+        };
+        let (sx, sy) = ((1.0 + f.stretch) * (1.0 - 0.6 * wobble), (1.0 - 0.6 * f.stretch) * (1.0 + wobble));
+        let d = 2.0 * r;
+        let b = [centre.0 - r, centre.1 - r, d, d];
+        let (w, ht) = (d * sx, d * sy);
+        let (x0, x1) = (centre.0 - w / 2.0, centre.0 + w / 2.0);
+        let panels = layout::panels();
+        let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
+        let mut drops: Vec<([f64; 4], (f64, f64))> = Vec::new();
+        if x1 <= h0 || x0 >= h1 {
+            let front = if f.dir > 0.0 && x1 <= h0 { h0 - x1 } else if f.dir < 0.0 && x0 >= h1 { x0 - h1 } else { f64::MAX };
+            let k = smooth(1.0 - front / APPROACH);
+            drops.push((b, (sx * (1.0 - HELD_SHORT * k), sy * (1.0 + HELD_FULL * k))));
+            f.clinging = false;
+        } else {
+            let (wl, wr) = ((h0 - x0).max(0.0), (x1 - h1).max(0.0));
+            let over = if wl + wr > 0.0 { wr / (wl + wr) } else { 0.5 };
+            let middle = centre.1 + d / 2.0 - ht / 2.0;
+            let area = w * ht;
+            let part = |a: f64| {
+                let s = a.max(0.0).sqrt();
+                if s <= ht { (s, s) } else { (a / ht, ht) }
+            };
+            let tail_left = f.dir > 0.0;
+            let (mut left, mut right) = (1.0 - over, over);
+            if f.dir != 0.0 {
+                let tail = if tail_left { left } else { right };
+                let held = if tail < LET_GO_SHARE { 0.0 } else { tail.max(LINGER) };
+                if f.clinging && held == 0.0 {
+                    let (tw, th) = part(LINGER * area);
+                    f.snap = Some((tail_left, tw, th, middle, frame_ns));
+                    let edge = if tail_left { h0 - SPOT } else { h1 };
+                    f.trail = Some(([edge, middle - 0.3 * ht, SPOT, 0.6 * ht], frame_ns));
+                    f.popped = frame_ns;
+                }
+                f.clinging = held > 0.0;
+                if tail_left {
+                    left = held;
+                } else {
+                    right = held;
+                }
+            }
+            let ((lw, lh), (rw, rh)) = (part(left * area), part(right * area));
+            if lw > 0.5 {
+                drops.push(([h0 - lw, middle - lh / 2.0, lw + INTO, lh], (1.0, 1.0)));
+            }
+            if rw > 0.5 {
+                drops.push(([h1 - INTO, middle - rh / 2.0, rw + INTO, rh], (1.0, 1.0)));
+            }
+        }
+        if let Some((on_left, tw, th, middle, at)) = f.snap {
+            let k = frame_ns.saturating_sub(at) as f64 / SNAP_NS as f64;
+            if k < 1.0 {
+                let s = 1.0 - smooth(k);
+                let (w, ht) = (tw * s, th * (0.5 + 0.5 * s));
+                drops.push((if on_left { [h0 - w, middle - ht / 2.0, w + INTO, ht] } else { [h1 - INTO, middle - ht / 2.0, w + INTO, ht] }, (1.0, 1.0)));
+            } else {
+                f.snap = None;
+            }
+        }
+        drops.truncate(4);
+        let trail = match f.trail {
+            Some((t, at)) if frame_ns < at + WET_NS => {
+                let k = (frame_ns - at) as f64 / WET_NS as f64;
+                let inset = k * 0.3 * t[2].min(t[3]);
+                ([t[0] + inset, t[1] + inset, t[2] - 2.0 * inset, t[3] - 2.0 * inset], (1.0 - k).powf(1.5))
+            }
+            _ => {
+                f.trail = None;
+                ([-1000.0, 0.0, 10.0, 10.0], 0.0)
+            }
+        };
+        self.lone_flow.set(f);
+        // The level of what it holds: from the drop's foot up.
+        let level_y = centre.1 + r - d * sy * fill.0;
+        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(sx, sy); 2], drops, melt: APART_MELT, one: None, trail };
+        self.drops(renderer, &shape, frame_ns, wall, life, r.min(DROP_RADIUS as f64 * 1.6) as f32, alpha, (level_y, fill.1, fill.0), &self.lone)
     }
 
+    /// Up to four round drops drawn as one (melting together `melt` px
+    /// where they near), each its middle, radius and squash: the first
+    /// setup's PIN keys. `slot` keeps each group's element apart.
     #[allow(clippy::too_many_arguments)]
-    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64), life: f64, radius: f32, alpha: f32, cache: &std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+    pub fn group(&self, renderer: &mut GlesRenderer, slot: usize, drops: &[((f64, f64), f64, (f64, f64))], melt: f64, frame_ns: u64, life: f64, alpha: f32, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64)) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+        if drops.is_empty() {
+            return None;
+        }
+        {
+            let mut groups = self.groups.borrow_mut();
+            while groups.len() <= slot {
+                groups.push(Default::default());
+            }
+        }
+        let list: Vec<([f64; 4], (f64, f64))> = drops.iter().take(4).map(|&((x, y), r, sq)| ([x - r, y - r, 2.0 * r, 2.0 * r], sq)).collect();
+        let r = drops.iter().map(|d| d.1).fold(0.0, f64::max);
+        let b = list[0].0;
+        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(1.0, 1.0); 2], drops: list, melt, one: None, trail: ([-1000.0, 0.0, 10.0, 10.0], 0.0) };
+        let groups = self.groups.borrow();
+        self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (0.0, [0.0; 3], 0.0), &groups[slot])
+    }
+
+    /// Whether the lone drop still flows on its own (stretch, the hinge's
+    /// tail, its wobble, the wet spot drying).
+    pub fn lone_moving(&self, frame_ns: u64) -> bool {
+        let f = self.lone_flow.get();
+        f.stretch > 0.003 || f.clinging || f.snap.is_some() || f.trail.is_some_and(|(_, t)| frame_ns < t + WET_NS) || (f.popped != 0 && frame_ns < f.popped + WOBBLE_NS)
+    }
+
+    /// The drops, through dock.frag: an element over the screen's bottom,
+    /// its uniforms set again only when they change.
+    #[allow(clippy::too_many_arguments)]
+    fn drops(&self, renderer: &mut GlesRenderer, shape: &Shape, frame_ns: u64, wall: (&smithay::backend::renderer::gles::GlesTexture, (f64, f64), f64), life: f64, radius: f32, alpha: f32, fill: (f64, [f32; 3], f64), cache: &std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         use smithay::backend::renderer::gles::element::TextureShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         use smithay::backend::renderer::Renderer;
         if self.program.borrow().is_none() {
             let mut names: Vec<UniformName> = ["b0", "b1", "b2", "b3", "s01", "s23", "one", "meet", "body", "trail"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)).collect();
-            names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.push(UniformName::new("fill", UniformType::_4f));
+            names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet", "level"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             names.extend(["origin", "texl", "src0"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)));
             match renderer.compile_custom_texture_shader(include_str!("dock.frag"), &names) {
                 Ok(p) => *self.program.borrow_mut() = Some(p),
@@ -1043,6 +1191,7 @@ impl Dock {
         let (texture, texl, woff) = wall;
         v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, life as f32, woff as f32, top as f32, left as f32]);
         v.extend([texl.0 as f32, texl.1 as f32, (woff + left as f64) as f32, top as f32, alpha, radius]);
+        v.extend([y(fill.0), fill.1[0], fill.1[1], fill.1[2], fill.2 as f32]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -1063,6 +1212,8 @@ impl Dock {
                 Uniform::new("texl", (v[43], v[44])),
                 Uniform::new("src0", (v[45], v[46])),
                 Uniform::new("radius", radius),
+                Uniform::new("fill", (v[49], v[50], v[51], v[52])),
+                Uniform::new("level", v[53]),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),

@@ -88,6 +88,10 @@ const BUTTON_H: f64 = 56.0;
 /// The welcome's circle (and the end's) on the left; the PIN's step mark
 /// and the finger's ring on the right, the ring level with the reader.
 const WELCOME_Y: f64 = 250.0;
+/// The drop over the PIN pad.
+const PIN_DROP_R: f64 = 20.0;
+/// A digit pressed: the drop alive, calming over this.
+const POKE_NS: f64 = 1.4e9;
 /// How dark the wallpaper is under the setup.
 const SHADE: f32 = 0.5;
 const PIN_MARK_Y: f64 = 120.0;
@@ -187,6 +191,8 @@ pub struct Orb {
     pub print: f64,
     pub lit: f64,
     pub flash: f64,
+    /// As a drop: how full of coral it is (the progress), from its foot.
+    pub fill: f64,
 }
 
 impl Orb {
@@ -206,6 +212,7 @@ impl Orb {
             print: mix(self.print, to.print),
             lit: to.lit,
             flash: to.flash,
+            fill: mix(self.fill, to.fill),
         }
     }
 }
@@ -266,6 +273,10 @@ pub struct Setup {
     /// The circle's move: from where, since when, how long.
     from: Orb,
     moved_at: u64,
+    /// The pad's keys are out of the drop.
+    pad_split: bool,
+    /// When a digit was last pressed: the drop comes alive.
+    poked: u64,
     move_ns: f64,
     orb_ns: u64,
     started: u64,
@@ -295,7 +306,11 @@ impl Setup {
             step: Step::Welcome,
             leaving: None,
             handed: None,
-            pad: PinPad::new(),
+            pad: {
+                let mut pad = PinPad::new();
+                pad.water();
+                pad
+            },
             first: String::new(),
             is_default: Default::default(),
             saved: Default::default(),
@@ -316,9 +331,11 @@ impl Setup {
             note: Label::new(19.0, NOTE),
             note_at: 0,
             old_note: None,
-            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0 },
-            from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0 },
+            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
+            from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
             moved_at: 0,
+            pad_split: false,
+            poked: 0,
             move_ns: MOVE_MAX_NS,
             orb_ns: 0,
             started: 0,
@@ -414,6 +431,18 @@ impl Setup {
             self.moved_at = now;
             self.move_ns = (MOVE_MIN_NS + far * MOVE_PER_PX_NS).min(MOVE_MAX_NS);
         }
+        // The pad's keys: born of the drop once it stands over the pad;
+        // gathered back into it before it goes on, which waits for them.
+        let pad_step = |s: Step| matches!(s, Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving);
+        if matches!(step, Step::PinNew | Step::PinCurrent) && !self.pad_split {
+            self.pad_split = true;
+            self.pad.split(now.max(self.moved_at + self.move_ns as u64));
+        }
+        if pad_step(was) && !pad_step(step) && self.pad_split {
+            self.pad_split = false;
+            self.pad.gather(now);
+            self.moved_at = now + crate::pinpad::SPLIT_NS;
+        }
         match step {
             Step::Welcome => self.text("Hello", &["Let's make this Duo yours:", "a PIN, a fingerprint, and you're in."], "Get started", WELCOME_Y + 90.0),
             Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
@@ -457,7 +486,7 @@ impl Setup {
         let panels = layout::panels();
         let middle = |i: usize| panels[i].loc.x as f64 + panels[i].size.w as f64 / 2.0;
         let dim = |a: f32| [a, a, a, a];
-        let orb = Orb { x: middle(0), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: ACCENT, print: 0.0, lit: self.lit, flash: 0.0 };
+        let orb = Orb { x: middle(0), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: ACCENT, print: 0.0, lit: self.lit, flash: 0.0, fill: 0.0 };
         match self.step {
             Step::Welcome => {
                 let t = frame_ns.saturating_sub(self.started) as f64;
@@ -465,11 +494,17 @@ impl Setup {
                 Orb { r: 52.0 * breath, ..orb }
             }
             Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
-                let lit = match self.step {
-                    Step::PinAgain | Step::Saving => 2.0 / 3.0,
-                    _ => 1.0 / 3.0,
+                // A small drop over the pad, filling with coral: a third
+                // for the new PIN, two for it again, full as it is saved;
+                // half for the PIN there is.
+                let fill = match self.step {
+                    Step::PinNew => 1.0 / 3.0,
+                    Step::PinAgain => 2.0 / 3.0,
+                    Step::PinCurrent => 0.5,
+                    Step::Saving => 1.0,
+                    _ => 0.0,
                 };
-                Orb { x: middle(1), y: PIN_MARK_Y, r: 14.0, thickness: 0.34, progress: lit, segments: 3.0, base: dim(0.22), ..orb }
+                Orb { x: middle(1), y: PIN_MARK_Y, r: PIN_DROP_R, fill, ..orb }
             }
             Step::Finger => {
                 // A touch: the ring swells a little and lets go.
@@ -482,6 +517,25 @@ impl Setup {
             // A drop again, the dock's size: it goes on to be the dock.
             Step::Done => Orb { r: LAST_DROP_R, ..orb },
         }
+    }
+
+    /// The pad's keys as drops, born of the circle's drop or gathering back
+    /// into it; whether that drop is drawn with them.
+    pub fn pad_drops(&self, frame_ns: u64) -> Option<(Vec<crate::pinpad::Group>, bool)> {
+        if !self.active || self.leaving.is_some() {
+            return None;
+        }
+        self.pad.drops(frame_ns, (self.orb.x, self.orb.y), self.orb.r)
+    }
+
+    /// How alive the drop is: breathing on the welcome, a little at rest,
+    /// more for a while after a digit or a move.
+    pub fn life(&self, frame_ns: u64) -> f64 {
+        let base: f64 = if self.step == Step::Welcome { 0.6 } else { 0.25 };
+        let since = |t: u64| if t == 0 { f64::MAX } else { frame_ns.saturating_sub(t) as f64 };
+        let poke = (-since(self.poked) / (POKE_NS / 3.0)).exp();
+        let moved = (-since(self.moved_at) / (POKE_NS / 2.0)).exp() * 0.7;
+        base.max(poke).max(moved)
     }
 
     /// A touch's flash, 1 fading to 0.
@@ -649,6 +703,7 @@ impl Setup {
     pub fn down(&mut self, x: f64, y: f64) {
         if self.has_pad() && self.step != Step::Saving {
             self.pad.down(x, y);
+            self.poked = hybris_hwc::now_ns();
         }
     }
 
@@ -804,6 +859,7 @@ impl Setup {
             || self.flash(frame_ns) > 0.0
             || self.poor_at.is_some_and(|t| frame_ns < t + crate::pinpad::SHAKE_NS)
             || self.step == Step::Welcome
+            || (self.poked != 0 && (frame_ns.saturating_sub(self.poked) as f64) < POKE_NS * 2.0)
             || (self.has_pad() && self.pad.moving(frame_ns))
             // The arrow to the reader bobs while a finger is awaited.
             || self.step == Step::Finger

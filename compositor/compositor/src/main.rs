@@ -613,6 +613,10 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
+        // The setup's drop flowing on (over the hinge, its wet spot drying).
+        if self.state.setup.active && self.state.dock.lone_moving(self.pacing.target_ns) {
+            self.state.needs_redraw = true;
+        }
         if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
         }
