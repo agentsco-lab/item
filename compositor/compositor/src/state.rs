@@ -144,6 +144,8 @@ pub struct State {
     pub follow: crate::follow::Follow,
     /// The tour after the first setup.
     pub tour: crate::tour::Tour,
+    /// org.gnome.Mutter.DisplayConfig's PowerSaveMode.
+    pub display_config: crate::display::Display,
     pub asker: Asker,
     /// When the power key went down, unlocked and lit (input.rs).
     pub power_down_at: Option<u64>,
@@ -240,6 +242,7 @@ impl State {
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),
+            display_config: crate::display::Display::new(wake.clone()),
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),

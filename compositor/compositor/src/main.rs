@@ -52,6 +52,7 @@ mod sched;
 mod polkit;
 mod calls;
 mod dialog;
+mod display;
 mod keys;
 mod nm;
 mod idle;
@@ -298,6 +299,16 @@ impl Data {
                 self.state.needs_redraw = true;
             }
         }
+        // The screen dark or lit as asked on the bus (gsd-power).
+        if let Some(dark) = self.state.display_config.take_asked() {
+            if dark && !self.state.lock.blank {
+                self.state.lock.lock_now();
+                self.state.lock.set_blank(true);
+            } else if !dark && self.state.lock.blank {
+                self.state.lock.set_blank(false);
+            }
+            self.state.needs_redraw = true;
+        }
         // Pages over their leaders (follow.rs): those asked to be shown
         // again, and windows of a follower not yet over theirs.
         if self.state.follow_pages() {
@@ -329,6 +340,7 @@ impl Data {
         let lit = !self.state.lock.blank;
         if lit != self.lit_was {
             self.lit_was = lit;
+            self.state.display_config.set_dark(!lit);
             self.state.system.display(lit);
         }
         // A finger held still on a desk: the wallpaper's choosing.
@@ -802,7 +814,9 @@ fn main() {
     handle
         .insert_source(Timer::from_duration(std::time::Duration::from_millis(50)), |_, _, data: &mut Data| {
             data.on_watchdog();
-            TimeoutAction::ToDuration(std::time::Duration::from_millis(50))
+            // The screen dark: once a second is enough (it woke the phone 20
+            // times a second all night).
+            TimeoutAction::ToDuration(std::time::Duration::from_millis(if data.state.lock.blank { 1000 } else { 50 }))
         })
         .expect("watchdog timer");
     handle
