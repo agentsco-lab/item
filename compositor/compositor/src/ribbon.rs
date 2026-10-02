@@ -211,7 +211,10 @@ impl Ribbon {
     /// While the row moves: the panel the desktop's clock stood on as it
     /// began, the right one's desk before the left's (dock.rs's home).
     pub fn clock_panel(&self) -> Option<usize> {
-        if !self.moving() {
+        // Only while the row scrolls (a finger on it, or its run on after
+        // one): a window opened or closed in its place moves no desk, and
+        // the clock goes with the dock then.
+        if self.drag.is_none() && !self.run.as_ref().is_some_and(|r| r.scroll) {
             return None;
         }
         // On the system screen's side (the row between it and the desks)
