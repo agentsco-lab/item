@@ -8,7 +8,8 @@
 //!   source outputs when one comes or goes.
 //! - The camera goes through Android's camera service, which tells no one:
 //!   it is the camera app's window being open (the state's, by app id).
-//! - The location is GeoClue's `InUse`, asked every few seconds.
+//! - The location is GeoClue's `InUse`, asked every few seconds while
+//!   GeoClue runs (asking would start it).
 
 use std::io::{BufRead, BufReader};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -75,7 +76,14 @@ impl Privacy {
             .spawn(move || {
                 let Ok(bus) = zbus::blocking::Connection::system() else { return };
                 loop {
-                    let in_use = bus
+                    // Asked only while it runs: asking would start it (D-Bus
+                    // activation), and not running nothing uses it.
+                    let running = bus
+                        .call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "NameHasOwner", &("org.freedesktop.GeoClue2"))
+                        .ok()
+                        .and_then(|r| r.body().deserialize::<bool>().ok())
+                        .unwrap_or(false);
+                    let in_use = running && bus
                         .call_method(Some("org.freedesktop.GeoClue2"), "/org/freedesktop/GeoClue2/Manager", Some("org.freedesktop.DBus.Properties"), "Get", &("org.freedesktop.GeoClue2.Manager", "InUse"))
                         .ok()
                         .and_then(|r| r.body().deserialize::<zbus::zvariant::OwnedValue>().ok())
