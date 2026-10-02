@@ -215,6 +215,10 @@ const DROP_RADIUS: f32 = 36.0;
 const STRETCH: f64 = 0.09;
 const STRETCH_MAX: f64 = 0.16;
 const STRETCH_FOLLOW: f64 = 0.22;
+/// Carried by the hinge (slowly, by the hand): stretched as if HINGE_SLOSH
+/// times as fast, and a wobble of SWAY when the hinge stops.
+const HINGE_SLOSH: f64 = 4.0;
+const SWAY: f64 = 0.06;
 /// The icons seen through the water: a little larger.
 const LENS: f64 = 1.04;
 /// Alive while a finger is on a drop and a while after, calming over the
@@ -269,6 +273,10 @@ pub struct Dock {
     /// Each half's x as last drawn and when, and its stretch from moving.
     last_x: std::cell::Cell<Option<(u64, [f64; 2])>>,
     stretch: std::cell::Cell<[f64; 2]>,
+    /// Carried by the hinge: whether the halves were going, and when they
+    /// stopped (a wobble from then).
+    hinge_going: std::cell::Cell<bool>,
+    swayed: std::cell::Cell<u64>,
     /// Each half: which way it last went, whether its tail clings to the
     /// hinge's edge, and when it was last jolted.
     dir: std::cell::Cell<[f64; 2]>,
@@ -363,7 +371,7 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), hinge_going: Default::default(), swayed: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -765,6 +773,8 @@ impl Dock {
             // hinge, or alive after a touch.
             None => {
                 self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS)
+                    || (self.swayed.get() != 0 && frame_ns < self.swayed.get() + WOBBLE_NS)
+                    || self.hinge_going.get()
                     || self.stretch.get().iter().any(|s| s.abs() > 0.003)
                     || self.popped.get().iter().any(|&t| t != 0 && frame_ns < t + WOBBLE_NS)
                     || self.trail.get().is_some_and(|(_, t)| frame_ns < t + WET_NS)
@@ -1124,11 +1134,17 @@ impl Dock {
         // which way it goes.
         let xs = [places[0].x, places[1].x];
         let (mut stretch, mut dir) = (self.stretch.get(), self.dir.get());
+        // Not on a move of its own: the hinge carries it, slowly - water
+        // sloshes more for it, and wobbles when it stops.
+        let by_hinge = self.moving.is_none() && self.scrub.is_none() && self.birth.is_none();
         if let Some((t, was)) = self.last_x.get().filter(|(t, _)| frame_ns > *t) {
             let ms = (frame_ns - t) as f64 / 1e6;
+            let mut fastest: f64 = 0.0;
             for h in 0..2 {
                 let dx = xs[h] - was[h];
                 let v = if ms < 100.0 { dx.abs() / ms } else { 0.0 };
+                fastest = fastest.max(v);
+                let v = if by_hinge { v * HINGE_SLOSH } else { v };
                 stretch[h] += ((v * STRETCH).min(STRETCH_MAX) - stretch[h]) * STRETCH_FOLLOW;
                 if stretch[h].abs() < 0.002 {
                     stretch[h] = 0.0;
@@ -1136,6 +1152,12 @@ impl Dock {
                 if v > 0.02 {
                     dir[h] = dx.signum();
                 }
+            }
+            if by_hinge && fastest > 0.01 {
+                self.hinge_going.set(true);
+            } else if self.hinge_going.get() && fastest < 0.002 {
+                self.hinge_going.set(false);
+                self.swayed.set(frame_ns);
             }
         }
         if self.last_x.get().is_none_or(|(t, _)| frame_ns > t) {
@@ -1153,7 +1175,7 @@ impl Dock {
             let u = frame_ns.saturating_sub(since) as f64;
             if u >= WOBBLE_NS as f64 { 0.0 } else { amp * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
         };
-        let landed = self.landed.map(|t| ring(t, WOBBLE)).unwrap_or(0.0);
+        let landed = self.landed.map(|t| ring(t, WOBBLE)).unwrap_or(0.0) + ring(self.swayed.get(), SWAY);
         let mut popped = self.popped.get();
         let squash: [(f64, f64); 2] = [0, 1].map(|h| {
             let wb = landed + ring(popped[h], POP);
