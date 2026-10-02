@@ -115,6 +115,8 @@ impl Fingerprint {
         std::thread::spawn(move || {
             let call = |method: &str| system.call_method(Some(NAME), PATH, Some(NAME), method, &()).and_then(|r| r.body().deserialize::<i32>());
             let (mut wanted, mut armed, mut enrolling) = (false, false, false);
+            // The earlier session's Identify aborted once, at the start.
+            let mut aborted = false;
             let push = |event: Event| {
                 worker_events.lock().unwrap().push(event);
                 wake.ping();
@@ -216,6 +218,16 @@ impl Fingerprint {
                         Ok(0) => {
                             armed = true;
                             tracing::info!("fingerprint: reader armed");
+                        }
+                        Ok(3) if !aborted => {
+                            // Busy with what an earlier session left armed
+                            // (its compositor gone mid-Identify): that given
+                            // up, and asked again at once - else the first
+                            // finger after a start went unheard for seconds.
+                            let _ = call("Abort");
+                            aborted = true;
+                            tracing::info!("fingerprint: busy at the start; the earlier Identify aborted");
+                            next_try = Instant::now() + Duration::from_millis(300);
                         }
                         other => {
                             tracing::info!("fingerprint: Identify refused ({other:?}); again in 1.5 s");
