@@ -61,6 +61,7 @@ mod walls;
 mod picker;
 mod privacy;
 mod shade;
+mod sleep;
 mod state;
 mod sysscreen;
 mod text;
@@ -296,6 +297,15 @@ impl Data {
                 carried: self.state.dock.carrying(),
             };
             if self.state.tour.watch(&seen, now) {
+                self.state.needs_redraw = true;
+            }
+        }
+        // Woken from sleep: by the power key, the screen lights (the press
+        // was spent on waking the phone); a call lights its own; a packet
+        // leaves it dark.
+        if let Some(woken) = self.state.sleep.take_woken() {
+            if woken == sleep::Woken::PowerKey && self.state.lock.blank {
+                self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;
             }
         }

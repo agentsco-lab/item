@@ -146,6 +146,8 @@ pub struct State {
     pub tour: crate::tour::Tour,
     /// org.gnome.Mutter.DisplayConfig's PowerSaveMode.
     pub display_config: crate::display::Display,
+    /// What woke the phone from sleep.
+    pub sleep: crate::sleep::Sleep,
     pub asker: Asker,
     /// When the power key went down, unlocked and lit (input.rs).
     pub power_down_at: Option<u64>,
@@ -243,6 +245,7 @@ impl State {
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),
             display_config: crate::display::Display::new(wake.clone()),
+            sleep: crate::sleep::Sleep::new(wake.clone()),
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             picker: crate::picker::Picker::new(),
