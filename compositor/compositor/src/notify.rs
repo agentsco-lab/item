@@ -28,6 +28,11 @@ pub struct Note {
     pub summary: String,
     pub body: String,
     pub default_action: bool,
+    /// Its other actions (key, label), and whether it is urgent (an alarm:
+    /// urgency 2, or the alarm category) - shown over everything until
+    /// answered (alert.rs).
+    pub actions: Vec<(String, String)>,
+    pub urgent: bool,
     pub at_ns: u64,
 }
 
@@ -84,9 +89,12 @@ impl Server {
             // One line of the body, without markup.
             body: strip_markup(&body).lines().next().unwrap_or("").to_owned(),
             default_action: actions.chunks(2).any(|a| a[0] == "default"),
+            actions: actions.chunks(2).filter(|a| a.len() == 2 && a[0] != "default").map(|a| (a[0].clone(), a[1].clone())).collect(),
+            urgent: hints.get("urgency").and_then(|v| u8::try_from(v.try_clone().ok()?).ok()).is_some_and(|u| u >= 2)
+                || hint("category").is_some_and(|c| c.contains("alarm")),
             at_ns: hybris_hwc::now_ns(),
         };
-        tracing::info!("notification {id} from {} (icon {:?}): {}", note.app, note.icon, note.summary);
+        tracing::info!("notification {id} from {} (icon {:?}): {}{}", note.app, note.icon, note.summary, if note.urgent { format!(" (urgent, {} actions)", note.actions.len()) } else { String::new() });
         shared.notes.retain(|n| n.id != id);
         shared.notes.insert(0, note);
         drop(shared);
@@ -162,6 +170,24 @@ impl Notes {
                 tracing::warn!("notifications: NotificationClosed: {e}");
             }
         }
+    }
+
+    /// The urgent one with actions to answer, if any (newest first). Clocks'
+    /// ringing alarm is one whatever its hints say.
+    pub fn urgent(&self) -> Option<Note> {
+        let clocks = |n: &Note| n.app.to_lowercase().contains("clocks");
+        self.shared.lock().unwrap().notes.iter().find(|n| (n.urgent || clocks(n)) && !n.actions.is_empty()).cloned()
+    }
+
+    /// One of its actions chosen: told, and gone.
+    pub fn act(&self, id: u32, key: &str) {
+        if let Some(c) = &self.conn {
+            if let Err(e) = c.emit_signal(None::<()>, PATH, NAME, "ActionInvoked", &(id, key)) {
+                tracing::warn!("notifications: ActionInvoked: {e}");
+            }
+        }
+        tracing::info!("notification {id}: {key}");
+        self.dismiss(id);
     }
 
     /// Tapped: its default action, and gone.

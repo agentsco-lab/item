@@ -373,6 +373,20 @@ impl State {
             self.needs_redraw = true;
             return;
         }
+        // An alarm ringing: every touch is its own (alert.rs).
+        if self.alert.holds_screen() {
+            match contact {
+                Contact::Down(slot, pos, _) => self.alert.down(slot, pos),
+                Contact::Up(slot, _) => {
+                    if let Some((id, key)) = self.alert.up(slot) {
+                        self.notes.act(id, &key);
+                    }
+                }
+                _ => {}
+            }
+            self.needs_redraw = true;
+            return;
+        }
         // Locked: every touch is the lock screen's.
         match &contact {
             Contact::Down(_, pos, _) if self.lock.media_at(pos.x, pos.y).is_some() => {

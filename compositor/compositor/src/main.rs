@@ -50,6 +50,7 @@ mod quick;
 mod ribbon;
 mod sched;
 mod polkit;
+mod alert;
 mod calls;
 mod dialog;
 mod display;
@@ -93,6 +94,7 @@ pub struct Data {
     dim_was: bool,
     /// A call lit the dark screen: 0 while it lasts, then when it ended.
     call_lit: Option<u64>,
+    alert_was: bool,
     pub state: State,
     pub screen: Screen,
     started: Instant,
@@ -311,9 +313,24 @@ impl Data {
                 self.state.needs_redraw = true;
             }
         }
+        // An alarm ringing (alert.rs): the screen lit, held lit and awake
+        // until it is answered or taken back.
+        let urgent = self.state.notes.urgent();
+        if self.state.alert.set(urgent.as_ref(), now) {
+            if self.state.lock.blank {
+                self.state.lock.set_blank(false);
+            }
+        }
+        if self.state.alert.holds_screen() {
+            self.state.lock.last_touch_ns = now;
+        }
+        if urgent.is_some() != self.alert_was {
+            self.alert_was = urgent.is_some();
+            self.state.needs_redraw = true;
+        }
         // Asleep when nothing needs it awake (sleep.rs).
         let playing = self.state.shade.quick.media.lock().unwrap().as_ref().is_some_and(|m| m.playing);
-        let may = self.state.lock.locked && self.state.lock.blank && !self.state.calls.any() && !playing && !self.state.setup.active && !self.state.idle_held();
+        let may = self.state.lock.locked && self.state.lock.blank && !self.state.calls.any() && !self.state.alert.holds_screen() && !playing && !self.state.setup.active && !self.state.idle_held();
         self.state.sleep.tick(now, may);
         // The screen darkened as asked on the bus (gsd-power's idleness). Lit
         // only by what lights it here - the power key, the lid, a call: gsd
@@ -707,7 +724,7 @@ impl Data {
         if self.state.setup.active && self.state.dock.lone_moving(self.pacing.target_ns) {
             self.state.needs_redraw = true;
         }
-        if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.tour.settle() {
+        if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.alert.settle(self.pacing.target_ns) || self.state.tour.settle() {
             self.state.needs_redraw = true;
         }
         let count = self.state.walls.names.len();
@@ -1038,7 +1055,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, frames_dock_done: false, lit_was: true, dim_was: false, call_lit: None, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, lit_was: true, dim_was: false, call_lit: None, alert_was: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.

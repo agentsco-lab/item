@@ -137,6 +137,8 @@ pub struct State {
     pub wifi: crate::nm::Wifi,
     /// Calls, from gnome-calls, shown over the lock screen.
     pub calls: crate::calls::Calls,
+    /// An urgent notification to answer (an alarm), over everything.
+    pub alert: crate::alert::Alert,
     /// The privacy dot: camera, microphone, location in use.
     pub privacy: crate::privacy::Privacy,
     /// Who opens pages over whom (org.sfduo.Dock.Follow) and the windows
@@ -241,6 +243,7 @@ impl State {
             dialog: crate::dialog::Dialog::new(),
             wifi: crate::nm::Wifi::new(wake.clone()),
             calls: crate::calls::Calls::new(wake.clone()),
+            alert: crate::alert::Alert::new(),
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),

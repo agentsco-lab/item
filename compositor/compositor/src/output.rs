@@ -304,6 +304,8 @@ impl Screen {
         }
         // A call, over the lock screen (calls.rs).
         elements.extend(state.calls.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // An alarm ringing, under a call (alert.rs).
+        elements.extend(state.alert.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The lock screen: its soft edges over it; its words and dark; under
         // the dark its keys as drops and the wallpaper, each half's moving
         // with it as the doors open.
