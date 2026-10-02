@@ -186,6 +186,7 @@ impl State {
                 if SwitchToggleEvent::<LibinputInputBackend>::switch(&event) == Some(Switch::Lid) {
                     let shut = SwitchToggleEvent::<LibinputInputBackend>::state(&event) == SwitchState::On;
                     tracing::info!("lid: {}", if shut { "shut" } else { "open" });
+                    self.lid_shut = shut;
                     if shut {
                         self.lock.lock_now();
                         self.lock.set_blank(true);

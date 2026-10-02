@@ -139,6 +139,8 @@ pub struct State {
     pub calls: crate::calls::Calls,
     /// An urgent notification to answer (an alarm), over everything.
     pub alert: crate::alert::Alert,
+    /// The Duo folded shut: nothing lights the screen until it opens.
+    pub lid_shut: bool,
     /// The privacy dot: camera, microphone, location in use.
     pub privacy: crate::privacy::Privacy,
     /// Who opens pages over whom (org.sfduo.Dock.Follow) and the windows
@@ -244,6 +246,7 @@ impl State {
             wifi: crate::nm::Wifi::new(wake.clone()),
             calls: crate::calls::Calls::new(wake.clone()),
             alert: crate::alert::Alert::new(),
+            lid_shut: false,
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),

@@ -317,7 +317,7 @@ impl Data {
         // until it is answered or taken back.
         let urgent = self.state.notes.urgent();
         if self.state.alert.set(urgent.as_ref(), now) {
-            if self.state.lock.blank {
+            if self.state.lock.blank && !self.state.lid_shut {
                 self.state.lock.set_blank(false);
             }
         }
@@ -337,7 +337,8 @@ impl Data {
         // asks it lit after every resume, and the phone woken by a Wi-Fi
         // packet lit its screen.
         if let Some(dark) = self.state.display_config.take_asked() {
-            if dark && !self.state.lock.blank {
+            // Not over an alarm or a call ringing: they hold the screen lit.
+            if dark && !self.state.lock.blank && !self.state.alert.holds_screen() && !self.state.calls.ringing() {
                 self.state.lock.lock_now();
                 self.state.lock.set_blank(true);
                 self.state.needs_redraw = true;
@@ -351,7 +352,7 @@ impl Data {
         // Calls: one coming in lights the screen and holds it lit while it
         // rings; locked, it shows over the lock screen.
         if let Some(rang) = self.state.calls.take(now) {
-            if rang && self.state.lock.blank {
+            if rang && self.state.lock.blank && !self.state.lid_shut {
                 self.state.lock.set_blank(false);
                 self.call_lit = Some(0);
             }
