@@ -344,7 +344,7 @@ impl Lock {
     /// status line.
     fn media_rect(&self) -> Rectangle<f64, smithay::utils::Logical> {
         let left = layout::panels()[0];
-        let y = CLOCK_TOP + self.clock_h() + 12.0 + self.battery_label.extent.h as f64 + CARDS_TOP;
+        let y = CLOCK_TOP + CARDS_TOP;
         Rectangle::new((left.loc.x as f64 + (left.size.w as f64 - CARD_W) / 2.0, y).into(), (CARD_W, MEDIA_H).into())
     }
 
@@ -818,15 +818,17 @@ impl Lock {
         // The left half: who and what. The time, the date, the status line
         // under them; after a boot a greeting; low down, what is said to you.
         let rise = -(self.lift * 0.5);
-        // The clock as the desktop's: one line in the accent near the top,
-        // set to the panel's right edge; the status line under it, as set.
+        // The clock as the desktop's: one line in the accent near the top of
+        // the right panel, set to its right edge (where the desktop's
+        // stands); the status line under it, as set.
         let top = CLOCK_TOP;
-        let end = (left.loc.x + left.size.w) as f64 - CLOCK_RIGHT;
+        let clock_panel = layout::panels()[1];
+        let end = (clock_panel.loc.x + clock_panel.size.w) as f64 - CLOCK_RIGHT;
         let mut x = end - (self.time.extent.w + CLOCK_BETWEEN + self.date.extent.w) as f64;
-        put(&mut out, &self.time.buffer, x, top + rise, left_dx, 1.0);
+        put(&mut out, &self.time.buffer, x, top + rise, right_dx, 1.0);
         x += (self.time.extent.w + CLOCK_BETWEEN) as f64;
-        put(&mut out, &self.date.buffer, x, top + rise, left_dx, 1.0);
-        let mut y = top + self.clock_h() + 12.0;
+        put(&mut out, &self.date.buffer, x, top + rise, right_dx, 1.0);
+        let y = top + self.clock_h() + 12.0;
         // The status line: [battery] 84%   [network], centred.
         let gap = 6.0;
         let item = |icon: &Option<MemoryRenderBuffer>, l: &Label| if icon.is_some() { 16.0 + gap } else { 0.0 } + l.extent.w as f64;
@@ -837,16 +839,17 @@ impl Lock {
             let icon_y = ly + (self.battery_label.extent.h as f64 - 16.0) / 2.0;
             for (icon, l) in [(&self.battery_icon, &self.battery_label), (&self.net_icon, &self.net_label)] {
                 if let Some(i) = icon {
-                    put(&mut out, i, x, icon_y, left_dx, 0.75);
+                    put(&mut out, i, x, icon_y, right_dx, 0.75);
                     x += 16.0 + gap;
                 }
-                put(&mut out, &l.buffer, x, ly, left_dx, 1.0);
+                put(&mut out, &l.buffer, x, ly, right_dx, 1.0);
                 x += l.extent.w as f64 + 22.0;
             }
-            y += self.battery_label.extent.h as f64;
         }
+        // The left panel: after a boot the greeting at the top, else the
+        // cards.
         if self.after_boot {
-            put(&mut out, &self.greeting.buffer, cx(&self.greeting, left), y + 70.0 + rise, left_dx, 1.0);
+            put(&mut out, &self.greeting.buffer, cx(&self.greeting, left), CLOCK_TOP + 60.0 + rise, left_dx, 1.0);
         }
         // What is playing, and the last notifications, in cards.
         if !self.after_boot {
