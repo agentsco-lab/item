@@ -39,6 +39,51 @@ pub struct Layers {
     /// itself as it starts and slides away, which flashed its keys over the
     /// right panel's bottom; until it is down once it is not drawn.
     pub settled: std::cell::RefCell<Vec<WlSurface>>,
+    /// The keyboard's slide, item's own (see `Slide`).
+    slide: std::cell::RefCell<Option<Slide>>,
+}
+
+/// The keyboard's slide in and out, drawn by item: stevia's own (its bottom
+/// margin, eased in its way) only tells which way it goes. Up on a spring,
+/// a touch past its place and back - the past drawn as the keyboard
+/// stretched from its bottom edge, so no gap opens under it; down quicker,
+/// gathering speed, done before stevia lets its surface go (some 245 ms).
+struct Slide {
+    surface: WlSurface,
+    up: bool,
+    since: u64,
+    /// Where it started from, px below its place.
+    from: f64,
+    /// Stevia's bottom margin at its last commit: rising is up.
+    last_margin: i32,
+    /// Up and in its place once: the windows above it may shorten.
+    reached: bool,
+}
+
+const SPRING_ZETA: f64 = 0.78;
+const SPRING_OMEGA: f64 = 15.5;
+const SPRING_NS: u64 = 600_000_000;
+const DOWN_NS: u64 = 200_000_000;
+
+impl Slide {
+    /// Px below its place now, for a keyboard `h` tall: below 0 it is past
+    /// its place (the spring's overshoot), at `h` and beyond it is gone.
+    fn offset(&self, now_ns: u64, h: f64) -> f64 {
+        let t = now_ns.saturating_sub(self.since) as f64 / 1e9;
+        if self.up {
+            let (z, w) = (SPRING_ZETA, SPRING_OMEGA);
+            let wd = w * (1.0 - z * z).sqrt();
+            let k = 1.0 - (-z * w * t).exp() * ((wd * t).cos() + z * w / wd * (wd * t).sin());
+            self.from * (1.0 - k)
+        } else {
+            let p = (t * 1e9 / DOWN_NS as f64).min(1.0);
+            self.from + (h - self.from) * p * p
+        }
+    }
+
+    fn moving(&self, now_ns: u64) -> bool {
+        now_ns.saturating_sub(self.since) < if self.up { SPRING_NS } else { DOWN_NS + 20_000_000 }
+    }
 }
 
 /// A layer surface's committed state: its anchor, the size it asks for,
@@ -74,6 +119,25 @@ impl Layers {
             let (_, size, m) = cached_all(layer);
             tracing::info!("osk commit: {}x{} margins {:?} buffer {} settled {}", size.w, size.h, m, has_buffer(surface), !self.unsettled(layer));
         }
+        if self.is_osk(layer) && has_buffer(surface) {
+            let (_, size, [_, _, m, _]) = cached_all(layer);
+            let (now, h) = (hybris_hwc::now_ns(), size.h.max(1) as f64);
+            let mut slide = self.slide.borrow_mut();
+            match slide.as_mut().filter(|sl| sl.surface == *surface) {
+                Some(sl) => {
+                    let turned = (m < sl.last_margin && sl.up) || (m > sl.last_margin && !sl.up);
+                    if turned {
+                        let at = sl.offset(now, h).clamp(0.0, h);
+                        sl.up = !sl.up;
+                        sl.since = now;
+                        sl.from = at;
+                        sl.reached = false;
+                    }
+                    sl.last_margin = m;
+                }
+                None => *slide = Some(Slide { surface: surface.clone(), up: true, since: now, from: h, last_margin: m, reached: false }),
+            }
+        }
         let sent = with_states(surface, |states| states.data_map.get::<LayerSurfaceData>().unwrap().lock().unwrap().initial_configure_sent);
         if sent {
             return;
@@ -88,6 +152,31 @@ impl Layers {
 
     /// Where a layer surface stands, logical px, if it is shown.
     fn place(&self, layer: &LayerSurface) -> Option<Rectangle<i32, Logical>> {
+        self.placed(layer).map(|(r, _)| r)
+    }
+
+    /// Where a layer surface stands, and for the keyboard on its spring how
+    /// far past its place it is (px; drawn stretched by as much).
+    fn placed(&self, layer: &LayerSurface) -> Option<(Rectangle<i32, Logical>, f64)> {
+        let r = self.place_asked(layer)?;
+        if !self.is_osk(layer) {
+            return Some((r, 0.0));
+        }
+        let slide = self.slide.borrow();
+        let Some(sl) = slide.as_ref().filter(|sl| sl.surface == *layer.wl_surface()) else { return Some((r, 0.0)) };
+        // Its place: the bottom margin 0, wherever stevia has it now.
+        let bottom = cached_all(layer).2[2];
+        let h = r.size.h as f64;
+        let off = sl.offset(hybris_hwc::now_ns(), h);
+        if off >= h - 0.5 {
+            return None;
+        }
+        let y = r.loc.y + bottom + off.max(0.0).round() as i32;
+        Some((Rectangle::new((r.loc.x, y).into(), r.size), (-off).max(0.0)))
+    }
+
+    /// Where a layer surface asks to stand, logical px, if it is shown.
+    fn place_asked(&self, layer: &LayerSurface) -> Option<Rectangle<i32, Logical>> {
         if !has_buffer(layer.wl_surface()) {
             return None;
         }
@@ -134,7 +223,8 @@ impl Layers {
     pub fn keyboard_height(&self) -> Option<(usize, i32)> {
         let screen_h = layout::LAYOUT.1;
         self.surfaces.iter().filter(|l| self.is_osk(l)).find_map(|l| {
-            let r = self.place(l)?;
+            // Down once by stevia's own margin: settled (see `settled`).
+            let r = self.place_asked(l)?;
             let shown = (screen_h - r.loc.y).min(r.size.h);
             if shown <= 0 {
                 let mut settled = self.settled.borrow_mut();
@@ -155,9 +245,28 @@ impl Layers {
                     settled.push(l.wl_surface().clone());
                 }
             }
+            // The windows above it: shorter once it is up in its place (none
+            // of the wallpaper bared under them while it rises), whole again
+            // as soon as it starts down (it still covers what they regain).
+            let mut slide = self.slide.borrow_mut();
+            let sl = slide.as_mut().filter(|sl| sl.surface == *l.wl_surface())?;
+            if !sl.up {
+                return None;
+            }
+            if !sl.reached {
+                if sl.offset(hybris_hwc::now_ns(), r.size.h as f64) > 1.0 {
+                    return None;
+                }
+                sl.reached = true;
+            }
             let panel = layout::panel_at(r.loc.to_f64() + Point::from((1.0, 1.0))).unwrap_or(self.panel);
-            Some((panel, shown))
+            Some((panel, r.size.h))
         })
+    }
+
+    /// The keyboard on its way in or out: frames wanted.
+    pub fn sliding(&self) -> bool {
+        self.slide.borrow().as_ref().is_some_and(|sl| sl.moving(hybris_hwc::now_ns()))
     }
 
     /// The surface under a point, on a layer surface.
@@ -174,15 +283,19 @@ impl Layers {
     pub fn elements(&self, renderer: &mut GlesRenderer) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
         let mut out = Vec::new();
         for layer in self.surfaces.iter().rev() {
-            let Some(at) = self.place(layer) else { continue };
+            let Some((at, past)) = self.placed(layer) else { continue };
             if self.unsettled(layer) {
                 continue;
             }
+            // Past its place on the spring: stretched up from its bottom
+            // edge by as much, the bottom edge staying on the screen's.
+            let stretch = 1.0 + past / at.size.h.max(1) as f64;
+            let loc = Point::<f64, Logical>::from((at.loc.x as f64, at.loc.y as f64 - past)).to_physical(SCALE as f64).to_i32_round();
             out.extend(render_elements_from_surface_tree(
                 renderer,
                 layer.wl_surface(),
-                at.loc.to_physical(SCALE),
-                smithay::utils::Scale::from(SCALE as f64),
+                loc,
+                smithay::utils::Scale { x: SCALE as f64, y: SCALE as f64 * stretch },
                 1.0,
                 Kind::Unspecified,
             ));

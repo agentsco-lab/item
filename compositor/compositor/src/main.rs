@@ -723,7 +723,7 @@ impl Data {
         if self.state.setup.active && self.state.dock.lone_moving(self.pacing.target_ns) {
             self.state.needs_redraw = true;
         }
-        if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.alert.settle(self.pacing.target_ns) || self.state.tour.settle() {
+        if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.alert.settle(self.pacing.target_ns) || self.state.layers.sliding() || self.state.tour.settle() {
             self.state.needs_redraw = true;
         }
         let count = self.state.walls.names.len();
