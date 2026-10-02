@@ -146,6 +146,15 @@ impl Layers {
             if self.unsettled(l) {
                 return None;
             }
+            // Shown once (asked up): drawn to the end of its slide down,
+            // after the asking is over.
+            {
+                let mut settled = self.settled.borrow_mut();
+                settled.retain(|s| smithay::reexports::wayland_server::Resource::is_alive(s));
+                if !settled.contains(l.wl_surface()) {
+                    settled.push(l.wl_surface().clone());
+                }
+            }
             let panel = layout::panel_at(r.loc.to_f64() + Point::from((1.0, 1.0))).unwrap_or(self.panel);
             Some((panel, shown))
         })
