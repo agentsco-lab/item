@@ -72,6 +72,8 @@ uniform float time;
 uniform float life;
 uniform vec4 trail;     // x, y, w, h
 uniform float wet;
+uniform vec4 trail2;    // a second wet patch: the other drop's streak
+uniform float wet2;
 
 float box(vec2 p, vec4 r, vec2 s) {
     vec2 half_size = 0.5 * r.zw * s;
@@ -107,12 +109,18 @@ float field(vec2 p) {
     return d;
 }
 
-float trace(vec2 p) {
-    vec2 hs = 0.5 * trail.zw;
-    vec2 c = trail.xy + hs;
+float trace_of(vec2 p, vec4 t) {
+    vec2 hs = 0.5 * t.zw;
+    vec2 c = t.xy + hs;
     float rr = min(hs.x, hs.y);
     vec2 q = abs(p - c) - hs + vec2(rr);
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rr;
+}
+
+// The wet patch here: the nearer (wetter) of the two.
+vec4 wet_t;
+float trace(vec2 p) {
+    return trace_of(p, wet_t);
 }
 
 // A cheap bound first: the boxes alone, no union, no ripple.
@@ -128,8 +136,13 @@ float near(vec2 p) {
 void main() {
     vec2 p = v_coords * texl - src0;
     vec2 sp = p + origin;
-    float tw = trace(p);
-    float wetness = wet * (1.0 - smoothstep(-9.0, 3.0, tw));
+    float tw1 = trace_of(p, trail);
+    float tw2 = trace_of(p, trail2);
+    float w1 = wet * (1.0 - smoothstep(-9.0, 3.0, tw1));
+    float w2 = wet2 * (1.0 - smoothstep(-9.0, 3.0, tw2));
+    wet_t = w1 >= w2 ? trail : trail2;
+    float tw = w1 >= w2 ? tw1 : tw2;
+    float wetness = max(w1, w2);
     // Far from any drop (past its shadow, its thread, its ripple) and not
     // wet: nothing to draw, nothing more to work out.
     if (near(p) > 22.0 && wetness < 0.004) {

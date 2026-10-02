@@ -222,6 +222,12 @@ const STRETCH_FOLLOW: f64 = 0.22;
 const FLOW_FRONT_NS: f64 = 30e6;
 const FLOW_BACK_NS: f64 = 150e6;
 const FLOW_THIN: f64 = 0.7;
+/// The wet streak a flowing drop leaves behind its tail: its far end trails
+/// the tail within STREAK_NS (so it is as long as the drop is quick), drying
+/// as it draws in; as wet as STREAK_WET once STREAK_FULL px long.
+const STREAK_NS: f64 = 420e6;
+const STREAK_WET: f64 = 0.8;
+const STREAK_FULL: f64 = 40.0;
 /// The icons seen through the water: a little larger.
 const LENS: f64 = 1.04;
 /// Alive while a finger is on a drop and a while after, calming over the
@@ -279,6 +285,10 @@ pub struct Dock {
     /// Carried by the hinge: each half's edges as drawn (left, right), where
     /// it was going and when, and whether they are still drawing in.
     flow: std::cell::Cell<Option<(u64, [[f64; 2]; 2], [f64; 2])>>,
+    /// Behind each flowing drop: where its wet streak ends, and which way
+    /// it last went (+1 right, -1 left).
+    streak: std::cell::Cell<[(f64, f64); 2]>,
+    streaks: std::cell::Cell<[([f64; 4], f64); 2]>,
     flowing: std::cell::Cell<bool>,
     /// Each half: which way it last went, whether its tail clings to the
     /// hinge's edge, and when it was last jolted.
@@ -374,7 +384,7 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -668,6 +678,23 @@ impl Dock {
     /// Where the halves go for the panels windows have. Returns whether they
     /// set off.
     pub fn follow(&mut self, taken: [bool; 2], now_ns: u64) -> bool {
+        // Let go part of the way (the app grid, a window): the move goes on
+        // from where the finger left it, at the dock's own pace - forward,
+        // or back if it was let go short.
+        if let Some((from, to, k)) = self.scrub {
+            let target = mode_for(taken);
+            let way = if target == to && k < 1.0 { Some((from, to, k)) } else if target == from && k > 0.0 { Some((to, from, 1.0 - k)) } else { None };
+            if let Some((a, b, at)) = way.filter(|(a, b, _)| a != b) {
+                self.scrub = None;
+                let u = self.time_at(a, b, at);
+                self.moving = Some(Move { from: a, to: b, start_ns: now_ns.saturating_sub((u * MOVE_NS as f64) as u64) });
+                if b != Mode::Hidden {
+                    self.shown = b;
+                }
+                self.mode = b;
+                return true;
+            }
+        }
         self.end_scrub();
         let mode = mode_for(taken);
         if mode == self.mode {
@@ -707,6 +734,30 @@ impl Dock {
         for half in &mut self.halves {
             half.pressed = None;
         }
+    }
+
+    /// How far in time (0..1 of MOVE_NS) a move from `from` to `to` has the
+    /// halves where a finger had them `k` of the way: the move's easing
+    /// turned back, by bisection on the half that goes furthest.
+    fn time_at(&self, from: Mode, to: Mode, k: f64) -> f64 {
+        let at = self.between(from, to, k, None, true);
+        let (a, b) = (self.targets(from), self.targets(to));
+        let h = if (b[0].x - a[0].x).abs() >= (b[1].x - a[1].x).abs() { 0 } else { 1 };
+        let (x0, x1, want) = (a[h].x, b[h].x, at[h].x);
+        if (x1 - x0).abs() < 0.5 {
+            return k;
+        }
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..30 {
+            let mid = (lo + hi) / 2.0;
+            let x = self.between(from, to, mid, None, false)[h].x;
+            if (x - x0) / (x1 - x0) < (want - x0) / (x1 - x0) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        (lo + hi) / 2.0
     }
 
     /// The ribbon stopped: the halves stand where it left them.
@@ -1155,6 +1206,30 @@ impl Dock {
                     }
                     let thin = (w0 / (r - l).max(1.0)).clamp(FLOW_THIN, 1.0);
                     boxes[h] = (l, boxes[h].1 + boxes[h].3 * (1.0 - thin), r - l, boxes[h].3 * thin);
+                    // The wet streak: from the tail back to where the water
+                    // was a moment ago, drying as that end draws in.
+                    let mut st = self.streak.get();
+                    if way.abs() > 0.01 {
+                        st[h].1 = way.signum();
+                    }
+                    let tail = if st[h].1 >= 0.0 { l } else { r };
+                    if st[h].0 == 0.0 {
+                        st[h].0 = tail;
+                    }
+                    st[h].0 += (tail - st[h].0) * (1.0 - (-dt / STREAK_NS).exp());
+                    let len = (tail - st[h].0).abs();
+                    let mut streaks = self.streaks.get();
+                    if len > 1.0 {
+                        let (ht, foot) = (boxes[h].3, boxes[h].1 + boxes[h].3);
+                        // Under the drop a little too, so the two meet.
+                        let (a, b) = if st[h].1 >= 0.0 { (st[h].0, tail + 6.0) } else { (tail - 6.0, st[h].0) };
+                        streaks[h] = ([a.min(b), foot - 0.55 * ht - 0.3 * ht, (b - a).abs(), 0.6 * ht], (len / STREAK_FULL).min(1.0) * STREAK_WET);
+                        flowing = true;
+                    } else {
+                        streaks[h] = ([-1000.0, 0.0, 10.0, 10.0], 0.0);
+                    }
+                    self.streaks.set(streaks);
+                    self.streak.set(st);
                 }
                 self.flow.set(Some((frame_ns, edges, [0, 1].map(|h| (target[h][0] + target[h][1]) / 2.0))));
             } else if self.flow.get().is_none_or(|(t, ..)| frame_ns > t) {
@@ -1162,6 +1237,8 @@ impl Dock {
             }
         } else {
             self.flow.set(None);
+            self.streak.set(Default::default());
+            self.streaks.set([([-1000.0, 0.0, 10.0, 10.0], 0.0); 2]);
         }
         self.flowing.set(flowing);
         let shown = [0, 1].map(|h| places[h].y < bottom && self.halves[h].len() > 0);
@@ -1345,7 +1422,9 @@ impl Dock {
             }
             _ => ([0.0; 4], 0.0),
         };
-        Shape { boxes, squash, drops, melt, one, trail }
+        let streaks = self.streaks.get();
+        let (trail, trail2) = if trail.1 > 0.0 { (trail, streaks[1]) } else { (streaks[0], streaks[1]) };
+        Shape { boxes, squash, drops, melt, one, trail, trail2 }
     }
 
     /// A drop alone, round, `r` about `centre` (logical px), as alive as
@@ -1452,7 +1531,7 @@ impl Dock {
         self.lone_flow.set(f);
         // The level of what it holds: from the drop's foot up.
         let level_y = centre.1 + r - d * sy * fill.0;
-        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(sx, sy); 2], drops, melt: APART_MELT, one: None, trail };
+        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(sx, sy); 2], drops, melt: APART_MELT, one: None, trail, trail2: ([-1000.0, 0.0, 10.0, 10.0], 0.0) };
         self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (level_y, fill.1, fill.0), 1.0, &self.lone)
     }
 
@@ -1473,7 +1552,7 @@ impl Dock {
         let list: Vec<([f64; 4], (f64, f64))> = drops.iter().take(4).map(|&((x, y), r, sq)| ([x - r, y - r, 2.0 * r, 2.0 * r], sq)).collect();
         let r = drops.iter().map(|d| d.1).fold(0.0, f64::max);
         let b = list[0].0;
-        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(1.0, 1.0); 2], drops: list, melt, one: None, trail: ([-1000.0, 0.0, 10.0, 10.0], 0.0) };
+        let shape = Shape { boxes: [(b[0], b[1], b[2], b[3]); 2], squash: [(1.0, 1.0); 2], drops: list, melt, one: None, trail: ([-1000.0, 0.0, 10.0, 10.0], 0.0), trail2: ([-1000.0, 0.0, 10.0, 10.0], 0.0) };
         let groups = self.groups.borrow();
         self.drops(renderer, &shape, frame_ns, wall, life, r as f32, alpha, (0.0, [0.0; 3], 0.0), dim, &groups[slot])
     }
@@ -1494,9 +1573,9 @@ impl Dock {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         use smithay::backend::renderer::Renderer;
         if self.program.borrow().is_none() {
-            let mut names: Vec<UniformName> = ["b0", "b1", "b2", "b3", "s01", "s23", "one", "meet", "body", "trail"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)).collect();
+            let mut names: Vec<UniformName> = ["b0", "b1", "b2", "b3", "s01", "s23", "one", "meet", "body", "trail", "trail2"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)).collect();
             names.push(UniformName::new("fill", UniformType::_4f));
-            names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet", "level", "dim"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet", "wet2", "level", "dim"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             names.extend(["origin", "texl", "src0"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)));
             match renderer.compile_custom_texture_shader(include_str!("dock.frag"), &names) {
                 Ok(p) => *self.program.borrow_mut() = Some(p),
@@ -1532,6 +1611,9 @@ impl Dock {
         if shape.trail.1 > 0.0 {
             add(&shape.trail.0);
         }
+        if shape.trail2.1 > 0.0 {
+            add(&shape.trail2.0);
+        }
         let step = 32.0;
         let (x0, y0, x1, y1) = bounds.unwrap_or((0.0, height as f64 - 1.0, 1.0, height as f64));
         let pad = 28.0;
@@ -1562,6 +1644,8 @@ impl Dock {
         v.extend([shape.melt as f32, ((frame_ns / 1_000_000) % 1_000_000) as f32 / 1000.0, life as f32, woff as f32, top as f32, left as f32]);
         v.extend([texl.0 as f32, texl.1 as f32, (woff + left as f64) as f32, top as f32, alpha, radius]);
         v.extend([y(fill.0), fill.1[0], fill.1[1], fill.1[2], fill.2 as f32, dim]);
+        let t2 = shape.trail2.0;
+        v.extend([x(t2[0]), y(t2[1]), t2[2] as f32, t2[3] as f32, shape.trail2.1 as f32]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -1585,6 +1669,8 @@ impl Dock {
                 Uniform::new("fill", (v[49], v[50], v[51], v[52])),
                 Uniform::new("level", v[53]),
                 Uniform::new("dim", v[54]),
+                Uniform::new("trail2", (v[55], v[56], v[57], v[58])),
+                Uniform::new("wet2", v[59]),
                 Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
@@ -1633,6 +1719,8 @@ struct Shape {
     melt: f64,
     one: Option<([f64; 4], f64, f64, f64)>,
     trail: ([f64; 4], f64),
+    /// A second wet patch (the other drop's streak).
+    trail2: ([f64; 4], f64),
 }
 
 /// Smoothstep from 0 to 1.

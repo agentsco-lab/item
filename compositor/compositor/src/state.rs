@@ -332,7 +332,7 @@ impl State {
             return [true, true];
         }
         let mut taken = self.pages_taken(view, None);
-        if let Some(p) = self.grid.panel() {
+        if let Some(p) = self.grid.bound_panel() {
             taken[p] = true;
         }
         // The keyboard's panel: the dock leaves it as the keyboard comes up.
@@ -457,6 +457,13 @@ impl State {
         let view = self.ribbon.view;
         if let Some((v, k)) = self.ribbon.scrolling(frame_ns) {
             let (from, to) = (self.dock_taken(v), self.dock_taken(v + 1));
+            self.dock.scrub(from, to, k);
+        } else if let Some((panel, k)) = self.grid.held(frame_ns) {
+            // The app grid under a finger: the dock goes with the finger
+            // (let go, it goes on at its own pace from there, dock.rs).
+            let from = self.pages_taken(view, None);
+            let mut to = from;
+            to[panel] = true;
             self.dock.scrub(from, to, k);
         } else if let Some((window, k)) = self.gestures.moving_window(frame_ns).filter(|(w, _)| self.ribbon.find(w).is_some()) {
             let from = self.pages_taken(view, Some(&window));
