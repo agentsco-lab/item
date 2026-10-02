@@ -234,6 +234,11 @@ impl Calls {
         self.now.iter().find(|c| c.state.ringing()).or(self.now.first())
     }
 
+    /// Any call at all.
+    pub fn any(&self) -> bool {
+        !self.now.is_empty()
+    }
+
     /// A call is ringing.
     pub fn ringing(&self) -> bool {
         self.now.iter().any(|c| c.state.ringing())

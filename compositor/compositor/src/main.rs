@@ -91,6 +91,8 @@ pub struct Data {
     lit_was: bool,
     /// Whether the screen was dimmed for idleness at the last look.
     dim_was: bool,
+    /// A call lit the dark screen: 0 while it lasts, then when it ended.
+    call_lit: Option<u64>,
     pub state: State,
     pub screen: Screen,
     started: Instant,
@@ -303,21 +305,26 @@ impl Data {
         // Woken from sleep: by the power key, the screen lights (the press
         // was spent on waking the phone); a call lights its own; a packet
         // leaves it dark.
-        if let Some(woken) = self.state.sleep.take_woken() {
+        if let Some(woken) = self.state.sleep.take_woken(now) {
             if woken == sleep::Woken::PowerKey && self.state.lock.blank {
                 self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;
             }
         }
-        // The screen dark or lit as asked on the bus (gsd-power).
+        // Asleep when nothing needs it awake (sleep.rs).
+        let playing = self.state.shade.quick.media.lock().unwrap().as_ref().is_some_and(|m| m.playing);
+        let may = self.state.lock.locked && self.state.lock.blank && !self.state.calls.any() && !playing && !self.state.setup.active && !self.state.idle_held();
+        self.state.sleep.tick(now, may);
+        // The screen darkened as asked on the bus (gsd-power's idleness). Lit
+        // only by what lights it here - the power key, the lid, a call: gsd
+        // asks it lit after every resume, and the phone woken by a Wi-Fi
+        // packet lit its screen.
         if let Some(dark) = self.state.display_config.take_asked() {
             if dark && !self.state.lock.blank {
                 self.state.lock.lock_now();
                 self.state.lock.set_blank(true);
-            } else if !dark && self.state.lock.blank {
-                self.state.lock.set_blank(false);
+                self.state.needs_redraw = true;
             }
-            self.state.needs_redraw = true;
         }
         // Pages over their leaders (follow.rs): those asked to be shown
         // again, and windows of a follower not yet over theirs.
@@ -329,8 +336,24 @@ impl Data {
         if let Some(rang) = self.state.calls.take(now) {
             if rang && self.state.lock.blank {
                 self.state.lock.set_blank(false);
+                self.call_lit = Some(0);
             }
             self.state.needs_redraw = true;
+        }
+        // A call lit the dark screen and is over: dark again after 4 s if
+        // nobody touched it (as the port's lid daemon did under phosh).
+        match self.call_lit {
+            Some(0) if !self.state.calls.any() => self.call_lit = Some(now),
+            Some(t) if t > 0 => {
+                if !self.state.lock.locked || self.state.lock.blank || self.state.calls.any() || self.state.lock.last_touch_ns > t {
+                    self.call_lit = None;
+                } else if now >= t + 4_000_000_000 {
+                    tracing::info!("calls: over, the screen dark again");
+                    self.state.lock.set_blank(true);
+                    self.call_lit = None;
+                }
+            }
+            _ => {}
         }
         if self.state.calls.ringing() {
             self.state.lock.last_touch_ns = now;
@@ -1015,7 +1038,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, frames_dock_done: false, lit_was: true, dim_was: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, lit_was: true, dim_was: false, call_lit: None, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.

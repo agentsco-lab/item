@@ -5,8 +5,8 @@
 //! The port's daemons go by it: sfduo-posture stops reading the hinge while
 //! the screen is dark (it polled it 25 times a second all night under item,
 //! some 15 % of a core), sfduo-brightness puts the backlight back as it
-//! lights. Set from outside (gsd-power), the screen goes dark or lights as
-//! asked. Only this property: the rest of the interface is mutter's.
+//! lights. Set from outside (gsd-power), the screen goes dark as asked; it
+//! is not lit so (main.rs). Only this property: the rest is mutter's.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
