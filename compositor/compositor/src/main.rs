@@ -50,6 +50,7 @@ mod quick;
 mod ribbon;
 mod sched;
 mod polkit;
+mod accent;
 mod alert;
 mod posture;
 mod calls;
@@ -833,6 +834,7 @@ fn main() {
         )
         .init();
     sleep::prepare();
+    accent::load();
     let args = args();
     // This thread is the loop: on the big cores, ahead of the apps.
     sched::favour_this_thread();

@@ -37,12 +37,12 @@ struct Grab {
 pub struct Back {
     grab: Option<Grab>,
     disc: MemoryRenderBuffer,
-    armed: MemoryRenderBuffer,
+    armed: std::cell::RefCell<(u64, MemoryRenderBuffer)>,
 }
 
 impl Back {
     pub fn new() -> Back {
-        Back { grab: None, disc: disc([40, 40, 44, 242]), armed: disc(crate::layout::ACCENT) }
+        Back { grab: None, disc: disc([40, 40, 44, 242]), armed: std::cell::RefCell::new((crate::accent::version(), disc(crate::accent::get()))) }
     }
 
     /// Whether a point is on a panel's back strip.
@@ -93,8 +93,18 @@ impl Back {
         self.grab = None;
     }
 
+    /// The disc in the accent now (drawn again when it changed).
+    fn armed(&self) -> MemoryRenderBuffer {
+        let mut a = self.armed.borrow_mut();
+        if a.0 != crate::accent::version() {
+            *a = (crate::accent::version(), disc(crate::accent::get()));
+        }
+        a.1.clone()
+    }
+
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.disc, &self.armed]
+        let armed = self.armed();
+        [&self.disc, &armed]
             .iter()
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
@@ -111,7 +121,8 @@ impl Back {
             (panels[1].loc.x + panels[1].size.w) as f64 - out_by
         };
         let y = g.y - SIZE / 2.0;
-        let texture = if travel >= ARM { &self.armed } else { &self.disc };
+        let armed = self.armed();
+        let texture = if travel >= ARM { &armed } else { &self.disc };
         let loc = ((x * SCALE as f64).round(), (y * SCALE as f64).round());
         match MemoryRenderBufferRenderElement::from_buffer(renderer, loc, texture, None, None, None, Kind::Unspecified) {
             Ok(e) => vec![ShellElement::Text(e)],

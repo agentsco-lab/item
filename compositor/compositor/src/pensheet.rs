@@ -81,7 +81,7 @@ pub struct PenSheet {
     icons: Vec<Option<MemoryRenderBuffer>>,
     pen_icon: Option<MemoryRenderBuffer>,
     button_bg: MemoryRenderBuffer,
-    button_on: MemoryRenderBuffer,
+    button_on: crate::accent::Rounded,
 }
 
 impl PenSheet {
@@ -99,7 +99,7 @@ impl PenSheet {
             icons: vec![icon("edit-clear-symbolic"), icon("edit-delete-symbolic"), icon("document-save-symbolic")],
             pen_icon: icon("document-edit-symbolic"),
             button_bg: crate::grid::rounded(BUTTON, BUTTON, BUTTON / 2.0, [40, 40, 44, 230]),
-            button_on: crate::grid::rounded(BUTTON, BUTTON, BUTTON / 2.0, crate::layout::ACCENT),
+            button_on: crate::accent::Rounded::new(BUTTON, BUTTON, BUTTON / 2.0),
         };
         // Made, and warmed up, at the start: its first upload (10 MB) would
         // otherwise be the first frame of its slide.
@@ -379,11 +379,12 @@ impl PenSheet {
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
+        let on = self.button_on.get();
         self.icons
             .iter()
             .flatten()
             .chain(self.pen_icon.iter())
-            .chain([&self.button_bg, &self.button_on])
+            .chain([&self.button_bg, &on])
             .chain(self.canvas.iter())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
@@ -433,7 +434,8 @@ impl PenSheet {
                 put(&mut out, ic, r.loc.x + (BUTTON - 24.0) / 2.0, r.loc.y + (BUTTON - 24.0) / 2.0);
             }
             let lit = *b == Button::Tool && self.eraser || self.pressed.is_some_and(|(_, pb)| pb == *b);
-            put(&mut out, if lit { &self.button_on } else { &self.button_bg }, r.loc.x, r.loc.y);
+            let bg = if lit { self.button_on.get() } else { self.button_bg.clone() };
+            put(&mut out, &bg, r.loc.x, r.loc.y);
         }
         put(&mut out, canvas, panel.loc.x as f64, 0.0);
         out

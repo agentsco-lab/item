@@ -346,9 +346,16 @@ impl State {
                 return;
             }
             Contact::Up(slot, _) if self.picker.holds(*slot) => {
-                if let Some(i) = self.picker.up(*slot, count) {
-                    let name = self.walls.names[i].clone();
-                    self.walls.choose(&name, true);
+                match self.picker.up(*slot, count) {
+                    Some(crate::picker::Picked::Wallpaper(i)) => {
+                        let name = self.walls.names[i].clone();
+                        self.walls.choose(&name, true);
+                    }
+                    Some(crate::picker::Picked::Accent(choice)) => {
+                        crate::accent::choose(choice);
+                        self.clock.refresh();
+                    }
+                    None => {}
                 }
                 self.needs_redraw = true;
                 return;

@@ -1,10 +1,10 @@
-//! The clock on the desktop, item's (sfduo-dock's DesktopClock): with no
-//! status bar, the time and the date stand on the free panel - the right one
-//! when both are free, none when neither is - where the dock stands. Grey
-//! and thin (the time 88 px at 62 %, the date 20 px at 45 %), 20 % down the
-//! panel, and each minute it steps up to 12 px from its place, so no pixel
-//! of it is lit all day on the OLED. It takes no touches. Under the date,
-//! the weather now (the system screen's, from met.no): its icon, the
+//! The clock on the desktop: with no status bar, the time and the date stand
+//! on the free panel - the right one when both are free, none when neither
+//! is - where the dock stands. One line in the accent (accent.rs), near the
+//! top: the time bold, the date beside it ("14:51  Fri 2 Oct"), both 30 px;
+//! each minute it steps up to 12 px from its place, so no pixel of it is lit
+//! all day on the OLED. It takes no touches. Under it, small and grey, the
+//! weather now (the system screen's, from met.no): its icon, the
 //! temperature, what it is.
 //! On a panel it was not on, it fades in (300 ms); carried along the ribbon
 //! with its desk, it is not faded.
@@ -14,10 +14,20 @@ use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 
 use crate::layout::{self, SCALE};
-use crate::shade::{date_line, local_time, ShellElement};
+use crate::shade::{local_time, ShellElement};
+
+/// "Fri 2 Oct".
+fn short_date(tm: &libc::tm) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    format!("{} {} {}", DAYS[tm.tm_wday as usize % 7], tm.tm_mday, MONTHS[tm.tm_mon as usize % 12])
+}
 use crate::text::{Font, Label};
 
-const TOP: f64 = 0.2;
+const TOP: f64 = 0.08;
+/// The line's size, and the room between the time and the date.
+const SIZE: f32 = 30.0;
+const BETWEEN: i32 = 14;
 const SHIFT: i32 = 12;
 const GAP: i32 = 6;
 const FADE_NS: u64 = 300_000_000;
@@ -35,22 +45,25 @@ pub struct Clock {
     minute: i32,
     /// The panel it was last drawn on, and since when.
     on: std::cell::Cell<(Option<usize>, u64)>,
+    /// The accent it is drawn in (accent.rs's version).
+    accent: u64,
 }
 
 impl Clock {
     pub fn new() -> Clock {
-        let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
-        let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
+        let bold = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Bold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
+        let medium = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Medium.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
         let mut clock = Clock {
-            fonts: thin.zip(regular),
-            time: Label::new(88.0, [1.0, 1.0, 1.0, 0.62]),
-            date: Label::new(20.0, [1.0, 1.0, 1.0, 0.45]),
-            weather: Label::new(18.0, [1.0, 1.0, 1.0, 0.45]),
+            fonts: bold.zip(medium),
+            time: Label::new(SIZE, [1.0; 4]),
+            date: Label::new(SIZE, [1.0; 4]),
+            weather: Label::new(16.0, [1.0, 1.0, 1.0, 0.45]),
             weather_icon: None,
             weather_was: None,
             step: (0, 0),
             minute: -1,
             on: std::cell::Cell::new((None, 0)),
+            accent: 0,
         };
         clock.refresh();
         clock
@@ -58,15 +71,28 @@ impl Clock {
 
     /// Brings it up to the minute; returns whether it changed.
     pub fn refresh(&mut self) -> bool {
-        let Some((thin, regular)) = &self.fonts else { return false };
+        let Some((bold, medium)) = &self.fonts else { return false };
         let now = local_time();
         let minute = now.tm_hour * 60 + now.tm_min;
-        if minute == self.minute {
+        // The accent changed: drawn again in it.
+        let accent = crate::accent::version();
+        if minute == self.minute && accent == self.accent {
             return false;
         }
+        if accent != self.accent {
+            self.accent = accent;
+            let mut c = crate::accent::get_f();
+            c[3] = 0.95;
+            self.time.set_color(c);
+            self.date.set_color(c);
+        }
+        let stepped = minute != self.minute;
         self.minute = minute;
-        self.time.set(thin, &format!("{}:{:02}", now.tm_hour, now.tm_min));
-        self.date.set(regular, &date_line(&now));
+        self.time.set(bold, &format!("{}:{:02}", now.tm_hour, now.tm_min));
+        self.date.set(medium, &short_date(&now));
+        if !stepped {
+            return true;
+        }
         // A step aside each minute: a small generator on the minute.
         let mut x = (minute as u32).wrapping_mul(2654435761) ^ 0x9e37_79b9;
         let mut next = || {
@@ -137,8 +163,10 @@ impl Clock {
         let mut out = Vec::new();
         let mut y = top;
         let mid = middle.map(|m| m.round() as i32).unwrap_or(rect.loc.x + rect.size.w / 2);
+        // One line: the time, then the date, the two centred together.
+        let line_w = self.time.extent.w + BETWEEN + self.date.extent.w;
+        let mut x = mid - line_w / 2 + self.step.0;
         for label in [&self.time, &self.date] {
-            let x = mid - label.extent.w / 2 + self.step.0;
             if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
                 ((x * SCALE) as f64, (y * SCALE) as f64),
@@ -150,8 +178,9 @@ impl Clock {
             ) {
                 out.push(ShellElement::Text(e));
             }
-            y += label.extent.h + GAP;
+            x += label.extent.w + BETWEEN;
         }
+        y += self.time.extent.h.max(self.date.extent.h) + GAP;
         // The weather, its icon before it, a little below the date.
         if self.weather.extent.w > 0 {
             let icon_w = if self.weather_icon.is_some() { 26 } else { 0 };

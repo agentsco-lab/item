@@ -284,7 +284,7 @@ pub struct Setup {
     move_ns: f64,
     orb_ns: u64,
     started: u64,
-    button_bg: MemoryRenderBuffer,
+    button_bg: crate::accent::Rounded,
     /// A second, quieter button under the first (Add another), and its word.
     button2_bg: MemoryRenderBuffer,
     button2: Label,
@@ -347,7 +347,7 @@ impl Setup {
             move_ns: MOVE_MAX_NS,
             orb_ns: 0,
             started: 0,
-            button_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, crate::layout::ACCENT),
+            button_bg: crate::accent::Rounded::new(BUTTON_W, BUTTON_H, BUTTON_H / 2.0),
             button2_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [46, 46, 46, 46]),
             button2: Label::new(19.0, WHITE),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
@@ -907,7 +907,8 @@ impl Setup {
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.button_bg]
+        let bg = self.button_bg.get();
+        [&bg]
             .into_iter()
             .chain(self.arrow.iter())
             .chain(self.pad.buffers())
@@ -956,7 +957,7 @@ impl Setup {
             if old.button.extent.w > 0 {
                 let b = Self::button_rect();
                 put(&mut out, &old.button.buffer, b.loc.x + (BUTTON_W - old.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - old.button.extent.h as f64) / 2.0 + dy, alpha, None);
-                put(&mut out, &self.button_bg, b.loc.x, b.loc.y + dy, alpha, None);
+                put(&mut out, &self.button_bg.get(), b.loc.x, b.loc.y + dy, alpha, None);
             }
         }
 
@@ -994,7 +995,7 @@ impl Setup {
             let (a, dy) = coming(self.right_at());
             let b = Self::button_rect();
             put(&mut out, &w.button.buffer, b.loc.x + (BUTTON_W - w.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - w.button.extent.h as f64) / 2.0 + dy, a, None);
-            put(&mut out, &self.button_bg, b.loc.x, b.loc.y + dy, a, None);
+            put(&mut out, &self.button_bg.get(), b.loc.x, b.loc.y + dy, a, None);
         }
         if self.step == Step::FingerKnown {
             let (a, dy) = coming(self.right_at() + WORDS_GAP_NS);

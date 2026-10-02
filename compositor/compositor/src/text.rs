@@ -96,6 +96,14 @@ impl Label {
         }
     }
 
+    /// A new colour: drawn in it at the next `set`.
+    pub fn set_color(&mut self, color: [f32; 4]) {
+        if self.color != color {
+            self.color = color;
+            self.text.clear();
+        }
+    }
+
     /// Sets the text; returns whether it changed.
     pub fn set(&mut self, font: &Font, text: &str) -> bool {
         if self.text == text {

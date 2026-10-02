@@ -206,7 +206,7 @@ pub struct Quick {
     pub media: Arc<Mutex<Option<Media>>>,
     jobs: mpsc::Sender<Job>,
     font: Option<Font>,
-    tile_on: MemoryRenderBuffer,
+    tile_on: crate::accent::Rounded,
     tile_off: MemoryRenderBuffer,
     button: MemoryRenderBuffer,
     button_red: MemoryRenderBuffer,
@@ -275,7 +275,7 @@ impl Quick {
             media,
             jobs: tx,
             font: Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]),
-            tile_on: crate::grid::rounded(tile_w, TILE_H, 20.0, crate::layout::ACCENT),
+            tile_on: crate::accent::Rounded::new(tile_w, TILE_H, 20.0),
             tile_off: crate::grid::rounded(tile_w, TILE_H, 20.0, [34, 34, 34, 34]),
             button: crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, [34, 34, 34, 34]),
             button_red: crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, RED),
@@ -492,7 +492,8 @@ impl Quick {
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.tile_on, &self.tile_off, &self.button, &self.button_red, &self.media_bg, &self.track, &self.fill, &self.knob, &self.row_bg, &self.banner_bg]
+        let on = self.tile_on.get();
+        [&on, &self.tile_off, &self.button, &self.button_red, &self.media_bg, &self.track, &self.fill, &self.knob, &self.row_bg, &self.banner_bg]
             .into_iter()
             .chain(self.icons.values())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
@@ -581,7 +582,8 @@ impl Quick {
                 if let Some(ic) = self.icons.get(tile.icon()) {
                     push(ic, r.loc.x + 18.0, r.loc.y + (TILE_H - ICON as f64) / 2.0, None);
                 }
-                push(if on { &self.tile_on } else { &self.tile_off }, r.loc.x, r.loc.y, None);
+                let bg = if on { self.tile_on.get() } else { self.tile_off.clone() };
+                push(&bg, r.loc.x, r.loc.y, None);
             }
             // Lock and power; power asked, restart and power off.
             let asking = self.power_asking();

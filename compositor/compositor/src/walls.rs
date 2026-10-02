@@ -130,6 +130,7 @@ impl Walls {
                 if name != AURORA {
                     tracing::info!("walls: {name} decoded in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
                 }
+                crate::accent::set_wall(if name == AURORA { [0x6f, 0xd6, 0xc4, 255] } else { crate::accent::from_picture(&rgba, w, h) });
                 *slot.lock().unwrap() = Some((name, rgba, w, h));
                 wake.ping();
             }

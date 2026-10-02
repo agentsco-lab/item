@@ -286,7 +286,7 @@ impl Screen {
                 Some(p) => smithay::utils::Rectangle::<i32, smithay::utils::Physical>::new(panels[p].loc.to_physical(SCALE), panels[p].size.to_physical(SCALE)),
                 None => smithay::utils::Rectangle::<i32, smithay::utils::Physical>::from_size((crate::layout::LAYOUT.0 * SCALE, crate::layout::LAYOUT.1 * SCALE).into()),
             };
-            let a = crate::layout::ACCENT;
+            let a = crate::accent::get();
             let k = 0.22f32;
             let color = [a[0] as f32 / 255.0 * k, a[1] as f32 / 255.0 * k, a[2] as f32 / 255.0 * k, k];
             elements.push(FrameElement::Shell(ShellElement::Solid(smithay::backend::renderer::element::solid::SolidColorRenderElement::new(self.carry_id.clone(), rect, smithay::backend::renderer::utils::CommitCounter::from((rect.loc.x + rect.size.w) as usize), color, smithay::backend::renderer::element::Kind::Unspecified))));

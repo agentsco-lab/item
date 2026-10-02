@@ -50,7 +50,7 @@ pub struct Keys {
     bg_on: MemoryRenderBuffer,
     wide: MemoryRenderBuffer,
     space: MemoryRenderBuffer,
-    enter: MemoryRenderBuffer,
+    enter: crate::accent::Rounded,
     /// The answer key's word.
     pub enter_word: String,
 }
@@ -69,7 +69,7 @@ impl Keys {
             bg_on: crate::grid::rounded(w, KEY_H, 12.0, [90, 90, 90, 90]),
             wide: crate::grid::rounded(w * 1.5 + GAP / 2.0, KEY_H, 12.0, [28, 28, 28, 28]),
             space: crate::grid::rounded(w * 5.0 + GAP * 4.0, KEY_H, 12.0, [40, 40, 40, 40]),
-            enter: crate::grid::rounded(w * 2.5 + GAP * 1.5, KEY_H, 12.0, crate::layout::ACCENT),
+            enter: crate::accent::Rounded::new(w * 2.5 + GAP * 1.5, KEY_H, 12.0),
             enter_word: "Done".into(),
         }
     }
@@ -200,8 +200,9 @@ impl Keys {
                 put(&mut out, &b, r.loc.x + (r.size.w - w as f64) / 2.0, r.loc.y + (r.size.h - h as f64) / 2.0);
             }
             let on = self.pressed.is_some_and(|(_, p)| p == i) || (*key == Key::Shift && self.shift);
+            let enter = self.enter.get();
             let bg = match key {
-                Key::Enter => &self.enter,
+                Key::Enter => &enter,
                 Key::Space => &self.space,
                 Key::Shift | Key::Delete | Key::Layer => &self.wide,
                 Key::Char(_) => if on { &self.bg_on } else { &self.bg },

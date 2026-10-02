@@ -33,7 +33,7 @@ pub struct Alert {
     app: Label,
     title: Label,
     body: Label,
-    first_bg: MemoryRenderBuffer,
+    first_bg: crate::accent::Rounded,
     other_bg: MemoryRenderBuffer,
     pressed: Option<(TouchSlot, usize)>,
     dim: Id,
@@ -51,7 +51,7 @@ impl Alert {
             app: Label::new(18.0, [1.0, 1.0, 1.0, 0.7]),
             title: Label::new(44.0, [1.0, 1.0, 1.0, 0.97]),
             body: Label::new(20.0, [1.0, 1.0, 1.0, 0.75]),
-            first_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, crate::layout::ACCENT),
+            first_bg: crate::accent::Rounded::new(BUTTON_W, BUTTON_H, BUTTON_H / 2.0),
             other_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [60, 60, 60, 60]),
             pressed: None,
             dim: Id::new(),
@@ -143,7 +143,8 @@ impl Alert {
             let r = self.button_rect(i);
             let a = alpha * if self.pressed.is_some_and(|(_, p)| p == i) { 0.65 } else { 1.0 };
             put(&mut out, &label.buffer, r.loc.x + (BUTTON_W - label.extent.w as f64) / 2.0, r.loc.y + (BUTTON_H - label.extent.h as f64) / 2.0, a);
-            put(&mut out, if i == 0 { &self.first_bg } else { &self.other_bg }, r.loc.x, r.loc.y, a);
+            let bg = if i == 0 { self.first_bg.get() } else { self.other_bg.clone() };
+            put(&mut out, &bg, r.loc.x, r.loc.y, a);
         }
         let (w, h) = layout::LAYOUT;
         let rect = Rectangle::<i32, Physical>::from_size((w * SCALE, h * SCALE).into());

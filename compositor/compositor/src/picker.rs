@@ -23,7 +23,12 @@ const THUMB_W: f64 = 180.0;
 const THUMB_H: f64 = 101.0;
 const GAP: f64 = 16.0;
 /// The strip: its height, its distance from the bottom, its side margin.
-const STRIP_H: f64 = 176.0;
+const STRIP_H: f64 = 236.0;
+/// The accent's row under the pictures (accent.rs): a swatch each, the
+/// first the wallpaper's own colour (drawn as a ring), then the fixed ones.
+const SWATCH: f64 = 34.0;
+const SWATCH_GAP: f64 = 16.0;
+const SWATCHES_Y: f64 = 172.0;
 const STRIP_BOTTOM: f64 = 16.0;
 const SIDE: f64 = 28.0;
 /// Opening and closing.
@@ -55,6 +60,19 @@ pub struct Picker {
     glass: MemoryRenderBuffer,
     ring: MemoryRenderBuffer,
     title: Label,
+    /// The fixed swatches; the wallpaper's, drawn again with it (and its
+    /// hole); the light ring round the one chosen.
+    swatches: Vec<MemoryRenderBuffer>,
+    wall_swatch: std::cell::RefCell<(u64, MemoryRenderBuffer)>,
+    hole: MemoryRenderBuffer,
+    swatch_ring: MemoryRenderBuffer,
+}
+
+/// What a tap in the strip chose.
+pub enum Picked {
+    Wallpaper(usize),
+    /// None: the accent from the wallpaper; Some(i): the palette's.
+    Accent(Option<usize>),
 }
 
 impl Picker {
@@ -74,7 +92,17 @@ impl Picker {
             glass: crate::grid::rounded(width, STRIP_H, 26.0, [8, 10, 14, 150]),
             ring: crate::grid::rounded(THUMB_W + 8.0, THUMB_H + 8.0, 17.0, [235, 235, 235, 235]),
             title,
+            swatches: crate::accent::PALETTE.iter().map(|c| crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, *c)).collect(),
+            wall_swatch: std::cell::RefCell::new((0, crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()))),
+            hole: crate::grid::rounded(SWATCH - 12.0, SWATCH - 12.0, (SWATCH - 12.0) / 2.0, [14, 16, 20, 255]),
+            swatch_ring: crate::grid::rounded(SWATCH + 8.0, SWATCH + 8.0, (SWATCH + 8.0) / 2.0, [235, 235, 235, 235]),
         }
+    }
+
+    /// Swatch `i`'s rect (0 the wallpaper's), logical px, open.
+    fn swatch(i: usize) -> Rectangle<f64, Logical> {
+        let s = Self::strip();
+        Rectangle::new((s.loc.x + 22.0 + i as f64 * (SWATCH + SWATCH_GAP), s.loc.y + SWATCHES_Y).into(), (SWATCH, SWATCH).into())
     }
 
     /// How far open, 0 to 1, at `frame_ns`.
@@ -178,7 +206,7 @@ impl Picker {
 
     /// The finger lets go: a tap on a picture is its index; a tap above
     /// the strip closes it; a drag runs on.
-    pub fn up(&mut self, slot: TouchSlot, count: usize) -> Option<usize> {
+    pub fn up(&mut self, slot: TouchSlot, count: usize) -> Option<Picked> {
         if self.opener == Some(slot) {
             self.opener = None;
             return None;
@@ -197,7 +225,14 @@ impl Picker {
             self.close();
             return None;
         }
-        (0..count).find(|&i| Self::thumb(i, scroll).contains(h.start))
+        // A swatch: a little more room round it than it shows.
+        if let Some(i) = (0..=crate::accent::PALETTE.len()).find(|&i| {
+            let r = Self::swatch(i);
+            Rectangle::<f64, Logical>::new((r.loc.x - 6.0, r.loc.y - 6.0).into(), (r.size.w + 12.0, r.size.h + 12.0).into()).contains(h.start)
+        }) {
+            return Some(Picked::Accent(i.checked_sub(1)));
+        }
+        (0..count).find(|&i| Self::thumb(i, scroll).contains(h.start)).map(Picked::Wallpaper)
     }
 
     /// After a frame: whether it still moves.
@@ -242,6 +277,28 @@ impl Picker {
             }
             if i == current {
                 put(&mut out, &self.ring, r.loc.x - 4.0, r.loc.y - 4.0);
+            }
+        }
+        // The accent's row: the wallpaper's colour as a ring, the fixed
+        // ones whole, the one chosen ringed.
+        let chosen = crate::accent::chosen().map(|i| i + 1).unwrap_or(0);
+        let wall = {
+            let mut w = self.wall_swatch.borrow_mut();
+            if w.0 != crate::accent::version() {
+                *w = (crate::accent::version(), crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()));
+            }
+            w.1.clone()
+        };
+        for i in 0..=self.swatches.len() {
+            let r = Self::swatch(i);
+            if i == 0 {
+                put(&mut out, &self.hole, r.loc.x + 6.0, r.loc.y + 6.0);
+                put(&mut out, &wall, r.loc.x, r.loc.y);
+            } else {
+                put(&mut out, &self.swatches[i - 1], r.loc.x, r.loc.y);
+            }
+            if i == chosen {
+                put(&mut out, &self.swatch_ring, r.loc.x - 4.0, r.loc.y - 4.0);
             }
         }
         put(&mut out, &self.title.buffer, strip.loc.x + 22.0, strip.loc.y + 16.0);
