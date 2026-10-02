@@ -215,10 +215,13 @@ const DROP_RADIUS: f32 = 36.0;
 const STRETCH: f64 = 0.09;
 const STRETCH_MAX: f64 = 0.16;
 const STRETCH_FOLLOW: f64 = 0.22;
-/// Carried by the hinge (slowly, by the hand): stretched as if HINGE_SLOSH
-/// times as fast, and a wobble of SWAY when the hinge stops.
-const HINGE_SLOSH: f64 = 4.0;
-const SWAY: f64 = 0.06;
+/// Carried by the hinge, a drop flows: its front edge follows where it is
+/// going within FLOW_FRONT_NS, its back edge trails within FLOW_BACK_NS (a
+/// tail); longer, it is thinner as much (its water kept, down to FLOW_THIN
+/// of its height); stopped, the tail draws in - no bounce.
+const FLOW_FRONT_NS: f64 = 30e6;
+const FLOW_BACK_NS: f64 = 150e6;
+const FLOW_THIN: f64 = 0.7;
 /// The icons seen through the water: a little larger.
 const LENS: f64 = 1.04;
 /// Alive while a finger is on a drop and a while after, calming over the
@@ -273,10 +276,10 @@ pub struct Dock {
     /// Each half's x as last drawn and when, and its stretch from moving.
     last_x: std::cell::Cell<Option<(u64, [f64; 2])>>,
     stretch: std::cell::Cell<[f64; 2]>,
-    /// Carried by the hinge: whether the halves were going, and when they
-    /// stopped (a wobble from then).
-    hinge_going: std::cell::Cell<bool>,
-    swayed: std::cell::Cell<u64>,
+    /// Carried by the hinge: each half's edges as drawn (left, right), where
+    /// it was going and when, and whether they are still drawing in.
+    flow: std::cell::Cell<Option<(u64, [[f64; 2]; 2], [f64; 2])>>,
+    flowing: std::cell::Cell<bool>,
     /// Each half: which way it last went, whether its tail clings to the
     /// hinge's edge, and when it was last jolted.
     dir: std::cell::Cell<[f64; 2]>,
@@ -371,7 +374,7 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), hinge_going: Default::default(), swayed: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -773,8 +776,7 @@ impl Dock {
             // hinge, or alive after a touch.
             None => {
                 self.landed.is_some_and(|t| frame_ns < t + WOBBLE_NS)
-                    || (self.swayed.get() != 0 && frame_ns < self.swayed.get() + WOBBLE_NS)
-                    || self.hinge_going.get()
+                    || self.flowing.get()
                     || self.stretch.get().iter().any(|s| s.abs() > 0.003)
                     || self.popped.get().iter().any(|&t| t != 0 && frame_ns < t + WOBBLE_NS)
                     || self.trail.get().is_some_and(|(_, t)| frame_ns < t + WET_NS)
@@ -1123,28 +1125,57 @@ impl Dock {
     /// lets go, its head coming out round on the other side.
     fn shape(&self, places: &[Place; 2], frame_ns: u64) -> Shape {
         let bottom = layout::LAYOUT.1 as f64;
-        let boxes: [(f64, f64, f64, f64); 2] = [0, 1].map(|h| {
+        let mut boxes: [(f64, f64, f64, f64); 2] = [0, 1].map(|h| {
             let p = places[h];
             let (w, ht) = (self.halves[h].size.0 as f64, self.halves[h].size.1 as f64);
             (p.anchor + (p.x - p.anchor) * p.scale, p.y, w * p.scale, ht)
         });
+        // Carried by the hinge (no move of its own): the front edge leads,
+        // the back one trails, the drop thinner as it is longer; on a move
+        // of its own the edges are where the move has them.
+        let by_hinge = self.moving.is_none() && self.scrub.is_none() && self.birth.is_none();
+        let target = [0, 1].map(|h| [boxes[h].0, boxes[h].0 + boxes[h].2]);
+        let mut flowing = false;
+        if by_hinge {
+            if let Some((t, mut edges, was)) = self.flow.get().filter(|(t, ..)| frame_ns > *t) {
+                let dt = (frame_ns - t) as f64;
+                let (front, back) = (1.0 - (-dt / FLOW_FRONT_NS).exp(), 1.0 - (-dt / FLOW_BACK_NS).exp());
+                for h in 0..2 {
+                    let mid = (target[h][0] + target[h][1]) / 2.0;
+                    let way = mid - was[h];
+                    // Going right the right edge leads; left, the left one;
+                    // still, both draw in at the tail's pace.
+                    let (kl, kr) = if way > 0.01 { (back, front) } else if way < -0.01 { (front, back) } else { (back, back) };
+                    edges[h][0] += (target[h][0] - edges[h][0]) * kl;
+                    edges[h][1] += (target[h][1] - edges[h][1]) * kr;
+                    let (l, r) = (edges[h][0].min(edges[h][1] - 1.0), edges[h][1]);
+                    let w0 = boxes[h].2;
+                    if (r - l - w0).abs() > 0.3 || (l - target[h][0]).abs() > 0.3 {
+                        flowing = true;
+                    }
+                    let thin = (w0 / (r - l).max(1.0)).clamp(FLOW_THIN, 1.0);
+                    boxes[h] = (l, boxes[h].1 + boxes[h].3 * (1.0 - thin), r - l, boxes[h].3 * thin);
+                }
+                self.flow.set(Some((frame_ns, edges, [0, 1].map(|h| (target[h][0] + target[h][1]) / 2.0))));
+            } else if self.flow.get().is_none_or(|(t, ..)| frame_ns > t) {
+                self.flow.set(Some((frame_ns, target, [0, 1].map(|h| (target[h][0] + target[h][1]) / 2.0))));
+            }
+        } else {
+            self.flow.set(None);
+        }
+        self.flowing.set(flowing);
         let shown = [0, 1].map(|h| places[h].y < bottom && self.halves[h].len() > 0);
 
         // Moving, a drop stretches along its way: its speed, smoothed; and
         // which way it goes.
         let xs = [places[0].x, places[1].x];
         let (mut stretch, mut dir) = (self.stretch.get(), self.dir.get());
-        // Not on a move of its own: the hinge carries it, slowly - water
-        // sloshes more for it, and wobbles when it stops.
-        let by_hinge = self.moving.is_none() && self.scrub.is_none() && self.birth.is_none();
+        // (Carried by the hinge it flows instead: see `flow` above.)
         if let Some((t, was)) = self.last_x.get().filter(|(t, _)| frame_ns > *t) {
             let ms = (frame_ns - t) as f64 / 1e6;
-            let mut fastest: f64 = 0.0;
             for h in 0..2 {
                 let dx = xs[h] - was[h];
-                let v = if ms < 100.0 { dx.abs() / ms } else { 0.0 };
-                fastest = fastest.max(v);
-                let v = if by_hinge { v * HINGE_SLOSH } else { v };
+                let v = if ms < 100.0 && !by_hinge { dx.abs() / ms } else { 0.0 };
                 stretch[h] += ((v * STRETCH).min(STRETCH_MAX) - stretch[h]) * STRETCH_FOLLOW;
                 if stretch[h].abs() < 0.002 {
                     stretch[h] = 0.0;
@@ -1152,12 +1183,6 @@ impl Dock {
                 if v > 0.02 {
                     dir[h] = dx.signum();
                 }
-            }
-            if by_hinge && fastest > 0.01 {
-                self.hinge_going.set(true);
-            } else if self.hinge_going.get() && fastest < 0.002 {
-                self.hinge_going.set(false);
-                self.swayed.set(frame_ns);
             }
         }
         if self.last_x.get().is_none_or(|(t, _)| frame_ns > t) {
@@ -1175,7 +1200,7 @@ impl Dock {
             let u = frame_ns.saturating_sub(since) as f64;
             if u >= WOBBLE_NS as f64 { 0.0 } else { amp * (-u / (WOBBLE_NS as f64 / 4.0)).exp() * (u / WOBBLE_PERIOD_NS * std::f64::consts::TAU).sin() }
         };
-        let landed = self.landed.map(|t| ring(t, WOBBLE)).unwrap_or(0.0) + ring(self.swayed.get(), SWAY);
+        let landed = self.landed.map(|t| ring(t, WOBBLE)).unwrap_or(0.0);
         let mut popped = self.popped.get();
         let squash: [(f64, f64); 2] = [0, 1].map(|h| {
             let wb = landed + ring(popped[h], POP);
