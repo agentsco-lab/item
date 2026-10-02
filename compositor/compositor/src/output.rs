@@ -456,7 +456,9 @@ impl Screen {
         // Choosing the wallpaper: no clock over it.
         let clock_panel = if state.picker.visible(frame_ns) { None } else { clock_panel };
         let carried = state.ribbon.clock_panel().is_some();
-        let clock = state.clock.elements(&mut self.renderer, clock_panel, frame_ns, carried);
+        // Going along with the dock from one panel to the other.
+        let middle = if carried { None } else { state.dock.home_x(frame_ns).filter(|(_, going)| *going).map(|(x, _)| x) };
+        let clock = state.clock.elements(&mut self.renderer, clock_panel, frame_ns, carried, middle);
         match clock_panel.and_then(|k| state.ribbon.carried(k, frame_ns)) {
             Some(dx) => elements.extend(carry(clock, dx)),
             None => elements.extend(clock.into_iter().map(FrameElement::from)),

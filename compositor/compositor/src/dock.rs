@@ -585,6 +585,46 @@ impl Dock {
         }
     }
 
+    /// The middle of the panel the clock stands on (the home panel), on its
+    /// way with the dock: during a move from one home panel to the other it
+    /// goes along, eased as the halves are (or as the ribbon's finger has
+    /// it). With whether it is under way.
+    pub fn home_x(&self, frame_ns: u64) -> Option<(f64, bool)> {
+        let middle = |mode: Mode| {
+            let p = match mode {
+                Mode::Both => 1,
+                Mode::On(p) => p,
+                Mode::Hidden => return None,
+            };
+            let r = layout::panels()[p];
+            Some(r.loc.x as f64 + r.size.w as f64 / 2.0)
+        };
+        let (from, to, k, linear) = if let Some((from, to, k)) = self.scrub {
+            (from, to, k, true)
+        } else if let Some(m) = &self.moving {
+            let all = (frame_ns.saturating_sub(m.start_ns) as f64 / Self::duration(m) as f64).clamp(0.0, 1.0);
+            let travel = MOVE_NS as f64 / Self::duration(m) as f64;
+            (m.from, m.to, (all / travel).min(1.0), false)
+        } else {
+            return middle(self.mode).map(|x| (x, false));
+        };
+        match (middle(from), middle(to)) {
+            (Some(a), Some(b)) if a != b => {
+                let e = if linear {
+                    k
+                } else if k < 0.5 {
+                    4.0 * k * k * k
+                } else {
+                    1.0 - (-2.0 * k + 2.0).powi(3) / 2.0
+                };
+                Some((a + (b - a) * e, k < 1.0))
+            }
+            (_, Some(b)) => Some((b, false)),
+            (Some(a), None) => Some((a, false)),
+            (None, None) => None,
+        }
+    }
+
     /// Where the halves go for the panels windows have. Returns whether they
     /// set off.
     pub fn follow(&mut self, taken: [bool; 2], now_ns: u64) -> bool {

@@ -115,7 +115,15 @@ impl Clock {
 
     /// What it draws on `panel`, if any, at `frame_ns`; `carried` along the
     /// ribbon, its panel is where it came from and it is not faded.
-    pub fn elements(&self, renderer: &mut GlesRenderer, panel: Option<usize>, frame_ns: u64, carried: bool) -> Vec<ShellElement> {
+    /// `middle`: where its middle is, logical x, when it goes along with the
+    /// dock from one panel to the other (not faded then); else the panel's.
+    pub fn elements(&self, renderer: &mut GlesRenderer, panel: Option<usize>, frame_ns: u64, carried: bool, middle: Option<f64>) -> Vec<ShellElement> {
+        // Going along: already on the panel it goes to, so it is not faded
+        // in there when it arrives.
+        if middle.is_some() {
+            self.on.set((panel, 0));
+        }
+        let carried = carried || middle.is_some();
         let (was, since) = self.on.get();
         if !carried && panel != was {
             self.on.set((panel, if was.is_none() && since == 0 { 0 } else { frame_ns }));
@@ -128,8 +136,9 @@ impl Clock {
         let top = (rect.size.h as f64 * TOP) as i32 + self.step.1;
         let mut out = Vec::new();
         let mut y = top;
+        let mid = middle.map(|m| m.round() as i32).unwrap_or(rect.loc.x + rect.size.w / 2);
         for label in [&self.time, &self.date] {
-            let x = rect.loc.x + (rect.size.w - label.extent.w) / 2 + self.step.0;
+            let x = mid - label.extent.w / 2 + self.step.0;
             if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
                 ((x * SCALE) as f64, (y * SCALE) as f64),
@@ -146,7 +155,7 @@ impl Clock {
         // The weather, its icon before it, a little below the date.
         if self.weather.extent.w > 0 {
             let icon_w = if self.weather_icon.is_some() { 26 } else { 0 };
-            let x = rect.loc.x + (rect.size.w - self.weather.extent.w - icon_w) / 2 + self.step.0;
+            let x = mid - (self.weather.extent.w + icon_w) / 2 + self.step.0;
             let y = y + 4;
             let put = |out: &mut Vec<ShellElement>, renderer: &mut GlesRenderer, b: &smithay::backend::renderer::element::memory::MemoryRenderBuffer, x: i32, y: i32, a: f32| {
                 if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * SCALE) as f64, (y * SCALE) as f64), b, Some(a), None, None, Kind::Unspecified) {
