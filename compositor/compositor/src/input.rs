@@ -103,6 +103,7 @@ fn toggle_keyboard() {
             .and_then(|v| bool::try_from(v).ok())
             .unwrap_or(false);
         tracing::info!("power key: keyboard {}", if visible { "hidden" } else { "shown" });
+        crate::layers::KEYBOARD_ASKED.store(!visible, std::sync::atomic::Ordering::Relaxed);
         if let Err(e) = bus.call_method(Some("sm.puri.OSK0"), "/sm/puri/OSK0", Some("sm.puri.OSK0"), "SetVisible", &(!visible)) {
             tracing::warn!("power key: the keyboard: {e}");
         }

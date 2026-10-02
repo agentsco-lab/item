@@ -25,6 +25,9 @@ use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurface, LayerSurfaceCache
 
 use crate::layout::{self, SCALE};
 
+/// The keyboard asked up by item (the power key, input.rs).
+pub static KEYBOARD_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[derive(Default)]
 pub struct Layers {
     pub surfaces: Vec<LayerSurface>,
@@ -117,9 +120,11 @@ impl Layers {
         is_keyboard(l) || self.names.iter().any(|(s, n)| s == l.wl_surface() && n == "osk")
     }
 
-    /// A keyboard not yet down once since it came (see `settled`).
+    /// A keyboard not yet down once since it came (see `settled`) - unless
+    /// item asked it up (the power key): stevia makes a new surface each
+    /// time it shows, and without its slide it is never down.
     fn unsettled(&self, l: &LayerSurface) -> bool {
-        self.is_osk(l) && !self.settled.borrow().contains(l.wl_surface())
+        self.is_osk(l) && !KEYBOARD_ASKED.load(std::sync::atomic::Ordering::Relaxed) && !self.settled.borrow().contains(l.wl_surface())
     }
 
     pub fn keyboard_height(&self) -> Option<(usize, i32)> {
