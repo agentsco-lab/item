@@ -34,6 +34,7 @@ mod lock;
 mod pinpad;
 mod door;
 mod logind;
+mod face;
 mod fingerprint;
 mod follow;
 mod status;
@@ -336,8 +337,29 @@ impl Data {
             self.state.needs_redraw = true;
         }
         // The camera's peek: a new frame drawn; off when its time is up.
-        let showing = self.state.lock.locked && !self.state.lock.blank;
-        if self.state.camera_peek.tick(now, showing) {
+        // In the first setup, while the PIN is typed: the camera on unseen
+        // for CV ID's face (face.rs, setup.rs).
+        let setup_face = self.state.setup.wants_face();
+        if setup_face && !self.state.camera_peek.playing() {
+            self.state.camera_peek.start_for(now, u64::MAX);
+        }
+        let showing = (self.state.lock.locked && !self.state.lock.blank) || setup_face;
+        if self.state.camera_peek.tick(now, showing, self.state.lock.locked || setup_face) {
+            self.state.needs_redraw = true;
+        }
+        // CV ID: the camera's frames looked at while a face would open the
+        // lock, or taken while the setup's PIN is typed - kept once it is
+        // accepted.
+        let looking = self.state.camera_peek.playing() && (self.state.lock.wants_face() || setup_face);
+        self.state.face.want(looking, setup_face);
+        if self.state.face.take_taken() {
+            self.state.setup.face_taken();
+        }
+        if self.state.setup.take_pin_done() {
+            self.state.face.keep();
+        }
+        if self.state.face.take_matched() && self.state.lock.wants_face() {
+            self.state.lock.unlock_face();
             self.state.needs_redraw = true;
         }
         // The hinge moved: the dock's pieces follow it.

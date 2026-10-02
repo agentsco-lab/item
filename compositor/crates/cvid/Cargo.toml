@@ -1,0 +1,16 @@
+[package]
+name = "cvid"
+version = "0.1.0"
+edition = "2021"
+description = "CV ID: face detection (YuNet) and recognition (SFace) for item's lock screen"
+
+[dependencies]
+tract-onnx = "0.23"
+# The probe's still pictures.
+zune-jpeg = "0.4"
+zune-core = "0.4"
+
+[[bin]]
+name = "cvid-probe"
+path = "src/bin/probe.rs"
+

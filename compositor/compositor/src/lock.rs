@@ -36,6 +36,8 @@ use crate::shade::{local_time, ShellElement};
 use crate::pinpad::{ease, shake, PinPad, Press, SHAKE_NS};
 use crate::text::{Font, Label};
 
+/// How long "Face recognized" is read before the doors open.
+const FACE_SAID_NS: u64 = 350_000_000;
 /// The mark's flash at a known finger.
 const FLASH_NS: u64 = 300_000_000;
 /// The mark pulses this long after the lock screen shows, then rests.
@@ -135,6 +137,9 @@ pub struct Lock {
     /// The hint, and a passing notice in its place until when.
     hint_base: String,
     notice_until: u64,
+    /// A face known (face.rs): the doors open at this time, the notice
+    /// read first.
+    face_open_at: Option<u64>,
     minute: i32,
     id: Id,
     id_right: Id,
@@ -331,6 +336,7 @@ impl Lock {
             hint: Label::new(15.0, [1.0, 1.0, 1.0, 0.5]),
             hint_base: "Swipe up to unlock".into(),
             notice_until: 0,
+            face_open_at: None,
             minute: -1,
             id: Id::new(),
             id_right: Id::new(),
@@ -456,6 +462,12 @@ impl Lock {
         self.holds_screen() && !self.blank && !self.after_boot && self.fingers > 0
     }
 
+    /// Whether a face would open it now (face.rs): as for a finger, and not
+    /// once the PIN is asked for.
+    pub fn wants_face(&self) -> bool {
+        self.holds_screen() && !self.blank && !self.after_boot && self.fails < FAILS_FOR_PIN
+    }
+
     /// The reader did not know a finger.
     pub fn fingerprint_failed(&mut self) {
         self.fails += 1;
@@ -497,6 +509,11 @@ impl Lock {
 
     /// The notice's time is up: the hint is back; whether it changed.
     pub fn notice_done(&mut self, now_ns: u64) -> bool {
+        if self.face_open_at.is_some_and(|t| now_ns >= t) {
+            self.face_open_at = None;
+            self.unlock();
+            return true;
+        }
         if self.notice_until == 0 || now_ns < self.notice_until {
             return false;
         }
@@ -659,6 +676,16 @@ impl Lock {
 
     /// Unlocked from outside (logind's Unlock: the fingerprint reader,
     /// `loginctl unlock-session`): the doors open as after a PIN.
+    /// A known face (face.rs): said, then the doors - no picture of it.
+    pub fn unlock_face(&mut self) {
+        if !self.locked || self.fading.is_some() || self.face_open_at.is_some() {
+            return;
+        }
+        tracing::info!("lock: a known face");
+        self.notice("Face recognized");
+        self.face_open_at = Some(hybris_hwc::now_ns() + FACE_SAID_NS);
+    }
+
     pub fn unlock(&mut self) {
         if !self.locked || self.fading.is_some() {
             return;

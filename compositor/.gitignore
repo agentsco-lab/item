@@ -1,2 +1,3 @@
 /target
 /sysroot
+/crates/cvid/models/*.onnx

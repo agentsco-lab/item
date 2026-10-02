@@ -7,6 +7,8 @@ description = "A Wayland compositor for the Surface Duo, drawing through hwcompo
 [dependencies]
 hybris-hwc = { path = "../crates/hybris-hwc" }
 smithay-hybris = { path = "../crates/smithay-hybris" }
+# CV ID (face.rs): YuNet and SFace.
+cvid = { path = "../crates/cvid" }
 smithay = { version = "0.7", default-features = false, features = ["renderer_gl", "wayland_frontend", "desktop", "use_system_lib", "backend_libinput"] }
 # libwayland-server is opened at run time, not linked: the cross build has none.
 wayland-sys = { version = "0.31", features = ["dlopen"] }

@@ -146,6 +146,8 @@ pub struct State {
     /// A peek through the camera on the lock screen (camera.rs, an
     /// experiment).
     pub camera_peek: crate::camera::Peek,
+    /// CV ID (face.rs).
+    pub face: crate::face::Face,
     /// The hinge's angle (posture.rs).
     pub posture: crate::posture::Posture,
     /// The privacy dot: camera, microphone, location in use.
@@ -187,6 +189,7 @@ impl State {
         seat.add_keyboard(Default::default(), 200, 25).expect("keyboard");
         seat.add_touch();
         crate::protocols::create_globals(dh);
+        let face = crate::face::Face::new(wake.clone());
         State {
             compositor_state: CompositorState::new::<State>(dh),
             xdg_shell_state: XdgShellState::new::<State>(dh),
@@ -253,7 +256,8 @@ impl State {
             lid_shut: false,
             lid_light_pending: false,
             posture: crate::posture::Posture::new(wake.clone()),
-            camera_peek: crate::camera::Peek::new(wake.clone()),
+            camera_peek: crate::camera::Peek::new(wake.clone(), face.sink()),
+            face,
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),

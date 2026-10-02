@@ -250,6 +250,11 @@ pub struct Setup {
     wake: smithay::reexports::calloop::ping::Ping,
     /// A PIN that is the user's now, for the keyring's prompts (keyring.rs).
     pin_for_keyring: Option<String>,
+    /// CV ID (face.rs): whether it is on, and whether the face of the one
+    /// typing the PIN is taken yet; the PIN accepted, not yet told.
+    cvid: bool,
+    face_taken: bool,
+    pin_done: bool,
     progress: i32,
     /// The print's light as shown, following `progress`.
     lit: f64,
@@ -324,6 +329,9 @@ impl Setup {
             saved: Default::default(),
             wake,
             pin_for_keyring: None,
+            cvid: std::env::var_os("CVID").is_some(),
+            face_taken: false,
+            pin_done: false,
             progress: 0,
             lit: 0.0,
             touched_at: None,
@@ -381,6 +389,23 @@ impl Setup {
     }
 
     /// Whether prompts and the reader wait: the setup is the phone's.
+    /// CV ID: the camera wanted, unseen, for the face of the one typing the
+    /// PIN - the owner.
+    pub fn wants_face(&self) -> bool {
+        self.cvid && self.holds_screen() && !self.face_taken && matches!(self.step, Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving | Step::Finger | Step::FingerKnown)
+    }
+
+    /// The face is taken (face.rs): the camera no longer wanted.
+    pub fn face_taken(&mut self) {
+        self.face_taken = true;
+    }
+
+    /// Whether the PIN was accepted since last asked: the face taken while
+    /// it was typed is the owner's.
+    pub fn take_pin_done(&mut self) -> bool {
+        std::mem::take(&mut self.pin_done)
+    }
+
     pub fn holds_screen(&self) -> bool {
         self.active && self.leaving.is_none()
     }
@@ -458,7 +483,11 @@ impl Setup {
             Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
             Step::PinNew => {
                 if was != Step::PinAgain && was != Step::Saving {
-                    self.text("Create a PIN", &["Your PIN unlocks the phone after a restart,", "and whenever your finger isn't recognized."], "", 150.0);
+                    if self.cvid {
+                        self.text("Create a PIN", &["Your PIN unlocks the phone after a restart,", "and whenever your finger isn't recognized.", "Your face, as you type it, is kept for CV ID."], "", 150.0);
+                    } else {
+                        self.text("Create a PIN", &["Your PIN unlocks the phone after a restart,", "and whenever your finger isn't recognized."], "", 150.0);
+                    }
                 }
                 let at = self.right_at();
                 self.pad.show_at(at);
@@ -470,7 +499,11 @@ impl Setup {
             }
             Step::PinCurrent => {
                 if was != Step::Saving {
-                    self.text("Your PIN", &["Enter the PIN you use now.", "It unlocks the phone after a restart."], "", 150.0);
+                    if self.cvid {
+                        self.text("Your PIN", &["Enter the PIN you use now.", "It unlocks the phone after a restart.", "Your face, as you type it, is kept for CV ID."], "", 150.0);
+                    } else {
+                        self.text("Your PIN", &["Enter the PIN you use now.", "It unlocks the phone after a restart."], "", 150.0);
+                    }
                 }
                 let at = self.right_at();
                 self.pad.show_at(at);
@@ -595,6 +628,7 @@ impl Setup {
                 Ok(pin) => {
                     tracing::info!("setup: the PIN {}", if self.dry { "kept (dry)" } else { "is set" });
                     self.pin_for_keyring = Some(pin);
+                    self.pin_done = true;
                     if self.fingers > 0 {
                         self.go(Step::FingerKnown);
                     } else {
