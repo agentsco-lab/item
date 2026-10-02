@@ -184,8 +184,15 @@ impl State {
                         self.sleep.awake(true);
                     }
                     if shut {
+                        self.lid_light_pending = false;
                         self.lock.lock_now();
                         self.lock.set_blank(true);
+                    } else if self.sleep.going() {
+                        // Opened as the phone goes to sleep: lit once it is
+                        // back (the lid's own wake), not now - lit now, it
+                        // went dark with the phone and came back: a blink.
+                        tracing::info!("lid: open on the way into sleep: lit once awake");
+                        self.lid_light_pending = true;
                     } else {
                         self.lock.set_blank(false);
                     }

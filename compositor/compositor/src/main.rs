@@ -308,6 +308,10 @@ impl Data {
         // was spent on waking the phone); a call lights its own; a packet
         // leaves it dark.
         if let Some(woken) = self.state.sleep.take_woken(now) {
+            if std::mem::take(&mut self.state.lid_light_pending) && !self.state.lid_shut {
+                self.state.lock.set_blank(false);
+                self.state.needs_redraw = true;
+            }
             if woken == sleep::Woken::PowerKey && self.state.lock.blank && !self.state.lid_shut {
                 self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;

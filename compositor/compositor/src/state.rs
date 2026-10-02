@@ -141,6 +141,8 @@ pub struct State {
     pub alert: crate::alert::Alert,
     /// The Duo folded shut: nothing lights the screen until it opens.
     pub lid_shut: bool,
+    /// The lid opened on the way into sleep: the screen lit once awake.
+    pub lid_light_pending: bool,
     /// The privacy dot: camera, microphone, location in use.
     pub privacy: crate::privacy::Privacy,
     /// Who opens pages over whom (org.sfduo.Dock.Follow) and the windows
@@ -244,6 +246,7 @@ impl State {
             calls: crate::calls::Calls::new(wake.clone()),
             alert: crate::alert::Alert::new(),
             lid_shut: false,
+            lid_light_pending: false,
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),
@@ -327,6 +330,10 @@ impl State {
         }
         let mut taken = self.pages_taken(view, None);
         if let Some(p) = self.grid.panel() {
+            taken[p] = true;
+        }
+        // The keyboard's panel: the dock leaves it as the keyboard comes up.
+        if let Some(p) = self.layers.keyboard_panel() {
             taken[p] = true;
         }
         taken

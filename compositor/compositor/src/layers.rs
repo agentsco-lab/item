@@ -264,6 +264,19 @@ impl Layers {
         })
     }
 
+    /// The panel the keyboard is on, or on its way up to - from the start of
+    /// its slide in to the start of its slide out (the dock leaves it).
+    pub fn keyboard_panel(&self) -> Option<usize> {
+        let slide = self.slide.borrow();
+        let sl = slide.as_ref().filter(|sl| sl.up)?;
+        let l = self.surfaces.iter().find(|l| l.wl_surface() == &sl.surface)?;
+        if self.unsettled(l) {
+            return None;
+        }
+        let r = self.place_asked(l)?;
+        Some(layout::panel_at(r.loc.to_f64() + Point::from((1.0, 1.0))).unwrap_or(self.panel))
+    }
+
     /// The keyboard on its way in or out: frames wanted.
     pub fn sliding(&self) -> bool {
         self.slide.borrow().as_ref().is_some_and(|sl| sl.moving(hybris_hwc::now_ns()))

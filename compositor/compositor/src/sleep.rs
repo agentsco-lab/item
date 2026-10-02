@@ -115,12 +115,15 @@ pub struct Sleep {
     timer: i32,
     /// A snoozed alarm's time (s since the epoch).
     snoozed: Arc<Mutex<Option<i64>>>,
+    going: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Sleep {
     pub fn new(wake: Ping) -> Sleep {
         let woken: Arc<Mutex<Option<Woken>>> = Default::default();
         let w = woken.clone();
+        let going: Arc<std::sync::atomic::AtomicBool> = Default::default();
+        let g = going.clone();
         std::thread::Builder::new()
             .name("sleep".into())
             .spawn(move || {
@@ -134,6 +137,7 @@ impl Sleep {
                 let Ok(signals) = zbus::blocking::MessageIterator::for_match_rule(rule, &bus, Some(8)) else { return };
                 for msg in signals.flatten() {
                     let Ok(going) = msg.body().deserialize::<bool>() else { continue };
+                    g.store(going, std::sync::atomic::Ordering::Relaxed);
                     if going {
                         tracing::info!("sleep: going to sleep");
                         continue;
@@ -145,7 +149,13 @@ impl Sleep {
                 }
             })
             .expect("sleep thread");
-        Sleep { woken, may_since: None, just_woken: false, next_try: 0, timer: TIMER.load(std::sync::atomic::Ordering::Relaxed), snoozed: Default::default() }
+        Sleep { woken, may_since: None, just_woken: false, next_try: 0, timer: TIMER.load(std::sync::atomic::Ordering::Relaxed), snoozed: Default::default(), going }
+    }
+
+    /// On the way into sleep (logind's PrepareForSleep, until it says the
+    /// phone is back): the screen lit now would go dark with the phone.
+    pub fn going(&self) -> bool {
+        self.going.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Whether the phone may sleep now; asks logind to put it to sleep once
