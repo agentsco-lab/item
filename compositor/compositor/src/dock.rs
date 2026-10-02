@@ -206,8 +206,9 @@ const MERGE_NS: u64 = 1_000_000_000;
 const WOBBLE_NS: u64 = 1_000_000_000;
 const WOBBLE: f64 = 0.07;
 const WOBBLE_PERIOD_NS: f64 = 380e6;
-/// Water's body: a faint cool tint, mostly clear.
-const BODY: [f32; 4] = [0.82, 0.9, 0.95, 0.14];
+/// The water's body: tinted in the accent.
+/// The water tinted in the accent (accent.rs): this much of it.
+const BODY_ACCENT: f32 = 0.55;
 /// A drop's ends: round, half its height.
 const DROP_RADIUS: f32 = 36.0;
 /// How much a moving drop stretches along its way, per logical px per ms,
@@ -1646,6 +1647,9 @@ impl Dock {
         v.extend([y(fill.0), fill.1[0], fill.1[1], fill.1[2], fill.2 as f32, dim]);
         let t2 = shape.trail2.0;
         v.extend([x(t2[0]), y(t2[1]), t2[2] as f32, t2[3] as f32, shape.trail2.1 as f32]);
+        // The water's tint, the accent (a new picture when it changes).
+        let a = crate::accent::get_f();
+        v.extend([a[0], a[1], a[2]]);
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -1671,7 +1675,7 @@ impl Dock {
                 Uniform::new("dim", v[54]),
                 Uniform::new("trail2", (v[55], v[56], v[57], v[58])),
                 Uniform::new("wet2", v[59]),
-                Uniform::new("body", (BODY[0] * BODY[3], BODY[1] * BODY[3], BODY[2] * BODY[3], BODY[3])),
+                Uniform::new("body", (v[60] * BODY_ACCENT, v[61] * BODY_ACCENT, v[62] * BODY_ACCENT, BODY_ACCENT)),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
             ]
