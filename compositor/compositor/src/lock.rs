@@ -42,7 +42,7 @@ const FLASH_NS: u64 = 300_000_000;
 const PULSE_FOR_NS: u64 = 12_000_000_000;
 const PULSE_PERIOD_NS: u64 = 1_800_000_000;
 /// How dark the wallpaper is under the lock screen.
-const SHADE: f32 = 0.75;
+const SHADE: f32 = 0.55;
 /// Unknown fingers in a row before the PIN pad comes.
 const FAILS_FOR_PIN: u32 = 5;
 /// A swipe up this far brings the pad, or a fling up.
@@ -70,6 +70,9 @@ const CLOCK_SIZE: f32 = 36.0;
 const CLOCK_TOP: f64 = 72.0;
 const CLOCK_BETWEEN: i32 = 14;
 const CLOCK_RIGHT: f64 = 40.0;
+/// The clock's glow: how far it spreads (logical px), and how strong.
+const GLOW_R: i32 = 10;
+const GLOW_A: f32 = 0.55;
 
 pub struct Lock {
     /// The PIN pad is up (pinpad.rs).
@@ -116,6 +119,10 @@ pub struct Lock {
     /// How far the finger has lifted the lock screen, logical px.
     lift: f64,
     fonts: Option<(Font, Font)>,
+    /// The PIN pad put away, its drops gathering back (pinpad.rs).
+    pad_leaving: bool,
+    /// The clock line's glow (drawn under it), made with it each minute.
+    clock_glow: Option<MemoryRenderBuffer>,
     /// The clock's: bold for the time, medium for the date (as the
     /// desktop's, clock.rs), and the accent it is drawn in.
     clock_fonts: Option<(Font, Font)>,
@@ -160,6 +167,55 @@ const CARDS_TOP: f64 = 30.0;
 const MEDIA_BUTTON: f64 = 48.0;
 
 /// A symbolic icon in one colour, `size` logical px.
+/// A glow of RGBA rows (premultiplied, `w`x`h` px): spread `r` px each way
+/// by three box blurs, its strength `a`.
+fn glow_buffer(rgba: &[u8], w: i32, h: i32, r: i32, a: f32) -> MemoryRenderBuffer {
+    use smithay::backend::allocator::Fourcc;
+    let (gw, gh) = (w + 2 * r, h + 2 * r);
+    let mut buf = vec![0f32; (gw * gh * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let (i, j) = (((y * w + x) * 4) as usize, (((y + r) * gw + x + r) * 4) as usize);
+            for c in 0..4 {
+                buf[j + c] = rgba[i + c] as f32;
+            }
+        }
+    }
+    let k = (r / 3).max(1);
+    let mut tmp = buf.clone();
+    for _ in 0..3 {
+        // Across, then down: a running sum over 2k+1.
+        for y in 0..gh {
+            for c in 0..4 {
+                let mut sum = 0f32;
+                for x in -k..=k {
+                    sum += buf[((y * gw + x.clamp(0, gw - 1)) * 4) as usize + c];
+                }
+                for x in 0..gw {
+                    tmp[((y * gw + x) * 4) as usize + c] = sum / (2 * k + 1) as f32;
+                    let (out, inn) = ((x - k).clamp(0, gw - 1), (x + k + 1).clamp(0, gw - 1));
+                    sum += buf[((y * gw + inn) * 4) as usize + c] - buf[((y * gw + out) * 4) as usize + c];
+                }
+            }
+        }
+        for x in 0..gw {
+            for c in 0..4 {
+                let mut sum = 0f32;
+                for y in -k..=k {
+                    sum += tmp[((y.clamp(0, gh - 1) * gw + x) * 4) as usize + c];
+                }
+                for y in 0..gh {
+                    buf[((y * gw + x) * 4) as usize + c] = sum / (2 * k + 1) as f32;
+                    let (out, inn) = ((y - k).clamp(0, gh - 1), (y + k + 1).clamp(0, gh - 1));
+                    sum += tmp[((inn * gw + x) * 4) as usize + c] - tmp[((out * gw + x) * 4) as usize + c];
+                }
+            }
+        }
+    }
+    let px: Vec<u8> = buf.iter().map(|v| (v * a).round().clamp(0.0, 255.0) as u8).collect();
+    MemoryRenderBuffer::from_slice(&px, Fourcc::Abgr8888, (gw, gh), SCALE, smithay::utils::Transform::Normal, None)
+}
+
 /// A soft round glow, `size` logical px across: the colour strongest in the
 /// middle, gone at the rim.
 pub(crate) fn soft_glow(size: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
@@ -266,6 +322,8 @@ impl Lock {
             clock_fonts: Font::load(&["/usr/share/fonts/truetype/lato/Lato-Bold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"])
                 .zip(Font::load(&["/usr/share/fonts/truetype/lato/Lato-Medium.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"])),
             clock_accent: 0,
+            pad_leaving: false,
+            clock_glow: None,
             time: Label::new(CLOCK_SIZE, [1.0; 4]),
             date: Label::new(CLOCK_SIZE, [1.0; 4]),
             greeting: Label::new(26.0, [1.0, 1.0, 1.0, 0.9]),
@@ -413,6 +471,7 @@ impl Lock {
     fn pad_in(&mut self) {
         if !self.entering {
             self.entering = true;
+            self.pad_leaving = false;
             self.pad.show();
         }
     }
@@ -523,15 +582,36 @@ impl Lock {
         }
         if accent != self.clock_accent {
             self.clock_accent = accent;
-            let mut c = crate::accent::get_f();
-            c[3] = 0.95;
+            // The accent a little lighter, whole: it reads over the dark.
+            let a = crate::accent::get_f();
+            let c = [a[0] + (1.0 - a[0]) * 0.18, a[1] + (1.0 - a[1]) * 0.18, a[2] + (1.0 - a[2]) * 0.18, 1.0];
             self.time.set_color(c);
             self.date.set_color(c);
+            self.clock_glow = None;
         }
         self.minute = minute;
         if let Some((bold, medium)) = &self.clock_fonts {
-            self.time.set(bold, &format!("{}:{:02}", now.tm_hour, now.tm_min));
-            self.date.set(medium, &crate::clock::short_date(&now));
+            let (time, date) = (format!("{}:{:02}", now.tm_hour, now.tm_min), crate::clock::short_date(&now));
+            self.time.set(bold, &time);
+            self.date.set(medium, &date);
+            // Its glow: the line blurred, in the accent, under it.
+            let a = crate::accent::get_f();
+            let glow_c = [a[0], a[1], a[2], 1.0];
+            let (mut rgba, w, h) = bold.rasterize(&time, CLOCK_SIZE, glow_c);
+            let (rgba2, w2, h2) = medium.rasterize(&date, CLOCK_SIZE, glow_c);
+            // The two side by side, as they are drawn.
+            let gap = CLOCK_BETWEEN * SCALE;
+            let (lw, lh) = (w + gap + w2, h.max(h2));
+            let mut line = vec![0u8; (lw * lh * 4) as usize];
+            for (src, sw, sh, x0) in [(&mut rgba, w, h, 0), (&mut rgba2.clone(), w2, h2, w + gap)] {
+                for y in 0..sh {
+                    for x in 0..sw {
+                        let (i, j) = (((y * sw + x) * 4) as usize, ((y * lw + x0 + x) * 4) as usize);
+                        line[j..j + 4].copy_from_slice(&src[i..i + 4]);
+                    }
+                }
+            }
+            self.clock_glow = Some(glow_buffer(&line, lw, lh, GLOW_R * SCALE, GLOW_A));
         }
         if self.after_boot {
             let part = crate::sysscreen::part_of_day(now.tm_hour);
@@ -668,8 +748,11 @@ impl Lock {
                     self.submit();
                 }
             } else if !tapped && !self.after_boot && (g.2 .1 - g.1 > UNLOCK || g.3 > FLING) {
+                // Put away as it came: the keys gather back into rows, the
+                // rows into one drop, which shrinks away.
                 self.entering = false;
-                self.pad.clear();
+                self.pad.gather(hybris_hwc::now_ns());
+                self.pad_leaving = true;
             }
             return;
         }
@@ -681,6 +764,14 @@ impl Lock {
 
     /// After a frame: whether the lock screen still wants frames.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
+        // The pad put away: drawn till its drops have gathered and gone.
+        if self.pad_leaving {
+            if self.pad.drops(frame_ns, (0.0, 0.0), 0.0).is_some() {
+                return true;
+            }
+            self.pad_leaving = false;
+            self.pad.clear();
+        }
         if let Some(t) = self.fading {
             if frame_ns >= t + self.door.ns {
                 self.locked = false;
@@ -823,6 +914,10 @@ impl Lock {
         let clock_panel = layout::panels()[1];
         let end = (clock_panel.loc.x + clock_panel.size.w) as f64 - CLOCK_RIGHT;
         let mut x = end - (self.time.extent.w + CLOCK_BETWEEN + self.date.extent.w) as f64;
+        // Its glow first, under it.
+        if let Some(g) = &self.clock_glow {
+            put(&mut out, g, x - GLOW_R as f64, top + rise - GLOW_R as f64, right_dx, 1.0);
+        }
         put(&mut out, &self.time.buffer, x, top + rise, right_dx, 1.0);
         x += (self.time.extent.w + CLOCK_BETWEEN) as f64;
         put(&mut out, &self.date.buffer, x, top + rise, right_dx, 1.0);
@@ -918,7 +1013,7 @@ impl Lock {
 
     /// The PIN pad's keys as drops, moved with the right half by `dx`.
     pub fn pad_drops(&self, frame_ns: u64, dx: f64) -> Option<Vec<crate::pinpad::Group>> {
-        if !self.entering {
+        if !self.entering && !self.pad_leaving {
             return None;
         }
         let (groups, _) = self.pad.drops(frame_ns, (0.0, 0.0), 0.0)?;

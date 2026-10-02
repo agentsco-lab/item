@@ -200,6 +200,12 @@ impl PinPad {
         let middle = (mx, (rows[0] + rows[3]) / 2.0);
         let lerp = |a: f64, b: f64, k: f64| a + (b - a) * k;
         let since = |at: u64| if at == 0 { f64::MAX } else { frame_ns.saturating_sub(at) as f64 };
+        if t < STREAM_NS && self.bloom {
+            // Born of the middle (the lock screen's): gathered back there,
+            // the one drop the rows came from shrinks away.
+            let k = ease(t / STREAM_NS);
+            return Some((vec![Group { drops: vec![((middle.0 + dx, middle.1), STREAM_R * 0.75 * k, (1.0, 1.0))], melt: PART_MELT, life: 0.7 }], false));
+        }
         if t < STREAM_NS {
             // The stream comes down from the drop, growing.
             let k = ease(t / STREAM_NS);
