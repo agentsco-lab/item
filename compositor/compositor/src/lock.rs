@@ -53,6 +53,10 @@ const FLING: f64 = 0.5;
 /// on the right panel's right edge (logical px).
 const MARK: f64 = 48.0;
 const POWER_Y: f64 = 455.0;
+/// The glow across from the reader: its size, and how far in from the
+/// panel's edge its middle is (half of it past the edge, hugging it).
+const SENSOR_GLOW: f64 = 110.0;
+const SENSOR_IN: f64 = 8.0;
 /// The mark comes up over this.
 const MARK_IN_NS: u64 = 400_000_000;
 const GLOW: f64 = 124.0;
@@ -156,46 +160,25 @@ const CARDS_TOP: f64 = 30.0;
 const MEDIA_BUTTON: f64 = 48.0;
 
 /// A symbolic icon in one colour, `size` logical px.
-/// A fingerprint in thin lines, `size` logical px square: arcs nested about
-/// a point a little below the middle, open at the bottom, some broken as a
-/// print's ridges are; 1.5 px lines with round ends.
-pub(crate) fn thin_print(size: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
+/// A soft round glow, `size` logical px across: the colour strongest in the
+/// middle, gone at the rim.
+pub(crate) fn soft_glow(size: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
     use smithay::backend::allocator::Fourcc;
-    let s = SCALE as f32;
-    let px = (size as f32 * s).round() as u32;
+    let px = (size as f32 * SCALE as f32).round() as u32;
     let mut pixmap = tiny_skia::Pixmap::new(px, px).expect("pixmap");
-    let (cx, cy, full) = (px as f32 / 2.0, px as f32 * 0.57, px as f32);
-    // Each ridge: its radius (of the size), from and to (degrees, 0 to the
-    // right, 90 down), and a break in it (where, how long).
-    let ridges: [(f32, f32, f32, f32, f32); 5] = [
-        (0.08, 195.0, 345.0, 0.0, 0.0),
-        (0.17, 160.0, 382.0, 252.0, 14.0),
-        (0.26, 150.0, 392.0, 306.0, 12.0),
-        (0.35, 144.0, 396.0, 214.0, 11.0),
-        (0.44, 168.0, 372.0, 0.0, 0.0),
-    ];
-    let mut paint = tiny_skia::Paint::default();
-    paint.set_color_rgba8(rgba[0], rgba[1], rgba[2], rgba[3]);
-    paint.anti_alias = true;
-    let stroke = tiny_skia::Stroke { width: 1.5 * s, line_cap: tiny_skia::LineCap::Round, ..Default::default() };
-    for (r, from, to, gap, gap_len) in ridges {
-        let r = r * full;
-        let mut parts = vec![(from, to)];
-        if gap_len > 0.0 {
-            parts = vec![(from, gap - gap_len / 2.0), (gap + gap_len / 2.0, to)];
-        }
-        for (a0, a1) in parts {
-            let mut pb = tiny_skia::PathBuilder::new();
-            let steps = ((a1 - a0).abs() / 4.0).ceil().max(2.0) as i32;
-            for k in 0..=steps {
-                let a = (a0 + (a1 - a0) * k as f32 / steps as f32).to_radians();
-                let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
-                if k == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
-            }
-            if let Some(path) = pb.finish() {
-                pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
-            }
-        }
+    let c = px as f32 / 2.0;
+    let stop = |at: f32, a: f32| tiny_skia::GradientStop::new(at, tiny_skia::Color::from_rgba8(rgba[0], rgba[1], rgba[2], (a * 255.0) as u8));
+    let shader = tiny_skia::RadialGradient::new(
+        tiny_skia::Point::from_xy(c, c),
+        tiny_skia::Point::from_xy(c, c),
+        c,
+        vec![stop(0.0, 0.42), stop(0.35, 0.24), stop(0.7, 0.07), stop(1.0, 0.0)],
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::Transform::identity(),
+    );
+    if let (Some(shader), Some(rect)) = (shader, tiny_skia::Rect::from_xywh(0.0, 0.0, px as f32, px as f32)) {
+        let paint = tiny_skia::Paint { shader, anti_alias: true, ..Default::default() };
+        pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
     }
     MemoryRenderBuffer::from_slice(pixmap.data(), Fourcc::Abgr8888, (px as i32, px as i32), SCALE, smithay::utils::Transform::Normal, None)
 }
@@ -257,8 +240,8 @@ impl Lock {
             checking: Default::default(),
             verified: Default::default(),
             wake,
-            mark: Some(thin_print(MARK, [255, 255, 255, 255])),
-            mark_red: Some(thin_print(MARK, [235, 80, 70, 255])),
+            mark: None,
+            mark_red: Some(soft_glow(SENSOR_GLOW, [235, 80, 70, 255])),
             mark_lit: std::cell::RefCell::new(None),
             glow: glow(GLOW),
             battery_icon: None,
@@ -810,18 +793,23 @@ impl Lock {
             let alpha = (flash.map(|f| 0.9 + 0.1 * f).unwrap_or(pulse) * appear) as f32;
             let mx = (right.loc.x + right.size.w) as f64 - 18.0 - MARK;
             let my = POWER_Y - MARK / 2.0;
-            // Thin lines alone: red and shaking at an unknown finger, in the
-            // accent for a moment at a known one.
-            let lit = flash.is_some_and(|f| f > 0.0).then(|| {
+            // No picture of a finger: a soft glow in the accent hugging the
+            // edge across from the reader, breathing with the pulse, brighter
+            // a moment at a known finger, red and shaking at an unknown one.
+            let _ = (mx, my);
+            let glow = if shaking {
+                self.mark_red.clone()
+            } else {
                 let mut l = self.mark_lit.borrow_mut();
                 if l.as_ref().is_none_or(|(v, _)| *v != crate::accent::version()) {
-                    *l = Some((crate::accent::version(), thin_print(MARK, crate::accent::get())));
+                    *l = Some((crate::accent::version(), soft_glow(SENSOR_GLOW, crate::accent::get())));
                 }
                 l.as_ref().map(|(_, b)| b.clone())
-            }).flatten();
-            let icon = if shaking { self.mark_red.clone() } else { lit.or_else(|| self.mark.clone()) };
-            if let Some(icon) = icon {
-                put(&mut out, &icon, mx, my, right_dx + sx, alpha * 0.85);
+            };
+            if let Some(glow) = glow {
+                let (gx, gy) = ((right.loc.x + right.size.w) as f64 - SENSOR_IN - SENSOR_GLOW / 2.0, POWER_Y - SENSOR_GLOW / 2.0);
+                let a = if shaking { 0.9 } else { flash.map(|f| 0.55 + 0.45 * f as f32).unwrap_or(alpha * 0.55) };
+                put(&mut out, &glow, gx, gy, right_dx + sx, a * appear as f32);
             }
         }
 
