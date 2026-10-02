@@ -195,6 +195,11 @@ impl State {
                         self.lid_light_pending = true;
                     } else {
                         self.lock.set_blank(false);
+                        // The camera's peek from the lid itself: the screen
+                        // takes a while to light, the camera starts meanwhile.
+                        if self.lock.locked {
+                            self.camera_peek.start(hybris_hwc::now_ns());
+                        }
                     }
                     self.needs_redraw = true;
                 }
