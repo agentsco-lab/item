@@ -460,7 +460,8 @@ impl Screen {
         // Not while the ribbon moves: the clock goes with its desk then, or stays.
         let middle = if carried || state.ribbon.scrolling(frame_ns).is_some() { None } else { state.dock.home_x(frame_ns).filter(|(_, going)| *going).map(|(x, _)| x) };
         let clock = state.clock.elements(&mut self.renderer, clock_panel, frame_ns, carried, middle);
-        match clock_panel.and_then(|k| state.ribbon.carried(k, frame_ns)) {
+        // Shifted with the ribbon only when it carries the clock with its desk.
+        match clock_panel.filter(|_| carried).and_then(|k| state.ribbon.carried(k, frame_ns)) {
             Some(dx) => elements.extend(carry(clock, dx)),
             None => elements.extend(clock.into_iter().map(FrameElement::from)),
         }
