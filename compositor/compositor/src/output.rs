@@ -313,24 +313,7 @@ impl Screen {
         if doors.is_some() {
             elements.extend(self.edges(0));
         }
-        let mut lock = state.lock.elements(&mut self.renderer, frame_ns);
-        // The fingerprint mark's drop: under its icon and glow, over the
-        // lock screen's dark (its last two elements), so it is clear.
-        if let (Some((_, rdx)), Some(texture)) = (doors, self.wall.clone()) {
-            if let Some((c, r, life)) = state.lock.mark_drop(frame_ns, rdx).filter(|(_, r, _)| *r > 0.5) {
-                let wall = (&texture, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT as f64);
-                let at = lock.len().saturating_sub(2);
-                // Its glow under it, a halo round the drop.
-                if let Some((g, (x, y), a)) = state.lock.mark_glow(frame_ns, rdx) {
-                    if let Ok(e) = smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement::from_buffer(&mut self.renderer, ((x * SCALE as f64).round(), (y * SCALE as f64).round()), g, Some(a), None, None, smithay::backend::renderer::element::Kind::Unspecified) {
-                        lock.insert(at, crate::shade::ShellElement::Text(e));
-                    }
-                }
-                if let Some(e) = state.dock.group(&mut self.renderer, 9, &[(c, r, (1.0, 1.0))], 0.8, frame_ns, life, 1.0, 0.25, wall) {
-                    lock.insert(at, crate::shade::ShellElement::Shaded(e));
-                }
-            }
-        }
+        let lock = state.lock.elements(&mut self.renderer, frame_ns);
         elements.extend(lock.into_iter().map(FrameElement::from));
         if let Some((ldx, rdx)) = doors {
             elements.extend(self.lock_drops(state, frame_ns, rdx));

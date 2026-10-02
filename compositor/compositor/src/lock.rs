@@ -31,6 +31,7 @@ use smithay::backend::input::TouchSlot;
 use smithay::utils::{Physical, Rectangle};
 
 use crate::layout::{self, SCALE};
+use resvg::tiny_skia;
 use crate::shade::{local_time, ShellElement};
 use crate::pinpad::{ease, shake, PinPad, Press, SHAKE_NS};
 use crate::text::{Font, Label};
@@ -52,14 +53,11 @@ const FLING: f64 = 0.5;
 /// on the right panel's right edge (logical px).
 const MARK: f64 = 48.0;
 const POWER_Y: f64 = 455.0;
-/// The mark's drop of water, under the icon.
-const MARK_DROP_R: f64 = 34.0;
-/// The mark comes up over this, with a soft glow behind it.
+/// The mark comes up over this.
 const MARK_IN_NS: u64 = 400_000_000;
 const GLOW: f64 = 124.0;
 /// Where the left panel talks to you: the middle of its lower part.
 const TALK_FROM_FOOT: i32 = 170;
-const MARK_ICON: &str = "/usr/share/icons/Adwaita/symbolic/devices/auth-fingerprint-symbolic.svg";
 
 /// The clock line, as the desktop's (clock.rs): its size, its distance from
 /// the top, the room between the time and the date, its end in from the
@@ -82,7 +80,9 @@ pub struct Lock {
     mark: Option<MemoryRenderBuffer>,
     mark_red: Option<MemoryRenderBuffer>,
     /// The mark a little larger, for a soft shine under it.
-    mark_shine: Option<MemoryRenderBuffer>,
+    /// The mark in the accent, for a known finger (drawn again when the
+    /// accent changes).
+    mark_lit: std::cell::RefCell<Option<(u64, MemoryRenderBuffer)>>,
     glow: Option<MemoryRenderBuffer>,
     /// The status line under the date: the battery and the network.
     battery_icon: Option<MemoryRenderBuffer>,
@@ -156,6 +156,50 @@ const CARDS_TOP: f64 = 30.0;
 const MEDIA_BUTTON: f64 = 48.0;
 
 /// A symbolic icon in one colour, `size` logical px.
+/// A fingerprint in thin lines, `size` logical px square: arcs nested about
+/// a point a little below the middle, open at the bottom, some broken as a
+/// print's ridges are; 1.5 px lines with round ends.
+pub(crate) fn thin_print(size: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
+    use smithay::backend::allocator::Fourcc;
+    let s = SCALE as f32;
+    let px = (size as f32 * s).round() as u32;
+    let mut pixmap = tiny_skia::Pixmap::new(px, px).expect("pixmap");
+    let (cx, cy, full) = (px as f32 / 2.0, px as f32 * 0.57, px as f32);
+    // Each ridge: its radius (of the size), from and to (degrees, 0 to the
+    // right, 90 down), and a break in it (where, how long).
+    let ridges: [(f32, f32, f32, f32, f32); 5] = [
+        (0.08, 195.0, 345.0, 0.0, 0.0),
+        (0.17, 160.0, 382.0, 252.0, 14.0),
+        (0.26, 150.0, 392.0, 306.0, 12.0),
+        (0.35, 144.0, 396.0, 214.0, 11.0),
+        (0.44, 168.0, 372.0, 0.0, 0.0),
+    ];
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color_rgba8(rgba[0], rgba[1], rgba[2], rgba[3]);
+    paint.anti_alias = true;
+    let stroke = tiny_skia::Stroke { width: 1.5 * s, line_cap: tiny_skia::LineCap::Round, ..Default::default() };
+    for (r, from, to, gap, gap_len) in ridges {
+        let r = r * full;
+        let mut parts = vec![(from, to)];
+        if gap_len > 0.0 {
+            parts = vec![(from, gap - gap_len / 2.0), (gap + gap_len / 2.0, to)];
+        }
+        for (a0, a1) in parts {
+            let mut pb = tiny_skia::PathBuilder::new();
+            let steps = ((a1 - a0).abs() / 4.0).ceil().max(2.0) as i32;
+            for k in 0..=steps {
+                let a = (a0 + (a1 - a0) * k as f32 / steps as f32).to_radians();
+                let (x, y) = (cx + r * a.cos(), cy + r * a.sin());
+                if k == 0 { pb.move_to(x, y) } else { pb.line_to(x, y) }
+            }
+            if let Some(path) = pb.finish() {
+                pixmap.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+            }
+        }
+    }
+    MemoryRenderBuffer::from_slice(pixmap.data(), Fourcc::Abgr8888, (px as i32, px as i32), SCALE, smithay::utils::Transform::Normal, None)
+}
+
 pub(crate) fn tinted(path: &str, size: i32, rgb: [u8; 3]) -> Option<MemoryRenderBuffer> {
     let mut pixmap = crate::apps::icon_pixmap(path, size)?;
     for px in pixmap.pixels_mut() {
@@ -213,9 +257,9 @@ impl Lock {
             checking: Default::default(),
             verified: Default::default(),
             wake,
-            mark: tinted(MARK_ICON, MARK as i32, [240, 240, 240]),
-            mark_red: tinted(MARK_ICON, MARK as i32, [235, 80, 70]),
-            mark_shine: tinted(MARK_ICON, (MARK * 1.18).round() as i32, [255, 255, 255]),
+            mark: Some(thin_print(MARK, [255, 255, 255, 255])),
+            mark_red: Some(thin_print(MARK, [235, 80, 70, 255])),
+            mark_lit: std::cell::RefCell::new(None),
             glow: glow(GLOW),
             battery_icon: None,
             battery_label: Label::new(15.0, [1.0, 1.0, 1.0, 0.65]),
@@ -696,40 +740,6 @@ impl Lock {
             .count()
     }
 
-    /// Where the reader's mark stands, logical px.
-    /// The fingerprint mark's glow: its picture, where it goes (logical
-    /// px, moved with the right half by `dx`) and how strong, breathing with
-    /// the mark.
-    pub fn mark_glow(&self, frame_ns: u64, dx: f64) -> Option<(&MemoryRenderBuffer, (f64, f64), f32)> {
-        let ((x, y), _, _) = self.mark_drop(frame_ns, dx)?;
-        let g = self.glow.as_ref()?;
-        let appear = ease(frame_ns.saturating_sub(self.shown_at) as f64 / MARK_IN_NS as f64);
-        let pulse = if frame_ns < self.shown_at + PULSE_FOR_NS {
-            let u = (frame_ns.saturating_sub(self.shown_at) % PULSE_PERIOD_NS) as f64 / PULSE_PERIOD_NS as f64;
-            0.55 + 0.35 * (0.5 - 0.5 * (u * std::f64::consts::TAU).cos())
-        } else {
-            0.7
-        };
-        let flash = self.mark_flash.map(|t| frame_ns.saturating_sub(t)).filter(|t| *t < FLASH_NS).map(|t| 1.0 - t as f64 / FLASH_NS as f64).unwrap_or(0.0);
-        Some((g, (x - GLOW / 2.0, y - GLOW / 2.0), (appear * (0.6 + 0.4 * pulse).max(flash)) as f32))
-    }
-
-    /// The fingerprint mark's drop: its middle (moved with the right half
-    /// by `dx`), radius and how alive it is - swelling at a known finger,
-    /// shaking with the mark at an unknown one, alive while it pulses.
-    pub fn mark_drop(&self, frame_ns: u64, dx: f64) -> Option<((f64, f64), f64, f64)> {
-        if !self.locked || self.blank || self.entering || self.fingers == 0 || self.after_boot {
-            return None;
-        }
-        let since = |t: Option<u64>| t.map(|t| frame_ns.saturating_sub(t));
-        let sx = since(self.mark_shake).map(shake).unwrap_or(0.0);
-        let flash = since(self.mark_flash).filter(|t| *t < FLASH_NS).map(|t| 1.0 - t as f64 / FLASH_NS as f64).unwrap_or(0.0);
-        let appear = ease(frame_ns.saturating_sub(self.shown_at) as f64 / MARK_IN_NS as f64);
-        let pulsing = frame_ns < self.shown_at + PULSE_FOR_NS;
-        let (x, y) = Self::mark_centre();
-        Some(((x + dx + sx, y), MARK_DROP_R * appear * (1.0 + 0.08 * flash), if pulsing { 0.35f64 } else { 0.0 }.max(flash)))
-    }
-
     fn mark_centre() -> (f64, f64) {
         let right = layout::panels()[1];
         ((right.loc.x + right.size.w) as f64 - 18.0 - MARK / 2.0, POWER_Y)
@@ -800,18 +810,18 @@ impl Lock {
             let alpha = (flash.map(|f| 0.9 + 0.1 * f).unwrap_or(pulse) * appear) as f32;
             let mx = (right.loc.x + right.size.w) as f64 - 18.0 - MARK;
             let my = POWER_Y - MARK / 2.0;
-            // Its glow and its drop are under it (the output's: mark_glow,
-            // mark_drop).
-            let icon = if shaking { self.mark_red.as_ref() } else { self.mark.as_ref() };
-            if let Some(icon) = icon {
-                put(&mut out, icon, mx, my, right_dx + sx, alpha);
-                // A soft shine round its lines: the icon again a little
-                // larger and faint, under it.
-                let s = MARK * 1.18;
-                let d = (s - MARK) / 2.0;
-                if let (Some(shine), false) = (&self.mark_shine, shaking) {
-                    put(&mut out, shine, mx - d, my - d, right_dx + sx, alpha * 0.3);
+            // Thin lines alone: red and shaking at an unknown finger, in the
+            // accent for a moment at a known one.
+            let lit = flash.is_some_and(|f| f > 0.0).then(|| {
+                let mut l = self.mark_lit.borrow_mut();
+                if l.as_ref().is_none_or(|(v, _)| *v != crate::accent::version()) {
+                    *l = Some((crate::accent::version(), thin_print(MARK, crate::accent::get())));
                 }
+                l.as_ref().map(|(_, b)| b.clone())
+            }).flatten();
+            let icon = if shaking { self.mark_red.clone() } else { lit.or_else(|| self.mark.clone()) };
+            if let Some(icon) = icon {
+                put(&mut out, &icon, mx, my, right_dx + sx, alpha * 0.85);
             }
         }
 
