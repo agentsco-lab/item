@@ -53,8 +53,9 @@ const GAP: i32 = 14;
 const PAD: i32 = 12;
 /// The slab's distance from the panel's outer and bottom edges.
 const MARGIN: i32 = 10;
-/// How far towards its panel's middle a piece of the dock goes with the
-/// phone folded like a book to 90 degrees: a share of the way from the edge.
+/// How far towards its panel's middle a half of the dock goes with the
+/// phone folded like a book to 90 degrees, the halves apart: a share of the
+/// way from the edge (joined on one panel, the dock goes all the way).
 const BOOK_REACH: f64 = 0.3;
 const RADIUS: f32 = 20.0;
 /// item's slab colour, opaque: as rgba(38,48,43,0.92) came out over the
@@ -373,8 +374,10 @@ impl Dock {
         let y = height - (MARGIN + h) as f64;
         let place = |x: f64, tuck: f64, joined: bool| Place { x, y, tuck, radius: if joined { 0.0 } else { RADIUS as f64 }, scale: 1.0, anchor: 0.0 };
         // Folded like a book, each piece goes from the screen's edge towards
-        // its panel's middle, BOOK_REACH of the way at 90 degrees.
-        let book = self.book.get() * BOOK_REACH;
+        // its panel's middle: apart, BOOK_REACH of the way at 90 degrees;
+        // joined on one panel, all the way (as in item 0.20).
+        let book = self.book.get();
+        let apart = book * BOOK_REACH;
         let middle = |p: usize| {
             let r = layout::panels()[p];
             r.loc.x as f64 + r.size.w as f64 / 2.0
@@ -384,7 +387,7 @@ impl Dock {
             Mode::Both => {
                 let (l, r) = (MARGIN as f64, width - (MARGIN + rw) as f64);
                 let (lc, rc) = (middle(0) - lw as f64 / 2.0, middle(1) - rw as f64 / 2.0);
-                [place(l + (lc - l).max(0.0) * book, 0.0, false), place(r + (rc - r).min(0.0) * book, 0.0, false)]
+                [place(l + (lc - l).max(0.0) * apart, 0.0, false), place(r + (rc - r).min(0.0) * apart, 0.0, false)]
             }
             // The left half stays at the left edge; the right one arrives
             // beside it, its padding tucked under.
