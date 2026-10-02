@@ -332,16 +332,12 @@ impl Data {
         let playing = self.state.shade.quick.media.lock().unwrap().as_ref().is_some_and(|m| m.playing);
         let may = self.state.lock.locked && self.state.lock.blank && !self.state.calls.any() && !self.state.alert.holds_screen() && !playing && !self.state.setup.active && !self.state.idle_held();
         self.state.sleep.tick(now, may);
-        // The screen darkened as asked on the bus (gsd-power's idleness). Lit
-        // only by what lights it here - the power key, the lid, a call: gsd
-        // asks it lit after every resume, and the phone woken by a Wi-Fi
-        // packet lit its screen.
+        // What gsd-power asks on the bus is not done: the screen is item's -
+        // the lid, the power key, its own idleness (gsd lit it after every
+        // resume, and darkened the unlocked screen after 15 s, as if locked).
         if let Some(dark) = self.state.display_config.take_asked() {
-            // Not over an alarm or a call ringing: they hold the screen lit.
-            if dark && !self.state.lock.blank && !self.state.alert.holds_screen() && !self.state.calls.ringing() {
-                self.state.lock.lock_now();
-                self.state.lock.set_blank(true);
-                self.state.needs_redraw = true;
+            if dark && !self.state.lock.blank {
+                tracing::info!("display: gsd-power asked it dark: left lit");
             }
         }
         // Pages over their leaders (follow.rs): those asked to be shown
@@ -381,7 +377,15 @@ impl Data {
         if shown != self.state.calls.holds_screen() {
             self.state.needs_redraw = true;
         }
-        self.state.lock.idle_ns = if held { 0 } else { self.state.idle.delay_ns() };
+        // Locked, dark after a while untouched, as Android's lock screen;
+        // unlocked, after the session's idle delay (0: never).
+        self.state.lock.idle_ns = if held {
+            0
+        } else if self.state.lock.locked {
+            LOCKED_IDLE_NS
+        } else {
+            self.state.idle.delay_ns()
+        };
         let dim = self.state.lock.dimming(now);
         if dim != self.dim_was {
             self.dim_was = dim;
@@ -817,6 +821,9 @@ fn args() -> Args {
     }
     a
 }
+
+/// The lock screen dark after this long untouched.
+const LOCKED_IDLE_NS: u64 = 15_000_000_000;
 
 fn main() {
     tracing_subscriber::fmt()
