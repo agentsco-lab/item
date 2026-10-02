@@ -72,11 +72,14 @@ fn find(name: &str) -> Option<String> {
 
 pub fn init(handle: &LoopHandle<'static, Data>) {
     let mut libinput = Libinput::new_from_path(OpenDirect);
-    // The power key and the volume keys, the lid (lock.rs), the pen.
-    for name in ["qpnp_pon", "gpio-keys", "Surface Duo Lid Switch", "sfduo pen"] {
-        match find(name).and_then(|p| libinput.path_add_device(&p).map(|_| p)) {
-            Some(p) => tracing::info!("keys: {name} ({p})"),
-            None => tracing::warn!("keys: no {name}"),
+    // The power key and the volume keys, the lid (lock.rs), the pen. The
+    // lid is the kernel's own where the boot image's DTB declares it (a
+    // wakeup source: opening wakes the phone), else the port's daemon's.
+    for names in [&["qpnp_pon"][..], &["gpio-keys"], &["Surface Duo Lid", "Surface Duo Lid Switch"], &["sfduo pen"]] {
+        let found = names.iter().find_map(|name| find(name).and_then(|p| libinput.path_add_device(&p).map(|_| (name, p))));
+        match found {
+            Some((name, p)) => tracing::info!("keys: {name} ({p})"),
+            None => tracing::warn!("keys: no {}", names.join(" / ")),
         }
     }
     match find_touchscreen() {
