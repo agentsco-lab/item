@@ -764,9 +764,13 @@ impl Screen {
         }
         let path = shot.take()?;
         // GL's rows are bottom-up: the first rows are the screen's bottom.
-        // FRAMES_FULL=1: whole frames, for a move over the whole screen.
-        let size = if run && std::env::var_os("FRAMES_FULL").is_none() { (size.w, FRAME_ROWS).into() } else { size };
-        let region = smithay::utils::Rectangle::from_size((size.w, size.h).into());
+        // FRAMES_FULL=1: whole frames, for a move over the whole screen;
+        // FRAMES_TOP=1: the screen's top rows instead of its bottom's.
+        let full_h = size.h;
+        let part = run && std::env::var_os("FRAMES_FULL").is_none();
+        let size = if part { (size.w, FRAME_ROWS).into() } else { size };
+        let y0 = if part && std::env::var_os("FRAMES_TOP").is_some() { full_h - FRAME_ROWS } else { 0 };
+        let region = smithay::utils::Rectangle::new((0, y0).into(), (size.w, size.h).into());
         match renderer.copy_framebuffer(target, region, Fourcc::Abgr8888) {
             Ok(mapping) => Some((path, mapping, size)),
             Err(e) => {
