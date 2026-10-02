@@ -2,7 +2,7 @@
 //! on the free panel - the right one when both are free, none when neither
 //! is - where the dock stands. One line in the accent (accent.rs), near the
 //! top, set to the panel's right edge: the time bold, the date beside it
-//! ("14:51  Fri 2 Oct"), both 30 px,
+//! ("14:51  Fri 2 Oct"), both 36 px,
 //! standing still (it used to step aside each minute against burn-in, which
 //! looked restless). It takes no touches. Under it, small and grey, the
 //! weather now (the system screen's, from met.no): its icon, the
@@ -27,7 +27,7 @@ use crate::text::{Font, Label};
 
 const TOP: f64 = 0.08;
 /// The line's size, and the room between the time and the date.
-const SIZE: f32 = 30.0;
+const SIZE: f32 = 36.0;
 const BETWEEN: i32 = 14;
 /// How far in from the panel's right edge the line ends.
 const RIGHT: i32 = 40;

@@ -276,6 +276,8 @@ pub struct Dock {
     /// the pieces go from the screen's edges towards their panels' middles
     /// (BOOK_REACH of the way).
     book: std::cell::Cell<f64>,
+    /// Whether a scrub let go part of the way is picked up (see `scrub`).
+    pick_up: bool,
     /// The move scrubbed by the ribbon: from, to, how far.
     scrub: Option<(Mode, Mode, f64)>,
     /// When the last move ended: the halves wobble to rest from it.
@@ -385,7 +387,7 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -679,7 +681,7 @@ impl Dock {
         // Let go part of the way (the app grid, a window): the move goes on
         // from where the finger left it, at the dock's own pace - forward,
         // or back if it was let go short.
-        if let Some((from, to, k)) = self.scrub {
+        if let Some((from, to, k)) = self.scrub.filter(|_| self.pick_up) {
             let target = mode_for(taken);
             let way = if target == to && k < 1.0 { Some((from, to, k)) } else if target == from && k > 0.0 { Some((to, from, 1.0 - k)) } else { None };
             if let Some((a, b, at)) = way.filter(|(a, b, _)| a != b) {
@@ -718,7 +720,11 @@ impl Dock {
 
     /// The ribbon under a finger: the halves `k` of the way from where they
     /// stand for the panels `from` has taken to where they stand for `to`'s.
-    pub fn scrub(&mut self, from: [bool; 2], to: [bool; 2], k: f64) {
+    /// `pick_up`: let go part of the way, the move goes on from there at the
+    /// dock's own pace (the app grid under a finger); else (the ribbon, a
+    /// window's gesture) the motion runs to its end itself.
+    pub fn scrub(&mut self, from: [bool; 2], to: [bool; 2], k: f64, pick_up: bool) {
+        self.pick_up = pick_up;
         let (from, to) = (mode_for(from), mode_for(to));
         let k = k.clamp(0.0, 1.0);
         if to != Mode::Hidden {

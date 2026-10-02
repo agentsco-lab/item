@@ -64,7 +64,7 @@ const MARK_ICON: &str = "/usr/share/icons/Adwaita/symbolic/devices/auth-fingerpr
 /// The clock line, as the desktop's (clock.rs): its size, its distance from
 /// the top, the room between the time and the date, its end in from the
 /// panel's right edge.
-const CLOCK_SIZE: f32 = 30.0;
+const CLOCK_SIZE: f32 = 36.0;
 const CLOCK_TOP: f64 = 72.0;
 const CLOCK_BETWEEN: i32 = 14;
 const CLOCK_RIGHT: f64 = 40.0;
