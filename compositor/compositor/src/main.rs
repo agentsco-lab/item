@@ -825,6 +825,7 @@ fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,item_compositor=info")),
         )
         .init();
+    sleep::prepare();
     let args = args();
     // This thread is the loop: on the big cores, ahead of the apps.
     sched::favour_this_thread();

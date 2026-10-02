@@ -380,6 +380,9 @@ impl State {
                 Contact::Down(slot, pos, _) => self.alert.down(slot, pos),
                 Contact::Up(slot, _) => {
                     if let Some((id, key)) = self.alert.up(slot) {
+                        if key.contains("snooze") {
+                            self.sleep.snoozed();
+                        }
                         self.notes.act(id, &key);
                     }
                 }

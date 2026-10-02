@@ -124,7 +124,7 @@ START="/tmp/item-compositor"
 [ -n "$SESSION" ] && { chmod 755 /tmp/item-session.sh; START="/tmp/item-session.sh"; }
 rm -f /tmp/item-compositor.log   # systemd writes a file: output from its start, not truncating
 systemd-run --wait --collect --unit=item-compositor \
-    -p User=$USER_NAME -p PAMName=phosh -p TTYPath=/dev/tty7 -p StandardInput=tty-fail -p LimitRTPRIO=10 \
+    -p User=$USER_NAME -p PAMName=phosh -p TTYPath=/dev/tty7 -p StandardInput=tty-fail -p LimitRTPRIO=10 -p AmbientCapabilities=CAP_WAKE_ALARM \
     -p StandardOutput=file:/tmp/item-compositor.log -p StandardError=file:/tmp/item-compositor.log \
     -p RuntimeMaxSec=$T -p WorkingDirectory=/tmp -p ExecStartPre=+/usr/bin/chvt\ 7 \
     -p Environment=EGL_PLATFORM=hwcomposer \

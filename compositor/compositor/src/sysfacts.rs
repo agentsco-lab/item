@@ -486,6 +486,17 @@ fn next_event(events: &Events, twelve: bool) -> String {
 }
 
 fn next_alarm(twelve: bool) -> String {
+    match next_alarm_at() {
+        None => "No alarm set".into(),
+        Some((at, name)) => {
+            let text = format!("{} {} · {}", clock_text(at, twelve), day_text(at), until_text(at));
+            if !name.is_empty() && name != "Alarm" { format!("{name} · {text}") } else { text }
+        }
+    }
+}
+
+/// When Clocks' next alarm rings (s since the epoch), and its name.
+pub fn next_alarm_at() -> Option<(i64, String)> {
     let text = run("gsettings", &["get", "org.gnome.clocks", "alarms"]);
     let num = |d: &str, k: &str| -> Option<i64> {
         let i = d.find(&format!("'{k}': <"))? + k.len() + 5;
@@ -520,13 +531,7 @@ fn next_alarm(twelve: bool) -> String {
             break;
         }
     }
-    match best {
-        None => "No alarm set".into(),
-        Some((at, name)) => {
-            let text = format!("{} {} · {}", clock_text(at, twelve), day_text(at), until_text(at));
-            if !name.is_empty() && name != "Alarm" { format!("{name} · {text}") } else { text }
-        }
-    }
+    best
 }
 
 fn local(t: i64) -> libc::tm {
