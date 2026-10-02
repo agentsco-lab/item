@@ -391,6 +391,21 @@ impl Shade {
         }
     }
 
+    /// A sheet opened by itself (the power key's long press: the left one,
+    /// its Power asking for the second tap - restart or power off).
+    pub fn open(&mut self, panel: usize) {
+        let opened = self.visible();
+        let sheet = &mut self.sheets[panel];
+        let full = layout::LAYOUT.1 as f64;
+        sheet.grab = None;
+        sheet.run = Some(Run::new(sheet.height, full, 0.0));
+        sheet.height = full;
+        if !opened {
+            self.opened += 1;
+            self.quick.read();
+        }
+    }
+
     /// Both sheets closed at once (the lock screen comes over them).
     pub fn fold(&mut self) {
         self.press = None;

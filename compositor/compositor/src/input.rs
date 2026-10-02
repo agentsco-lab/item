@@ -144,8 +144,10 @@ impl State {
             InputEvent::Keyboard { event } => {
                 // The power key, unlocked and lit, as item's on a folding
                 // phone (phosh patch 0014): a short press shows or hides the
-                // keyboard - closing the Duo locks it, the button is free -
-                // and a long one locks and blanks. Dark or locked, it does
+                // keyboard - closing the Duo locks it and darkens it, the
+                // button is free - and a long one is the power menu (the
+                // left shade, Power asking for its second tap: restart or
+                // power off), the screen left lit. Dark or locked, it does
                 // what it did, at once.
                 if event.key_code().raw().saturating_sub(8) == 116 {
                     let free = !self.lock.locked && !self.lock.blank && !self.setup.holds_screen();
@@ -157,7 +159,10 @@ impl State {
                                 if hybris_hwc::now_ns() - at < POWER_LONG_NS {
                                     toggle_keyboard();
                                 } else {
-                                    self.lock.power_key();
+                                    tracing::info!("power key: the power menu");
+                                    self.shade.open(0);
+                                    self.shade.quick.ask_power();
+                                    crate::fingerprint::buzz("button-pressed");
                                 }
                             }
                         }
