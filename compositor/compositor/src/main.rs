@@ -308,7 +308,7 @@ impl Data {
         // was spent on waking the phone); a call lights its own; a packet
         // leaves it dark.
         if let Some(woken) = self.state.sleep.take_woken(now) {
-            if woken == sleep::Woken::PowerKey && self.state.lock.blank {
+            if woken == sleep::Woken::PowerKey && self.state.lock.blank && !self.state.lid_shut {
                 self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;
             }
@@ -377,15 +377,7 @@ impl Data {
         if shown != self.state.calls.holds_screen() {
             self.state.needs_redraw = true;
         }
-        // Locked, dark after a while untouched, as Android's lock screen;
-        // unlocked, after the session's idle delay (0: never).
-        self.state.lock.idle_ns = if held {
-            0
-        } else if self.state.lock.locked {
-            LOCKED_IDLE_NS
-        } else {
-            self.state.idle.delay_ns()
-        };
+        self.state.lock.idle_ns = if held { 0 } else { self.state.idle.delay_ns() };
         let dim = self.state.lock.dimming(now);
         if dim != self.dim_was {
             self.dim_was = dim;
@@ -821,9 +813,6 @@ fn args() -> Args {
     }
     a
 }
-
-/// The lock screen dark after this long untouched.
-const LOCKED_IDLE_NS: u64 = 15_000_000_000;
 
 fn main() {
     tracing_subscriber::fmt()

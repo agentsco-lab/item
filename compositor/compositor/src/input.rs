@@ -91,10 +91,6 @@ pub fn init(handle: &LoopHandle<'static, Data>) {
         .expect("libinput source");
 }
 
-/// A press of the power key this long locks and blanks; shorter, the
-/// keyboard.
-const POWER_LONG_NS: u64 = 500_000_000;
-
 /// The on-screen keyboard shown or hidden, as phosh asks stevia
 /// (sm.puri.OSK0), on a thread.
 fn toggle_keyboard() {
@@ -142,29 +138,20 @@ impl State {
         let contact = match event {
             // The keys: power, volume (evdev codes, +8 for xkb).
             InputEvent::Keyboard { event } => {
-                // The power key, unlocked and lit, as item's on a folding
-                // phone (phosh patch 0014): a short press shows or hides the
-                // keyboard - closing the Duo locks it and darkens it, the
-                // button is free - and a long one is the power menu (the
-                // left shade, Power asking for its second tap: restart or
-                // power off), the screen left lit. Dark or locked, it does
-                // what it did, at once.
+                // The power key on a folding phone (phosh patch 0014): the
+                // lid darkens and lights the screen, the button only shows
+                // or hides the keyboard - it neither darkens the screen nor
+                // powers off (Power in the shade does). Dark with the lid
+                // open (it should not be), it lights it.
                 if event.key_code().raw().saturating_sub(8) == 116 {
-                    let free = !self.lock.locked && !self.lock.blank && !self.setup.holds_screen();
-                    match (event.state(), free) {
-                        (KeyState::Pressed, true) => self.power_down_at = Some(hybris_hwc::now_ns()),
-                        (KeyState::Pressed, false) => self.lock.power_key(),
-                        (KeyState::Released, _) => {
-                            if let Some(at) = self.power_down_at.take() {
-                                if hybris_hwc::now_ns() - at < POWER_LONG_NS {
-                                    toggle_keyboard();
-                                } else {
-                                    tracing::info!("power key: the power menu");
-                                    self.shade.open(0);
-                                    self.shade.quick.ask_power();
-                                    crate::fingerprint::buzz("button-pressed");
-                                }
+                    if event.state() == KeyState::Pressed {
+                        if !self.lock.blank {
+                            if !self.lock.locked && !self.setup.holds_screen() {
+                                toggle_keyboard();
                             }
+                        } else if !self.lid_shut {
+                            tracing::info!("power key: dark with the lid open: lit");
+                            self.lock.set_blank(false);
                         }
                     }
                     self.needs_redraw = true;

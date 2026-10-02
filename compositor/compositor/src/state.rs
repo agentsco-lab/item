@@ -153,8 +153,6 @@ pub struct State {
     /// What woke the phone from sleep.
     pub sleep: crate::sleep::Sleep,
     pub asker: Asker,
-    /// When the power key went down, unlocked and lit (input.rs).
-    pub power_down_at: Option<u64>,
     /// The wallpapers, and which one is on (walls.rs).
     pub walls: crate::walls::Walls,
     /// The desktop's editing: choosing the wallpaper (picker.rs).
@@ -240,7 +238,6 @@ impl State {
             paces: Default::default(),
             put_away: Vec::new(),
             ribbon: crate::ribbon::Ribbon::new(),
-            power_down_at: None,
             polkit: crate::polkit::Polkit::new(wake.clone()),
             dialog: crate::dialog::Dialog::new(),
             wifi: crate::nm::Wifi::new(wake.clone()),
