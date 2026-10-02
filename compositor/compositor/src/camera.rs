@@ -1,7 +1,9 @@
 //! A peek through the camera on the lock screen (an experiment, CAMERA_PEEK=1;
 //! item-tracker #105, #107, #109): the screen lit while locked - the lid
-//! opened, the power key - and a small window on the left panel shows what
-//! the camera sees, mirrored as a mirror is, for a few seconds.
+//! opened, the power key - and a small window on the right panel shows what
+//! the camera sees, for a few seconds. How the picture is turned and whether
+//! mirrored is read at each start from /tmp/item-camera (words: cw, ccw,
+//! none; mirror), to find the right way on the device.
 //!
 //! The frames come through Droidian's camera stack as droidian-camera's do:
 //! GStreamer's droidcamsrc (droidmedia, Android's Camera1), 640x480 NV21,
@@ -46,11 +48,20 @@ pub struct Peek {
     frame: Arc<Mutex<Frame>>,
     drawn: std::cell::RefCell<(u64, Option<MemoryRenderBuffer>)>,
     wake: Ping,
+    /// The picture's size as turned (px, logical at scale 1).
+    size: (usize, usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Turn {
+    None,
+    Cw,
+    Ccw,
 }
 
 impl Peek {
     pub fn new(wake: Ping) -> Peek {
-        Peek { on: std::env::var_os("CAMERA_PEEK").is_some(), child: None, since: 0, first: None, frame: Default::default(), drawn: Default::default(), wake }
+        Peek { on: std::env::var_os("CAMERA_PEEK").is_some(), child: None, since: 0, first: None, frame: Default::default(), drawn: Default::default(), wake, size: (W / 2, H / 2) }
     }
 
     /// The screen lit while locked: the camera on.
@@ -71,11 +82,16 @@ impl Peek {
         tracing::info!("camera: peeking");
         let mut out = child.stdout.take().expect("piped");
         let (frame, wake) = (self.frame.clone(), self.wake.clone());
+        let how = std::fs::read_to_string("/tmp/item-camera").unwrap_or_else(|_| "ccw mirror".into());
+        let turn = if how.contains("ccw") { Turn::Ccw } else if how.contains("cw") { Turn::Cw } else { Turn::None };
+        let mirror = how.contains("mirror");
+        tracing::info!("camera: turned {turn:?}, mirrored {mirror}");
+        self.size = if turn == Turn::None { (W / 2, H / 2) } else { (H / 2, W / 2) };
         frame.lock().unwrap().seq = 0;
         let _ = std::thread::Builder::new().name("camera".into()).spawn(move || {
             let mut nv21 = vec![0u8; W * H * 3 / 2];
             while out.read_exact(&mut nv21).is_ok() {
-                let rgba = half_rgba(&nv21);
+                let rgba = half_rgba(&nv21, turn, mirror);
                 let mut f = frame.lock().unwrap();
                 f.rgba = rgba;
                 f.seq += 1;
@@ -123,14 +139,14 @@ impl Peek {
         let f = self.frame.lock().unwrap();
         let mut drawn = self.drawn.borrow_mut();
         if drawn.0 != f.seq && !f.rgba.is_empty() {
-            *drawn = (f.seq, Some(MemoryRenderBuffer::from_slice(&f.rgba, Fourcc::Abgr8888, ((W / 2) as i32, (H / 2) as i32), 1, smithay::utils::Transform::Normal, None)));
+            *drawn = (f.seq, Some(MemoryRenderBuffer::from_slice(&f.rgba, Fourcc::Abgr8888, (self.size.0 as i32, self.size.1 as i32), 1, smithay::utils::Transform::Normal, None)));
         }
         let Some(buffer) = drawn.1.clone() else { return Vec::new() };
         let k = ((frame_ns.saturating_sub(first)) as f64 / FADE_NS).clamp(0.0, 1.0) as f32;
-        let left = layout::panels()[0];
-        // Half the frame's px are logical px at scale 1: 320x240 logical.
-        let x = left.loc.x as f64 + (left.size.w as f64 - (W / 2) as f64) / 2.0;
-        let y = 300.0;
+        let right = layout::panels()[1];
+        // Half the frame's px are logical px at scale 1.
+        let x = right.loc.x as f64 + (right.size.w as f64 - self.size.0 as f64) / 2.0;
+        let y = 200.0;
         match MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * SCALE as f64).round(), (y * SCALE as f64).round()), &buffer, Some(k), None, None, Kind::Unspecified) {
             Ok(e) => vec![ShellElement::Text(e)],
             Err(_) => Vec::new(),
@@ -138,14 +154,24 @@ impl Peek {
     }
 }
 
-/// An NV21 frame to RGBA at half its size (a pixel per 2x2), mirrored left to
-/// right (a mirror), its corners rounded; premultiplied.
-fn half_rgba(nv21: &[u8]) -> Vec<u8> {
+/// An NV21 frame to RGBA at half its size (a pixel per 2x2), turned a
+/// quarter either way or not, mirrored left to right or not, its corners
+/// rounded; premultiplied.
+fn half_rgba(nv21: &[u8], turn: Turn, mirror: bool) -> Vec<u8> {
     let (w, h) = (W / 2, H / 2);
-    let mut out = vec![0u8; w * h * 4];
+    // The picture as it comes out: turned, its own size.
+    let (ow, oh) = if turn == Turn::None { (w, h) } else { (h, w) };
+    let mut out = vec![0u8; ow * oh * 4];
     let uv = &nv21[W * H..];
-    for y in 0..h {
-        for x in 0..w {
+    for oy in 0..oh {
+        for ox in 0..ow {
+            let mx = if mirror { ow - 1 - ox } else { ox };
+            // Where in the half-size frame this pixel comes from.
+            let (x, y) = match turn {
+                Turn::None => (mx, oy),
+                Turn::Cw => (oy, h - 1 - mx),
+                Turn::Ccw => (w - 1 - oy, mx),
+            };
             let (sx, sy) = (2 * x, 2 * y);
             let lum = nv21[sy * W + sx] as f32;
             let i = (sy / 2) * W + (sx / 2) * 2;
@@ -153,11 +179,10 @@ fn half_rgba(nv21: &[u8]) -> Vec<u8> {
             let r = lum + 1.402 * v;
             let g = lum - 0.344 * u - 0.714 * v;
             let b = lum + 1.772 * u;
-            // Rounded corners.
-            let (fx, fy) = (x as f64 + 0.5, y as f64 + 0.5);
-            let (cx, cy) = (fx.clamp(RADIUS, w as f64 - RADIUS), fy.clamp(RADIUS, h as f64 - RADIUS));
+            let (fx, fy) = (ox as f64 + 0.5, oy as f64 + 0.5);
+            let (cx, cy) = (fx.clamp(RADIUS, ow as f64 - RADIUS), fy.clamp(RADIUS, oh as f64 - RADIUS));
             let a = (RADIUS + 0.5 - ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt()).clamp(0.0, 1.0) as f32;
-            let o = (y * w + (w - 1 - x)) * 4;
+            let o = (oy * ow + ox) * 4;
             out[o] = (r.clamp(0.0, 255.0) * a) as u8;
             out[o + 1] = (g.clamp(0.0, 255.0) * a) as u8;
             out[o + 2] = (b.clamp(0.0, 255.0) * a) as u8;
