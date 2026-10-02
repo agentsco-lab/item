@@ -721,8 +721,8 @@ impl Dock {
     /// The ribbon under a finger: the halves `k` of the way from where they
     /// stand for the panels `from` has taken to where they stand for `to`'s.
     /// `pick_up`: let go part of the way, the move goes on from there at the
-    /// dock's own pace (the app grid under a finger); else (the ribbon, a
-    /// window's gesture) the motion runs to its end itself.
+    /// dock's own pace (the app grid, a window's gesture); else (the ribbon,
+    /// which carries the clock itself) the motion runs to its end itself.
     pub fn scrub(&mut self, from: [bool; 2], to: [bool; 2], k: f64, pick_up: bool) {
         self.pick_up = pick_up;
         let (from, to) = (mode_for(from), mode_for(to));

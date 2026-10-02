@@ -48,8 +48,6 @@ const FLING: f64 = 0.3;
 const TAP: f64 = 8.0;
 
 const SHEET: [f32; 4] = premultiplied([0.06, 0.08, 0.12], 0.97);
-/// Over glass (glass.rs): the screen under it shows, blurred.
-const SHEET_ON_GLASS: [f32; 4] = premultiplied([0.04, 0.05, 0.08], 0.62);
 const TEXT: [f32; 4] = [0.93, 0.95, 0.97, 1.0];
 const DIM: [f32; 4] = [0.62, 0.66, 0.72, 1.0];
 const HANDLE: [f32; 4] = [0.45, 0.48, 0.52, 1.0];
@@ -535,7 +533,10 @@ impl Shade {
             // above it.
             let id = ids.next().expect("enough ids").clone();
             let sheet_rect = Rectangle::new(panel.loc, (panel.size.w, h).into());
-            out.push(ShellElement::Solid(SolidColorRenderElement::new(id, sheet_rect, CommitCounter::default(), if glass { SHEET_ON_GLASS } else { SHEET }, Kind::Unspecified)));
+            // Over glass the pane is the sheet, its tint in it (pane.frag).
+            if !glass {
+                out.push(ShellElement::Solid(SolidColorRenderElement::new(id, sheet_rect, CommitCounter::default(), SHEET, Kind::Unspecified)));
+            }
         }
         out
     }

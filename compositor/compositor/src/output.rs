@@ -373,28 +373,18 @@ impl Screen {
         elements.extend(state.picker.elements(&mut self.renderer, frame_ns, &state.walls.thumbs, current).into_iter().map(FrameElement::from));
         let glass_start = elements.len();
         if let (Some(g), true) = (&self.glass, state.shade.visible()) {
-            // Under each sheet, the glass cut to it: half the output's size,
-            // so at scale 1 its logical px are the output's; bottom-up, as
-            // the canvas it came from, so the rows under a sheet of height h
-            // are the texture's last h.
+            // Under each sheet a pane of glass (glass.rs, pane.frag): the
+            // screen under it stands still, the pane slides over it - frosted
+            // at the top, clearer to its edge, a lens and a rim there, a sheen
+            // going with it, its tint in it.
             for (panel, h) in crate::layout::panels().into_iter().zip(state.shade.heights(frame_ns)) {
                 if h <= 0 {
                     continue;
                 }
-                let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((panel.loc.x as f64, (crate::layout::LAYOUT.1 - h) as f64).into(), (panel.size.w as f64, h as f64).into());
-                elements.push(FrameElement::Snapshot(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
-                    g.id.clone(),
-                    self.renderer.context_id(),
-                    ((panel.loc.x * SCALE) as f64, 0.0),
-                    g.texture().clone(),
-                    1,
-                    Transform::Flipped180,
-                    None,
-                    Some(src),
-                    Some((panel.size.w, h).into()),
-                    None,
-                    smithay::backend::renderer::element::Kind::Unspecified,
-                )));
+                // A pane of glass under the sheet (pane.frag).
+                if let Some(pane) = g.pane(&self.renderer, panel, h) {
+                    elements.push(FrameElement::Shaded(pane));
+                }
             }
         }
         let over_len = elements.len();
@@ -588,20 +578,10 @@ impl Screen {
                         if h <= 0 {
                             continue;
                         }
-                        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((panel.loc.x as f64, (crate::layout::LAYOUT.1 - h) as f64).into(), (panel.size.w as f64, h as f64).into());
-                        elements.push(FrameElement::Snapshot(smithay::backend::renderer::element::texture::TextureRenderElement::from_static_texture(
-                            g.id.clone(),
-                            self.renderer.context_id(),
-                            ((panel.loc.x * SCALE) as f64, 0.0),
-                            g.texture().clone(),
-                            1,
-                            Transform::Flipped180,
-                            None,
-                            Some(src),
-                            Some((panel.size.w, h).into()),
-                            None,
-                            smithay::backend::renderer::element::Kind::Unspecified,
-                        )));
+                        // A pane of glass under the sheet (pane.frag).
+                        if let Some(pane) = g.pane(&self.renderer, panel, h) {
+                            elements.push(FrameElement::Shaded(pane));
+                        }
                     }
                 }
                 let (w, h) = crate::layout::LAYOUT;

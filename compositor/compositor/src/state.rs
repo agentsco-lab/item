@@ -474,7 +474,9 @@ impl State {
             if let Some(p) = self.grid.panel() {
                 to[p] = true;
             }
-            self.dock.scrub(from, to, k, false);
+            // Let go part of the way, the dock goes on from there (the clock
+            // with it), not snapped.
+            self.dock.scrub(from, to, k, true);
         } else {
             let taken = self.dock_taken(view);
             // A move begins: the clocks up now, before its first frame.
