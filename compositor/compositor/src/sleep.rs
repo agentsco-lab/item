@@ -21,6 +21,12 @@
 //! CLOCK_REALTIME_ALARM, the RTC under it) for Clocks' next alarm and for a
 //! snoozed one, a few seconds early: woken, Clocks rings within a second.
 //! It needs CAP_WAKE_ALARM (session-run.sh gives it).
+//!
+//! While the screen is lit it holds a kernel wakelock (`awake`), as Android
+//! does: the lid opened while systemd-sleep was on its way to sleep lit the
+//! screen, and the phone went to sleep 0.2 s later all the same (or slept
+//! and woke again: a blink). Held, the kernel gives the sleep up. It needs
+//! CAP_BLOCK_SUSPEND and the android_wakelock group (session-run.sh).
 
 use std::sync::{Arc, Mutex};
 
@@ -65,6 +71,7 @@ const EARLY_S: i64 = 5;
 pub const SNOOZE_S: i64 = 10 * 60;
 
 static TIMER: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+static WAKELOCK: std::sync::OnceLock<(Option<std::fs::File>, Option<std::fs::File>)> = std::sync::OnceLock::new();
 
 /// The kernel's alarm, a timerfd on CLOCK_REALTIME_ALARM, made first thing
 /// (main.rs); then CAP_WAKE_ALARM is let go of as an ambient capability, so
@@ -75,6 +82,8 @@ pub fn prepare() {
         tracing::warn!("sleep: no wake alarm: {}", std::io::Error::last_os_error());
     }
     TIMER.store(fd, std::sync::atomic::Ordering::Relaxed);
+    let open = |p: &str| std::fs::OpenOptions::new().write(true).open(p).map_err(|e| tracing::warn!("sleep: {p}: {e}")).ok();
+    let _ = WAKELOCK.set((open("/sys/power/wake_lock"), open("/sys/power/wake_unlock")));
     unsafe { libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong, 0, 0, 0) };
 }
 
@@ -174,6 +183,17 @@ impl Sleep {
             }
         });
         true
+    }
+
+    /// The screen lit: the kernel's sleep held off (or let be).
+    pub fn awake(&self, on: bool) {
+        use std::io::Write;
+        let Some((lock, unlock)) = WAKELOCK.get() else { return };
+        let Some(mut f) = (if on { lock } else { unlock }).as_ref() else { return };
+        match f.write_all(b"item") {
+            Ok(()) => tracing::info!("sleep: wakelock {}", if on { "held" } else { "let go" }),
+            Err(e) => tracing::warn!("sleep: wakelock: {e}"),
+        }
     }
 
     /// An alarm snoozed now: woken for it again.

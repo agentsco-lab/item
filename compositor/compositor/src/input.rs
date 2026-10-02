@@ -175,6 +175,11 @@ impl State {
                     let shut = SwitchToggleEvent::<LibinputInputBackend>::state(&event) == SwitchState::On;
                     tracing::info!("lid: {}", if shut { "shut" } else { "open" });
                     self.lid_shut = shut;
+                    // Opened: awake at once, ahead of the loop's turn - a
+                    // sleep on its way is given up.
+                    if !shut {
+                        self.sleep.awake(true);
+                    }
                     if shut {
                         self.lock.lock_now();
                         self.lock.set_blank(true);

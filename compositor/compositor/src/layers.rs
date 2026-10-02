@@ -70,6 +70,10 @@ impl Layers {
     /// A layer surface's commit: its first gets the configure with its size.
     pub fn commit(&self, surface: &WlSurface) {
         let Some(layer) = self.surfaces.iter().find(|l| l.wl_surface() == surface) else { return };
+        if std::env::var_os("OSK_DEBUG").is_some() && self.is_osk(layer) {
+            let (_, size, m) = cached_all(layer);
+            tracing::info!("osk commit: {}x{} margins {:?} buffer {} settled {}", size.w, size.h, m, has_buffer(surface), !self.unsettled(layer));
+        }
         let sent = with_states(surface, |states| states.data_map.get::<LayerSurfaceData>().unwrap().lock().unwrap().initial_configure_sent);
         if sent {
             return;

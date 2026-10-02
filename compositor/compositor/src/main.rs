@@ -383,10 +383,12 @@ impl Data {
             self.dim_was = dim;
             self.state.needs_redraw = true;
         }
-        // The system screen samples the load only while the screen is lit.
+        // The system screen samples the load only while the screen is lit;
+        // lit, the kernel does not sleep (sleep.rs).
         let lit = !self.state.lock.blank;
         if lit != self.lit_was {
             self.lit_was = lit;
+            self.state.sleep.awake(lit);
             self.state.display_config.set_dark(!lit);
             self.state.system.display(lit);
         }
@@ -1053,7 +1055,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, frames_dock_done: false, lit_was: true, dim_was: false, call_lit: None, alert_was: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, lit_was: false, dim_was: false, call_lit: None, alert_was: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.
