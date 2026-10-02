@@ -313,6 +313,8 @@ impl Screen {
         if doors.is_some() {
             elements.extend(self.edges(0));
         }
+        // The camera's peek over the lock screen (camera.rs).
+        elements.extend(state.camera_peek.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         let lock = state.lock.elements(&mut self.renderer, frame_ns);
         elements.extend(lock.into_iter().map(FrameElement::from));
         if let Some((ldx, rdx)) = doors {

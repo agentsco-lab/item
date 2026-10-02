@@ -143,6 +143,9 @@ pub struct State {
     pub lid_shut: bool,
     /// The lid opened on the way into sleep: the screen lit once awake.
     pub lid_light_pending: bool,
+    /// A peek through the camera on the lock screen (camera.rs, an
+    /// experiment).
+    pub camera_peek: crate::camera::Peek,
     /// The hinge's angle (posture.rs).
     pub posture: crate::posture::Posture,
     /// The privacy dot: camera, microphone, location in use.
@@ -250,6 +253,7 @@ impl State {
             lid_shut: false,
             lid_light_pending: false,
             posture: crate::posture::Posture::new(wake.clone()),
+            camera_peek: crate::camera::Peek::new(wake.clone()),
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),

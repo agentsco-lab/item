@@ -52,6 +52,7 @@ mod sched;
 mod polkit;
 mod accent;
 mod alert;
+mod camera;
 mod posture;
 mod calls;
 mod dialog;
@@ -334,6 +335,11 @@ impl Data {
             self.alert_was = urgent.is_some();
             self.state.needs_redraw = true;
         }
+        // The camera's peek: a new frame drawn; off when its time is up.
+        let showing = self.state.lock.locked && !self.state.lock.blank;
+        if self.state.camera_peek.tick(now, showing) {
+            self.state.needs_redraw = true;
+        }
         // The hinge moved: the dock's pieces follow it.
         if self.state.posture.take_changed() {
             self.state.needs_redraw = true;
@@ -399,6 +405,10 @@ impl Data {
         if lit != self.lit_was {
             self.lit_was = lit;
             self.state.sleep.awake(lit);
+            // Lit while locked: a peek through the camera (camera.rs).
+            if lit && self.state.lock.locked {
+                self.state.camera_peek.start(now);
+            }
             self.state.display_config.set_dark(!lit);
             self.state.system.display(lit);
         }
