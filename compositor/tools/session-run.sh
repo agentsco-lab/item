@@ -108,6 +108,10 @@ rollback() {
 trap rollback EXIT
 
 systemctl stop sfduo-composer-watchdog phosh
+# phosh's fingerprint client, stopped mid-Identify, leaves the reader busy
+# for ~30 s, and the session's first finger unheard: the reader's service
+# started afresh.
+systemctl restart droidian-fpd 2>/dev/null
 systemctl mask --runtime phosh >/dev/null
 hwc stop
 for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done

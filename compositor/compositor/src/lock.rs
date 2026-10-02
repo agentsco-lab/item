@@ -172,7 +172,7 @@ pub(crate) fn soft_glow(size: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
         tiny_skia::Point::from_xy(c, c),
         tiny_skia::Point::from_xy(c, c),
         c,
-        vec![stop(0.0, 0.42), stop(0.35, 0.24), stop(0.7, 0.07), stop(1.0, 0.0)],
+        vec![stop(0.0, 0.8), stop(0.35, 0.5), stop(0.7, 0.16), stop(1.0, 0.0)],
         tiny_skia::SpreadMode::Pad,
         tiny_skia::Transform::identity(),
     );
@@ -808,8 +808,8 @@ impl Lock {
             };
             if let Some(glow) = glow {
                 let (gx, gy) = ((right.loc.x + right.size.w) as f64 - SENSOR_IN - SENSOR_GLOW / 2.0, POWER_Y - SENSOR_GLOW / 2.0);
-                let a = if shaking { 0.9 } else { flash.map(|f| 0.55 + 0.45 * f as f32).unwrap_or(alpha * 0.55) };
-                put(&mut out, &glow, gx, gy, right_dx + sx, a * appear as f32);
+                let a = if shaking { 1.0 } else { flash.map(|f| 0.75 + 0.25 * f as f32).unwrap_or(alpha) };
+                put(&mut out, &glow, gx, gy, right_dx + sx, a);
             }
         }
 
