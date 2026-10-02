@@ -48,6 +48,8 @@ pub struct Clock {
     on: std::cell::Cell<(Option<usize>, u64)>,
     /// The accent it is drawn in (accent.rs's version).
     accent: u64,
+    /// Carried along the ribbon at the last frame.
+    was_carried: std::cell::Cell<bool>,
 }
 
 impl Clock {
@@ -64,6 +66,7 @@ impl Clock {
             minute: -1,
             on: std::cell::Cell::new((None, 0)),
             accent: 0,
+            was_carried: Default::default(),
         };
         clock.refresh();
         clock
@@ -131,9 +134,14 @@ impl Clock {
     /// `middle`: where its middle is, logical x, when it goes along with the
     /// dock from one panel to the other (not faded then); else the panel's.
     pub fn elements(&self, renderer: &mut GlesRenderer, panel: Option<usize>, frame_ns: u64, carried: bool, middle: Option<f64>) -> Vec<ShellElement> {
-        // Going along: already on the panel it goes to, so it is not faded
-        // in there when it arrives.
+        // Going along (with the dock, or carried with its desk by the
+        // ribbon): on the panel it ends on as it arrives, not faded in there.
         if middle.is_some() {
+            self.on.set((panel, 0));
+        }
+        if carried {
+            self.was_carried.set(true);
+        } else if self.was_carried.replace(false) {
             self.on.set((panel, 0));
         }
         let carried = carried || middle.is_some();

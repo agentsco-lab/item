@@ -214,6 +214,12 @@ impl Ribbon {
         if !self.moving() {
             return None;
         }
+        // On the system screen's side (the row between it and the desks)
+        // the clock stays where it stands; it goes with its desk only on the
+        // pen's side, where the desk stays in sight.
+        if self.position(hybris_hwc::now_ns()) < 1.0 {
+            return None;
+        }
         [1, 0].into_iter().find(|&k| matches!(self.carried[k], Some(Page::Desk(_))))
     }
 
