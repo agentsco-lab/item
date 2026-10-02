@@ -31,7 +31,7 @@ use smithay::backend::input::TouchSlot;
 use smithay::utils::{Physical, Rectangle};
 
 use crate::layout::{self, SCALE};
-use crate::shade::{date_line, local_time, ShellElement};
+use crate::shade::{local_time, ShellElement};
 use crate::pinpad::{ease, shake, PinPad, Press, SHAKE_NS};
 use crate::text::{Font, Label};
 
@@ -60,6 +60,14 @@ const GLOW: f64 = 124.0;
 /// Where the left panel talks to you: the middle of its lower part.
 const TALK_FROM_FOOT: i32 = 170;
 const MARK_ICON: &str = "/usr/share/icons/Adwaita/symbolic/devices/auth-fingerprint-symbolic.svg";
+
+/// The clock line, as the desktop's (clock.rs): its size, its distance from
+/// the top, the room between the time and the date, its end in from the
+/// panel's right edge.
+const CLOCK_SIZE: f32 = 30.0;
+const CLOCK_TOP: f64 = 72.0;
+const CLOCK_BETWEEN: i32 = 14;
+const CLOCK_RIGHT: f64 = 40.0;
 
 pub struct Lock {
     /// The PIN pad is up (pinpad.rs).
@@ -104,6 +112,10 @@ pub struct Lock {
     /// How far the finger has lifted the lock screen, logical px.
     lift: f64,
     fonts: Option<(Font, Font)>,
+    /// The clock's: bold for the time, medium for the date (as the
+    /// desktop's, clock.rs), and the accent it is drawn in.
+    clock_fonts: Option<(Font, Font)>,
+    clock_accent: u64,
     time: Label,
     date: Label,
     greeting: Label,
@@ -224,8 +236,11 @@ impl Lock {
             grab: None,
             lift: 0.0,
             fonts: thin.zip(regular),
-            time: Label::new(110.0, [1.0, 1.0, 1.0, 0.9]),
-            date: Label::new(22.0, [1.0, 1.0, 1.0, 0.6]),
+            clock_fonts: Font::load(&["/usr/share/fonts/truetype/lato/Lato-Bold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"])
+                .zip(Font::load(&["/usr/share/fonts/truetype/lato/Lato-Medium.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"])),
+            clock_accent: 0,
+            time: Label::new(CLOCK_SIZE, [1.0; 4]),
+            date: Label::new(CLOCK_SIZE, [1.0; 4]),
             greeting: Label::new(26.0, [1.0, 1.0, 1.0, 0.9]),
             status: Label::new(16.0, [1.0, 1.0, 1.0, 0.55]),
             hint: Label::new(15.0, [1.0, 1.0, 1.0, 0.5]),
@@ -320,12 +335,16 @@ impl Lock {
         true
     }
 
+    /// The clock line's height.
+    fn clock_h(&self) -> f64 {
+        self.time.extent.h.max(self.date.extent.h) as f64
+    }
+
     /// The media card's place on the left panel (logical px), under the
     /// status line.
     fn media_rect(&self) -> Rectangle<f64, smithay::utils::Logical> {
         let left = layout::panels()[0];
-        let top = if self.after_boot { 130.0 } else { 150.0 };
-        let y = top + 4.0 + self.time.extent.h as f64 + self.date.extent.h as f64 + 14.0 + self.battery_label.extent.h as f64 + CARDS_TOP;
+        let y = CLOCK_TOP + self.clock_h() + 12.0 + self.battery_label.extent.h as f64 + CARDS_TOP;
         Rectangle::new((left.loc.x as f64 + (left.size.w as f64 - CARD_W) / 2.0, y).into(), (CARD_W, MEDIA_H).into())
     }
 
@@ -468,15 +487,25 @@ impl Lock {
 
     /// The time brought up to the minute; whether it changed.
     pub fn refresh(&mut self) -> bool {
-        let Some((thin, regular)) = &self.fonts else { return false };
+        let Some((_, regular)) = &self.fonts else { return false };
         let now = local_time();
         let minute = now.tm_hour * 60 + now.tm_min;
-        if minute == self.minute {
+        let accent = crate::accent::version();
+        if minute == self.minute && accent == self.clock_accent {
             return false;
         }
+        if accent != self.clock_accent {
+            self.clock_accent = accent;
+            let mut c = crate::accent::get_f();
+            c[3] = 0.95;
+            self.time.set_color(c);
+            self.date.set_color(c);
+        }
         self.minute = minute;
-        self.time.set(thin, &format!("{}:{:02}", now.tm_hour, now.tm_min));
-        self.date.set(regular, &date_line(&now));
+        if let Some((bold, medium)) = &self.clock_fonts {
+            self.time.set(bold, &format!("{}:{:02}", now.tm_hour, now.tm_min));
+            self.date.set(medium, &crate::clock::short_date(&now));
+        }
         if self.after_boot {
             let part = crate::sysscreen::part_of_day(now.tm_hour);
             let greeting = match crate::sysscreen::first_name() {
@@ -789,17 +818,21 @@ impl Lock {
         // The left half: who and what. The time, the date, the status line
         // under them; after a boot a greeting; low down, what is said to you.
         let rise = -(self.lift * 0.5);
-        let top = if self.after_boot { 130.0 } else { 150.0 };
-        put(&mut out, &self.time.buffer, cx(&self.time, left), top + rise, left_dx, 1.0);
-        let mut y = top + 4.0 + self.time.extent.h as f64;
-        put(&mut out, &self.date.buffer, cx(&self.date, left), y + rise, left_dx, 1.0);
-        y += self.date.extent.h as f64 + 14.0;
+        // The clock as the desktop's: one line in the accent near the top,
+        // set to the panel's right edge; the status line under it, as set.
+        let top = CLOCK_TOP;
+        let end = (left.loc.x + left.size.w) as f64 - CLOCK_RIGHT;
+        let mut x = end - (self.time.extent.w + CLOCK_BETWEEN + self.date.extent.w) as f64;
+        put(&mut out, &self.time.buffer, x, top + rise, left_dx, 1.0);
+        x += (self.time.extent.w + CLOCK_BETWEEN) as f64;
+        put(&mut out, &self.date.buffer, x, top + rise, left_dx, 1.0);
+        let mut y = top + self.clock_h() + 12.0;
         // The status line: [battery] 84%   [network], centred.
         let gap = 6.0;
         let item = |icon: &Option<MemoryRenderBuffer>, l: &Label| if icon.is_some() { 16.0 + gap } else { 0.0 } + l.extent.w as f64;
         let (bw, nw) = (item(&self.battery_icon, &self.battery_label), item(&self.net_icon, &self.net_label));
         if self.battery_label.extent.w > 0 {
-            let mut x = left.loc.x as f64 + (left.size.w as f64 - (bw + 22.0 + nw)) / 2.0;
+            let mut x = end - (bw + 22.0 + nw);
             let ly = y + rise;
             let icon_y = ly + (self.battery_label.extent.h as f64 - 16.0) / 2.0;
             for (icon, l) in [(&self.battery_icon, &self.battery_label), (&self.net_icon, &self.net_label)] {

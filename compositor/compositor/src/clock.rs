@@ -1,9 +1,10 @@
 //! The clock on the desktop: with no status bar, the time and the date stand
 //! on the free panel - the right one when both are free, none when neither
 //! is - where the dock stands. One line in the accent (accent.rs), near the
-//! top: the time bold, the date beside it ("14:51  Fri 2 Oct"), both 30 px;
-//! each minute it steps up to 12 px from its place, so no pixel of it is lit
-//! all day on the OLED. It takes no touches. Under it, small and grey, the
+//! top, set to the panel's right edge: the time bold, the date beside it
+//! ("14:51  Fri 2 Oct"), both 30 px,
+//! standing still (it used to step aside each minute against burn-in, which
+//! looked restless). It takes no touches. Under it, small and grey, the
 //! weather now (the system screen's, from met.no): its icon, the
 //! temperature, what it is.
 //! On a panel it was not on, it fades in (300 ms); carried along the ribbon
@@ -17,7 +18,7 @@ use crate::layout::{self, SCALE};
 use crate::shade::{local_time, ShellElement};
 
 /// "Fri 2 Oct".
-fn short_date(tm: &libc::tm) -> String {
+pub fn short_date(tm: &libc::tm) -> String {
     const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     format!("{} {} {}", DAYS[tm.tm_wday as usize % 7], tm.tm_mday, MONTHS[tm.tm_mon as usize % 12])
@@ -28,7 +29,8 @@ const TOP: f64 = 0.08;
 /// The line's size, and the room between the time and the date.
 const SIZE: f32 = 30.0;
 const BETWEEN: i32 = 14;
-const SHIFT: i32 = 12;
+/// How far in from the panel's right edge the line ends.
+const RIGHT: i32 = 40;
 const GAP: i32 = 6;
 const FADE_NS: u64 = 300_000_000;
 
@@ -40,8 +42,7 @@ pub struct Clock {
     weather: Label,
     weather_icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>,
     weather_was: Option<(i64, String)>,
-    /// The step aside, logical px, and the minute it was taken for.
-    step: (i32, i32),
+    /// The minute it shows.
     minute: i32,
     /// The panel it was last drawn on, and since when.
     on: std::cell::Cell<(Option<usize>, u64)>,
@@ -60,7 +61,6 @@ impl Clock {
             weather: Label::new(16.0, [1.0, 1.0, 1.0, 0.45]),
             weather_icon: None,
             weather_was: None,
-            step: (0, 0),
             minute: -1,
             on: std::cell::Cell::new((None, 0)),
             accent: 0,
@@ -86,22 +86,9 @@ impl Clock {
             self.time.set_color(c);
             self.date.set_color(c);
         }
-        let stepped = minute != self.minute;
         self.minute = minute;
         self.time.set(bold, &format!("{}:{:02}", now.tm_hour, now.tm_min));
         self.date.set(medium, &short_date(&now));
-        if !stepped {
-            return true;
-        }
-        // A step aside each minute: a small generator on the minute.
-        let mut x = (minute as u32).wrapping_mul(2654435761) ^ 0x9e37_79b9;
-        let mut next = || {
-            x ^= x << 13;
-            x ^= x >> 17;
-            x ^= x << 5;
-            (x % (2 * SHIFT as u32 + 1)) as i32 - SHIFT
-        };
-        self.step = (next(), next());
         true
     }
 
@@ -159,13 +146,15 @@ impl Clock {
         let k = if carried || since == 0 { 1.0 } else { (frame_ns.saturating_sub(since) as f32 / FADE_NS as f32).clamp(0.0, 1.0) };
         let alpha = k * k * (3.0 - 2.0 * k);
         let rect = layout::panels()[panel];
-        let top = (rect.size.h as f64 * TOP) as i32 + self.step.1;
+        let top = (rect.size.h as f64 * TOP) as i32;
         let mut out = Vec::new();
         let mut y = top;
         let mid = middle.map(|m| m.round() as i32).unwrap_or(rect.loc.x + rect.size.w / 2);
+        // Set to the panel's right edge, RIGHT in from it.
+        let end = mid + rect.size.w / 2 - RIGHT;
         // One line: the time, then the date, the two centred together.
         let line_w = self.time.extent.w + BETWEEN + self.date.extent.w;
-        let mut x = mid - line_w / 2 + self.step.0;
+        let mut x = end - line_w;
         for label in [&self.time, &self.date] {
             if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
@@ -184,7 +173,7 @@ impl Clock {
         // The weather, its icon before it, a little below the date.
         if self.weather.extent.w > 0 {
             let icon_w = if self.weather_icon.is_some() { 26 } else { 0 };
-            let x = mid - (self.weather.extent.w + icon_w) / 2 + self.step.0;
+            let x = end - (self.weather.extent.w + icon_w);
             let y = y + 4;
             let put = |out: &mut Vec<ShellElement>, renderer: &mut GlesRenderer, b: &smithay::backend::renderer::element::memory::MemoryRenderBuffer, x: i32, y: i32, a: f32| {
                 if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * SCALE) as f64, (y * SCALE) as f64), b, Some(a), None, None, Kind::Unspecified) {
