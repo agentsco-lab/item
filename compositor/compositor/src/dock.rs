@@ -254,6 +254,9 @@ pub struct Dock {
     /// The mode before the last Hidden, whose places Hidden dips from.
     shown: Mode,
     moving: Option<Move>,
+    /// How far the phone is folded like a book (0 flat, 1 at 90 degrees):
+    /// the pieces go from the screen's edges towards their panels' middles.
+    book: std::cell::Cell<f64>,
     /// The move scrubbed by the ribbon: from, to, how far.
     scrub: Option<(Mode, Mode, f64)>,
     /// When the last move ended: the halves wobble to rest from it.
@@ -355,7 +358,7 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -365,16 +368,29 @@ impl Dock {
         let (width, height) = (layout::LAYOUT.0 as f64, layout::LAYOUT.1 as f64);
         let y = height - (MARGIN + h) as f64;
         let place = |x: f64, tuck: f64, joined: bool| Place { x, y, tuck, radius: if joined { 0.0 } else { RADIUS as f64 }, scale: 1.0, anchor: 0.0 };
+        // Folded like a book, each piece goes from the screen's edge towards
+        // its panel's middle, as far as it (never past).
+        let book = self.book.get();
+        let middle = |p: usize| {
+            let r = layout::panels()[p];
+            r.loc.x as f64 + r.size.w as f64 / 2.0
+        };
+        let pair = (lw + rw) as f64 - TUCK;
         match mode {
-            Mode::Both => [place(MARGIN as f64, 0.0, false), place(width - (MARGIN + rw) as f64, 0.0, false)],
+            Mode::Both => {
+                let (l, r) = (MARGIN as f64, width - (MARGIN + rw) as f64);
+                let (lc, rc) = (middle(0) - lw as f64 / 2.0, middle(1) - rw as f64 / 2.0);
+                [place(l + (lc - l).max(0.0) * book, 0.0, false), place(r + (rc - r).min(0.0) * book, 0.0, false)]
+            }
             // The left half stays at the left edge; the right one arrives
             // beside it, its padding tucked under.
             Mode::On(0) => {
-                let l = MARGIN as f64;
+                let l = MARGIN as f64 + ((middle(0) - pair / 2.0) - MARGIN as f64).max(0.0) * book;
                 [place(l, 0.0, true), place(l + lw as f64 - TUCK, TUCK, true)]
             }
             Mode::On(_) => {
-                let end = width - MARGIN as f64;
+                let edge = width - MARGIN as f64;
+                let end = edge + ((middle(1) + pair / 2.0) - edge).min(0.0) * book;
                 [place(end - (rw + lw) as f64 + TUCK, TUCK, true), place(end - rw as f64, 0.0, true)]
             }
             Mode::Hidden => {
@@ -583,6 +599,12 @@ impl Dock {
             Mode::On(p) => Some(p),
             Mode::Hidden => None,
         }
+    }
+
+    /// How far the phone is folded like a book (posture.rs): the pieces'
+    /// places follow it.
+    pub fn set_book(&self, book: f64) {
+        self.book.set(book);
     }
 
     /// The middle of the panel the clock stands on (the home panel), on its

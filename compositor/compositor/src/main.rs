@@ -51,6 +51,7 @@ mod ribbon;
 mod sched;
 mod polkit;
 mod alert;
+mod posture;
 mod calls;
 mod dialog;
 mod display;
@@ -330,6 +331,10 @@ impl Data {
         }
         if urgent.is_some() != self.alert_was {
             self.alert_was = urgent.is_some();
+            self.state.needs_redraw = true;
+        }
+        // The hinge moved: the dock's pieces follow it.
+        if self.state.posture.take_changed() {
             self.state.needs_redraw = true;
         }
         // Asleep when nothing needs it awake (sleep.rs).

@@ -143,6 +143,8 @@ pub struct State {
     pub lid_shut: bool,
     /// The lid opened on the way into sleep: the screen lit once awake.
     pub lid_light_pending: bool,
+    /// The hinge's angle (posture.rs).
+    pub posture: crate::posture::Posture,
     /// The privacy dot: camera, microphone, location in use.
     pub privacy: crate::privacy::Privacy,
     /// Who opens pages over whom (org.sfduo.Dock.Follow) and the windows
@@ -247,6 +249,7 @@ impl State {
             alert: crate::alert::Alert::new(),
             lid_shut: false,
             lid_light_pending: false,
+            posture: crate::posture::Posture::new(wake.clone()),
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),
@@ -435,6 +438,7 @@ impl State {
     }
 
     pub fn place_dock(&mut self, frame_ns: u64) {
+        self.dock.set_book(self.posture.book());
         // The apps running, on the half of the panel each was opened onto
         // (the right one if not known).
         let windows = self.windows();
