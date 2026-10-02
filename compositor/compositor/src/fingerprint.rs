@@ -56,9 +56,23 @@ pub enum Poor {
 
 enum Msg {
     Want(bool),
+    /// The compositor is stopping: what it armed given up, then `done`.
+    Release(Sender<()>),
     Enroll(String),
     StopEnroll,
     Signal(String, Option<String>, Option<i32>),
+}
+
+/// The fingerprint thread, for `release` (the compositor stopping).
+static RELEASE: std::sync::OnceLock<Mutex<Sender<Msg>>> = std::sync::OnceLock::new();
+
+/// The compositor stops: the reader given up if armed (waits up to 500 ms).
+pub fn release() {
+    let Some(tx) = RELEASE.get() else { return };
+    let (done, wait) = channel();
+    if tx.lock().unwrap().send(Msg::Release(done)).is_ok() {
+        let _ = wait.recv_timeout(Duration::from_millis(500));
+    }
 }
 
 pub struct Fingerprint {
@@ -92,6 +106,7 @@ impl Fingerprint {
         };
         tracing::info!("fingerprint: {fingers} finger(s) enrolled");
         let (tx, rx) = channel::<Msg>();
+        let _ = RELEASE.set(Mutex::new(tx.clone()));
         // The daemon's signals, into the worker's queue.
         let rule = zbus::MatchRule::builder()
             .msg_type(zbus::message::Type::Signal)
@@ -115,8 +130,6 @@ impl Fingerprint {
         std::thread::spawn(move || {
             let call = |method: &str| system.call_method(Some(NAME), PATH, Some(NAME), method, &()).and_then(|r| r.body().deserialize::<i32>());
             let (mut wanted, mut armed, mut enrolling) = (false, false, false);
-            // The earlier session's Identify aborted once, at the start.
-            let mut aborted = false;
             let push = |event: Event| {
                 worker_events.lock().unwrap().push(event);
                 wake.ping();
@@ -125,6 +138,17 @@ impl Fingerprint {
             loop {
                 let wait = if wanted && !armed { next_try.saturating_duration_since(Instant::now()) } else { Duration::from_secs(3600) };
                 match rx.recv_timeout(wait) {
+                    Ok(Msg::Release(done)) => {
+                        // The reader left armed would stay so for a stopped
+                        // compositor ~30 s, refusing the next one (its Abort
+                        // is the arming caller's alone): given up here.
+                        if armed || enrolling {
+                            let _ = call("Abort");
+                            tracing::info!("fingerprint: given up on stopping");
+                        }
+                        let _ = done.send(());
+                        break;
+                    }
                     Ok(Msg::Want(w)) => {
                         wanted = w;
                         if !w && armed {
@@ -218,16 +242,6 @@ impl Fingerprint {
                         Ok(0) => {
                             armed = true;
                             tracing::info!("fingerprint: reader armed");
-                        }
-                        Ok(3) if !aborted => {
-                            // Busy with what an earlier session left armed
-                            // (its compositor gone mid-Identify): that given
-                            // up, and asked again at once - else the first
-                            // finger after a start went unheard for seconds.
-                            let _ = call("Abort");
-                            aborted = true;
-                            tracing::info!("fingerprint: busy at the start; the earlier Identify aborted");
-                            next_try = Instant::now() + Duration::from_millis(300);
                         }
                         other => {
                             tracing::info!("fingerprint: Identify refused ({other:?}); again in 1.5 s");

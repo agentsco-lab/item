@@ -826,6 +826,32 @@ fn args() -> Args {
     a
 }
 
+/// SIGTERM or SIGINT: a flag set by the handler (all a handler may do), a
+/// thread that sees it gives up what has to be (the fingerprint reader
+/// armed), then the process exits. Not a blocked mask and sigwait: the mask
+/// would pass to every program the session starts, and they would not stop.
+static STOPPING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+extern "C" fn on_stop_signal(_: libc::c_int) {
+    STOPPING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn stop_on_signal() {
+    unsafe {
+        let handler: extern "C" fn(libc::c_int) = on_stop_signal;
+        libc::signal(libc::SIGTERM, handler as libc::sighandler_t);
+        libc::signal(libc::SIGINT, handler as libc::sighandler_t);
+    }
+    let _ = std::thread::Builder::new().name("signals".into()).spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if STOPPING.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!("stopping");
+            fingerprint::release();
+            std::process::exit(0);
+        }
+    });
+}
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -835,6 +861,7 @@ fn main() {
         .init();
     sleep::prepare();
     accent::load();
+    stop_on_signal();
     let args = args();
     // This thread is the loop: on the big cores, ahead of the apps.
     sched::favour_this_thread();
