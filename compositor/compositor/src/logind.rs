@@ -3,7 +3,8 @@
 //! - logind's session (`org.freedesktop.login1.Session`): its `LockedHint`
 //!   follows our lock screen, and its `Lock` and `Unlock` signals (`loginctl
 //!   lock-session`, `unlock-session`; the fingerprint reader's service
-//!   unlocks that way) lock and unlock it.
+//!   unlocks that way) lock and unlock it. Its `IdleHint` follows the
+//!   screen being dark (the modem is told by it, see `report`).
 //! - `org.gnome.ScreenSaver` on the session bus, phosh's job when phosh runs:
 //!   `Active` is whether the screen is dark, as phosh means it (the port's
 //!   sfduo-fingerprint arms the reader while the session is locked and the
@@ -168,6 +169,20 @@ impl Logind {
             }
         }
         if before.map(|(_, b)| b) != Some(blank) {
+            // The session idle while the screen is dark, as GNOME's session
+            // says it: Droidian's ofono binder plugin reads seat0's IdleHint
+            // as the screen's state and only then tells the modem (device
+            // state, indication filter) to keep quiet - left lit, the modem
+            // woke the sleeping phone every ~37 s over glink (2026-10-02).
+            if let (Some(conn), Some(path)) = (self.system.clone(), self.session.clone()) {
+                std::thread::spawn(move || {
+                    let result = conn.call_method(Some("org.freedesktop.login1"), path.as_str(), Some("org.freedesktop.login1.Session"), "SetIdleHint", &(blank));
+                    match result {
+                        Ok(_) => tracing::info!("logind: IdleHint {blank}"),
+                        Err(e) => tracing::warn!("logind: IdleHint {blank}: {e}"),
+                    }
+                });
+            }
             {
                 let mut shared = self.shared.lock().unwrap();
                 shared.blank = blank;
