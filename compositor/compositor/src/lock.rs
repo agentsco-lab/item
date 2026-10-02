@@ -36,8 +36,11 @@ use crate::shade::{local_time, ShellElement};
 use crate::pinpad::{ease, shake, PinPad, Press, SHAKE_NS};
 use crate::text::{Font, Label};
 
-/// How long "Face recognized" is read before the doors open.
-const FACE_SAID_NS: u64 = 350_000_000;
+/// How long "Face recognized" shows before the doors open: a few frames, so
+/// the doors carry it.
+const FACE_SAID_NS: u64 = 100_000_000;
+/// A face opens the lock only this long after the PIN was last given.
+const FACE_PIN_FOR: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
 /// The mark's flash at a known finger.
 const FLASH_NS: u64 = 300_000_000;
 /// The mark pulses this long after the lock screen shows, then rests.
@@ -103,6 +106,9 @@ pub struct Lock {
     pub blank: bool,
     /// The first lock after a boot: the PIN, and a greeting.
     after_boot: bool,
+    /// When the PIN was last given (wall time: sleep counts); a face opens
+    /// the lock only within FACE_PIN_FOR of it.
+    pin_at: std::time::SystemTime,
     /// Fingers enrolled with the reader; none, and there is no mark.
     fingers: usize,
     /// Unknown fingers in a row.
@@ -313,6 +319,7 @@ impl Lock {
             locked: false,
             blank: false,
             after_boot: false,
+            pin_at: std::time::SystemTime::now(),
             fingers: 0,
             fails: 0,
             fading: None,
@@ -465,7 +472,8 @@ impl Lock {
     /// Whether a face would open it now (face.rs): as for a finger, and not
     /// once the PIN is asked for.
     pub fn wants_face(&self) -> bool {
-        self.holds_screen() && !self.blank && !self.after_boot && self.fails < FAILS_FOR_PIN
+        let pin_lately = self.pin_at.elapsed().map_or(true, |d| d < FACE_PIN_FOR);
+        self.holds_screen() && !self.blank && !self.after_boot && self.fails < FAILS_FOR_PIN && pin_lately
     }
 
     /// The reader did not know a finger.
@@ -566,6 +574,7 @@ impl Lock {
                 *self.checking.lock().unwrap() = None;
                 if ok {
                     tracing::info!("lock: unlocked");
+                    self.pin_at = std::time::SystemTime::now();
                     self.touched_at = PinPad::ok_centre();
                     self.open_doors();
                 } else {

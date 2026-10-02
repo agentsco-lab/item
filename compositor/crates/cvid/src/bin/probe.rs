@@ -49,6 +49,7 @@ fn main() {
     let t = Instant::now();
     let det = Detector::new(&models.join("face_detection_yunet_2023mar.onnx"), dw, dh).expect("yunet");
     let emb = Embedder::new(&models.join("face_recognition_sface_2021dec.onnx")).expect("sface");
+    let live = cvid::Liveness::new(&models.join("MiniFASNetV2.onnx")).ok();
     println!("models loaded in {} ms (detector {dw}x{dh})", t.elapsed().as_millis());
     let mut all = Vec::new();
     for path in &args[2..] {
@@ -81,6 +82,11 @@ fn main() {
                 println!("{path} {}x{}: {} face(s), the first {:?} {:.2}", img.w, img.h, faces.len(), face.bbox.map(|v| v.round()), face.score);
                 println!("  marks {:?}", face.marks.map(|m| m.map(|v| (v * 10.0).round() / 10.0)));
                 println!("  embedding {:?}", &e[..6].iter().map(|v| (v * 1e4).round() / 1e4).collect::<Vec<_>>());
+            }
+            if let Some(l) = &live {
+                let t = Instant::now();
+                let p = l.live(&img, &face).expect("live");
+                println!("  live {p:.3} ({:.1} ms)", t.elapsed().as_secs_f64() * 1e3);
             }
             println!("  round {round}: detect {:.1} ms, embed {:.1} ms", td.as_secs_f64() * 1e3, te.as_secs_f64() * 1e3);
             found = Some(e);

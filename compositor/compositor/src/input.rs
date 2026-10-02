@@ -155,6 +155,9 @@ impl State {
                             }
                         } else if !self.lid_shut {
                             tracing::info!("power key: dark with the lid open: lit");
+                            if self.lock.locked {
+                                self.camera_peek.start(hybris_hwc::now_ns());
+                            }
                             self.lock.set_blank(false);
                         }
                     }
@@ -194,12 +197,13 @@ impl State {
                         tracing::info!("lid: open on the way into sleep: lit once awake");
                         self.lid_light_pending = true;
                     } else {
-                        self.lock.set_blank(false);
-                        // The camera's peek from the lid itself: the screen
-                        // takes a while to light, the camera starts meanwhile.
+                        // The camera from the lid itself, first: lighting
+                        // the panels holds this thread ~0.5 s, the camera
+                        // (its own process) starts meanwhile.
                         if self.lock.locked {
                             self.camera_peek.start(hybris_hwc::now_ns());
                         }
+                        self.lock.set_blank(false);
                     }
                     self.needs_redraw = true;
                 }

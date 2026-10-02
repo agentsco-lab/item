@@ -210,3 +210,46 @@ fn similarity(from: &[[f32; 2]; 5], to: &[[f32; 2]; 5]) -> [f32; 4] {
     let (a, b) = (dot / var, cross / var);
     [a, b, mt[0] - (a * mf[0] - b * mf[1]), mt[1] - (b * mf[0] + a * mf[1])]
 }
+
+/// MiniFASNetV2 (Silent-Face-Anti-Spoofing, Minivision, Apache 2.0): whether
+/// a face is a live one or a picture of one - a photo, a screen - from the
+/// face with its surroundings, 2.7 times its box, at 80x80.
+pub struct Liveness {
+    plan: Plan,
+}
+
+impl Liveness {
+    pub fn new(model: &Path) -> TractResult<Liveness> {
+        let plan = tract_onnx::onnx()
+            .model_for_path(model)?
+            .with_input_fact(0, f32::fact([1, 3, 80, 80]).into())?
+            .into_optimized()?
+            .into_runnable()?;
+        Ok(Liveness { plan })
+    }
+
+    /// How sure the face is live, 0 to 1.
+    pub fn live(&self, img: &Image, face: &Face) -> TractResult<f32> {
+        let [x, y, w, h] = face.bbox;
+        let scale = ((img.h - 1) as f32 / h).min((img.w - 1) as f32 / w).min(2.7);
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let (nw, nh) = (w * scale, h * scale);
+        let x1 = (cx - nw / 2.0).max(0.0);
+        let y1 = (cy - nh / 2.0).max(0.0);
+        let x2 = (cx + nw / 2.0).min((img.w - 1) as f32);
+        let y2 = (cy + nh / 2.0).min((img.h - 1) as f32);
+        // BGR, 0-255, as the models were trained.
+        let input = tract_ndarray::Array4::from_shape_fn((1, 3, 80, 80), |(_, c, oy, ox)| {
+            let sx = x1 + (ox as f32 + 0.5) * (x2 - x1) / 80.0 - 0.5;
+            let sy = y1 + (oy as f32 + 0.5) * (y2 - y1) / 80.0 - 0.5;
+            img.at(sx, sy, 2 - c)
+        });
+        let out = self.plan.run(tvec!(input.into_tensor().into()))?;
+        let v = out[0].to_plain_array_view::<f32>()?;
+        let logits: Vec<f32> = v.iter().copied().collect();
+        let max = logits.iter().cloned().fold(f32::MIN, f32::max);
+        let sum: f32 = logits.iter().map(|l| (l - max).exp()).sum();
+        // Its classes: 1 is live, the others pictures.
+        Ok((logits[1] - max).exp() / sum)
+    }
+}

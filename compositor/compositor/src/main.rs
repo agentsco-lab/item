@@ -313,10 +313,17 @@ impl Data {
         // leaves it dark.
         if let Some(woken) = self.state.sleep.take_woken(now) {
             if std::mem::take(&mut self.state.lid_light_pending) && !self.state.lid_shut {
+                // The camera first, as for the lid (input.rs).
+                if self.state.lock.locked {
+                    self.state.camera_peek.start(now);
+                }
                 self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;
             }
             if woken == sleep::Woken::PowerKey && self.state.lock.blank && !self.state.lid_shut {
+                if self.state.lock.locked {
+                    self.state.camera_peek.start(now);
+                }
                 self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;
             }
@@ -350,7 +357,9 @@ impl Data {
         // CV ID: the camera's frames looked at while a face would open the
         // lock, or taken while the setup's PIN is typed - kept once it is
         // accepted.
-        let looking = self.state.camera_peek.playing() && (self.state.lock.wants_face() || setup_face);
+        // Not with the Duo folded camera out: the camera faces away.
+        let facing = self.state.posture.angle() < face::FOLD_MAX;
+        let looking = self.state.camera_peek.playing() && ((self.state.lock.wants_face() && facing) || setup_face);
         self.state.face.want(looking, setup_face);
         if self.state.face.take_taken() {
             self.state.setup.face_taken();
@@ -358,7 +367,7 @@ impl Data {
         if self.state.setup.take_pin_done() {
             self.state.face.keep();
         }
-        if self.state.face.take_matched() && self.state.lock.wants_face() {
+        if self.state.face.take_matched() && self.state.lock.wants_face() && facing {
             self.state.lock.unlock_face();
             self.state.needs_redraw = true;
         }

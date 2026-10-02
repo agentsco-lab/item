@@ -2,7 +2,10 @@
 //! camera's peek (camera.rs) hands its frames here, a thread looks for a
 //! face in them and compares it with the faces enrolled - crates/cvid,
 //! YuNet and SFace on the CPU, ~125 ms a frame on the Duo - and the lock
-//! opens on two frames in a row alike enough, as for a known finger.
+//! opens on two frames in a row alike enough, as for a known finger - and
+//! live: MiniFASNetV2 tells a face from a picture of one (a photo, a
+//! screen) held up to the camera, a frame only counting when it is sure
+//! enough (LIVE_MIN; CVID_LIVE sets another while it is measured).
 //!
 //! Enrolling: in the first setup, unseen, the face of the one typing the PIN
 //! - the owner - is taken (ENROL_FRAMES frames) and kept once the PIN is
@@ -23,10 +26,15 @@ const H: usize = 480;
 /// Alike enough: SFace's cosine, this or above, frames in a row.
 const ALIKE: f32 = 0.42;
 const IN_A_ROW: u32 = 2;
+/// Live enough: MiniFASNetV2's probability, this or above.
+const LIVE_MIN: f32 = 0.5;
 const ENROL_FRAMES: usize = 5;
 /// Enough to keep, the PIN accepted before all are taken.
 const ENROL_MIN: usize = 2;
 const ENROL_FLAG: &str = "/tmp/item-cvid-enrol";
+/// No further folded than this (degrees, 180 flat): past it the camera
+/// turns away from the one holding the Duo.
+pub const FOLD_MAX: f64 = 250.0;
 
 #[derive(Default)]
 struct Shared {
@@ -205,6 +213,12 @@ fn run(s: Arc<Shared>, wake: Ping) {
         tracing::warn!("cvid: the models did not load from {}", dir.display());
         return;
     };
+    let live = cvid::Liveness::new(&dir.join("MiniFASNetV2.onnx"));
+    if let Err(e) = &live {
+        tracing::warn!("cvid: no liveness check ({e}): faces are not told from pictures");
+    }
+    let live = live.ok();
+    let live_min = std::env::var("CVID_LIVE").ok().and_then(|v| v.parse().ok()).unwrap_or(LIVE_MIN);
     // The first run sets things up, slowly: done now, not with a face.
     let _ = det.detect(&cvid::Image { w: 240, h: 320, rgb: vec![0; 240 * 320 * 3] });
     *s.known.lock().unwrap() = load_kept();
@@ -260,8 +274,10 @@ fn run(s: Arc<Shared>, wake: Ping) {
             continue;
         }
         let best = s.known.lock().unwrap().iter().map(|k| cvid::cosine(k, &e)).fold(f32::MIN, f32::max);
-        row = if best >= ALIKE { row + 1 } else { 0 };
-        tracing::info!("cvid: face {:.2}, alike {best:.3}, {row} in a row (detect {td} ms, all {ms} ms)", face.score);
+        let alive = live.as_ref().map_or(Ok(1.0), |l| l.live(&img, face)).unwrap_or(0.0);
+        let ms = t.elapsed().as_millis();
+        row = if best >= ALIKE && alive >= live_min { row + 1 } else { 0 };
+        tracing::info!("cvid: face {:.2}, alike {best:.3}, live {alive:.3}, {row} in a row (detect {td} ms, all {ms} ms)", face.score);
         if row >= IN_A_ROW {
             row = 0;
             s.matched.store(true, Ordering::Relaxed);
