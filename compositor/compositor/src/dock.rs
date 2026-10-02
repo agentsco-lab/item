@@ -661,13 +661,10 @@ impl Dock {
         };
         match (middle(from), middle(to)) {
             (Some(a), Some(b)) if a != b => {
-                let e = if linear {
-                    k
-                } else if k < 0.5 {
-                    4.0 * k * k * k
-                } else {
-                    1.0 - (-2.0 * k + 2.0).powi(3) / 2.0
-                };
+                // As far along as the half that goes furthest is: the clock
+                // and the dock one motion, whatever eases it (a finger, a
+                // move, a move picked up where a finger let go).
+                let e = self.progress(from, to, k, linear);
                 Some((a + (b - a) * e, k < 1.0))
             }
             (_, Some(b)) => Some((b, false)),
@@ -735,6 +732,18 @@ impl Dock {
         for half in &mut self.halves {
             half.pressed = None;
         }
+    }
+
+    /// How far along its way (0..1) the half that goes furthest is, `k` of
+    /// a move from `from` to `to` (`linear`: as a finger has it).
+    fn progress(&self, from: Mode, to: Mode, k: f64, linear: bool) -> f64 {
+        let (a, b) = (self.targets(from), self.targets(to));
+        let h = if (b[0].x - a[0].x).abs() >= (b[1].x - a[1].x).abs() { 0 } else { 1 };
+        let span = b[h].x - a[h].x;
+        if span.abs() < 0.5 {
+            return k;
+        }
+        ((self.between(from, to, k, None, linear)[h].x - a[h].x) / span).clamp(0.0, 1.0)
     }
 
     /// How far in time (0..1 of MOVE_NS) a move from `from` to `to` has the
