@@ -1,8 +1,10 @@
 //! The system screen, item's (#109): the page left of the left panel, as on
-//! the Surface Duo 2, on the ribbon's first page (ribbon.rs). It is light
-//! (#F2F2F2), to break the black. Its cards (sysfacts.rs) are read and
-//! drawn on a thread: on the way in, every 5 s while it is shown, and kept
-//! drawn while the ribbon may bring it, so a swipe never waits for it.
+//! the Surface Duo 2, on the ribbon's first page (ribbon.rs). It is a pane
+//! of frosted glass: the wallpaper under it blurred hard and darkened
+//! (walls.rs makes it, `set_frost`), the page's rows (sysfacts.rs) on it.
+//! They are read and drawn on a thread: on the way in, every 5 s while it is
+//! shown, and kept drawn while the ribbon may bring it, so a swipe never
+//! waits for it. A tap on Details opens or shuts the rest.
 //!
 //! The page is taller than the panel: a finger moving up or down on it
 //! scrolls it, and let go it runs on; a finger moving sideways moves the
@@ -26,8 +28,8 @@ use crate::shade::{local_time, ShellElement};
 use crate::sysfacts::{Job, Page};
 
 const READ_EVERY_NS: u64 = 5_000_000_000;
-const LIGHT: [f32; 3] = [0.949, 0.949, 0.949];
-const DESK: [f32; 3] = [0.08, 0.1, 0.14];
+/// The glass without a picture to frost (Aurora's is drawn by a shader).
+const DARK: [f32; 3] = [0.07, 0.08, 0.11];
 /// A touch that moves this far is a scroll or a swipe.
 const MOVE: f64 = 12.0;
 /// The run after a let go: how fast it slows (per ms).
@@ -67,6 +69,11 @@ pub struct SystemScreen {
     touch: Option<Touch>,
     run: Option<(f64, u64, f64)>,
     id: Id,
+    /// The wallpaper frosted (walls.rs), its size in px.
+    frost: Option<(MemoryRenderBuffer, (i32, i32))>,
+    /// Details open, and where its row is on the page (logical y).
+    details: bool,
+    details_row: (f64, f64),
 }
 
 impl SystemScreen {
@@ -82,7 +89,7 @@ impl SystemScreen {
         let weather: crate::sysfacts::Now = Default::default();
         let w = weather.clone();
         std::thread::Builder::new().name("system screen".into()).spawn(move || crate::sysfacts::worker(rx, page, w, wake)).expect("system screen thread");
-        SystemScreen { weather, p: 0.0, wanted: false, page: None, page_h: 0.0, fresh, jobs: tx, last_read_ns: 0, minute: -1, scroll: 0.0, touch: None, run: None, id: Id::new() }
+        SystemScreen { weather, p: 0.0, wanted: false, page: None, page_h: 0.0, fresh, jobs: tx, last_read_ns: 0, minute: -1, scroll: 0.0, touch: None, run: None, id: Id::new(), frost: None, details: false, details_row: (0.0, 0.0) }
     }
 
     fn read(&mut self) {
@@ -186,9 +193,21 @@ impl SystemScreen {
         TouchAsk::Nothing
     }
 
-    /// Let go: a scroll runs on.
+    /// The wallpaper frosted (walls.rs): the glass; None, the plain dark.
+    pub fn set_frost(&mut self, frost: Option<(Vec<u8>, u32, u32)>) {
+        self.frost = frost.map(|(rgba, w, h)| (MemoryRenderBuffer::from_slice(&rgba, Fourcc::Abgr8888, (w as i32, h as i32), 1, Transform::Normal, None), (w as i32, h as i32)));
+    }
+
+    /// Let go: a scroll runs on; a tap on Details opens or shuts it.
     pub fn touch_up(&mut self, slot: TouchSlot) {
         let Some(t) = self.touch.take_if(|t| t.slot == slot) else { return };
+        if !t.scrolling {
+            let y = self.scroll_at(hybris_hwc::now_ns()) + t.start.y - layout::panels()[0].loc.y as f64;
+            if y >= self.details_row.0 && y < self.details_row.1 {
+                self.details = !self.details;
+                let _ = self.jobs.send(Job::Details(self.details));
+            }
+        }
         if t.scrolling {
             self.scroll = (t.from - (t.last.1 - t.start.y)).clamp(0.0, self.max_scroll());
             if t.velocity.abs() > 0.05 {
@@ -225,7 +244,8 @@ impl SystemScreen {
         if !self.out() && !self.wanted {
             return false;
         }
-        let Some((rgba, w, h)) = self.fresh.lock().unwrap().take() else { return false };
+        let Some((rgba, w, h, row)) = self.fresh.lock().unwrap().take() else { return false };
+        self.details_row = (row.0 as f64, row.1 as f64);
         self.page = Some(MemoryRenderBuffer::from_slice(&rgba, Fourcc::Abgr8888, (w, h), SCALE, Transform::Normal, None));
         self.page_h = (h / SCALE) as f64;
         true
@@ -255,11 +275,19 @@ impl SystemScreen {
                 out.push(ShellElement::Text(e));
             }
         }
-        // The background: from the desktop's black to light as it comes.
-        let c = |i: usize| DESK[i] + (LIGHT[i] - DESK[i]) * p as f32;
+        // The glass: the wallpaper where the page stands, frosted (its
+        // picture is the wallpaper's at a FROST_STEP-th of its px, the page
+        // at the wallpaper's left edge).
+        if let Some((frost, (fw, fh))) = &self.frost {
+            let k = crate::walls::FROST_STEP as f64 / SCALE as f64;
+            let src = Rectangle::<f64, Logical>::new((0.0, 0.0).into(), ((panel.size.w as f64 / k).min(*fw as f64), (panel.size.h as f64 / k).min(*fh as f64)).into());
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), frost, None, Some(src), Some(panel.size), Kind::Unspecified) {
+                out.push(ShellElement::Text(e));
+                return out;
+            }
+        }
         let rect = Rectangle::<i32, Physical>::new(panel.loc.to_physical(SCALE), panel.size.to_physical(SCALE));
-        let commit = CommitCounter::from((p * 1000.0) as usize);
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, commit, [c(0), c(1), c(2), 1.0], Kind::Unspecified)));
+        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, CommitCounter::default(), [DARK[0], DARK[1], DARK[2], 1.0], Kind::Unspecified)));
         out
     }
 }

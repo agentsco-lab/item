@@ -167,6 +167,12 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                // Folded into a camera: a volume key is the shutter.
+                if event.state() == KeyState::Pressed && self.foldcam.active() && matches!(event.key_code().raw().saturating_sub(8), 114 | 115) {
+                    self.foldcam.shoot(hybris_hwc::now_ns());
+                    self.needs_redraw = true;
+                    return;
+                }
                 if event.state() == KeyState::Pressed {
                     match event.key_code().raw().saturating_sub(8) {
                         115 => self.shade.quick.volume_step(true),
@@ -412,6 +418,14 @@ impl State {
                     }
                 }
                 _ => {}
+            }
+            self.needs_redraw = true;
+            return;
+        }
+        // Folded into a camera: its touches (foldcam.rs).
+        if self.foldcam.active() {
+            if let Contact::Down(_, pos, _) = &contact {
+                self.foldcam.touch(*pos, hybris_hwc::now_ns());
             }
             self.needs_redraw = true;
             return;

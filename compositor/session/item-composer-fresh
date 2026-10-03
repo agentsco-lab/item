@@ -13,7 +13,7 @@ hwc() { ANDROID_SERVICE_FORCE_KILL=yes ANDROID_SERVICE="$SVC" /usr/lib/halium-wr
 # has just started (item.service restarted, PartOf) is left alone - started
 # twice in a second, it reset the phone.
 old() {
-    PID=$(pgrep -f 'composer@2\.4-service' | head -n1)
+    PID=$(pgrep "composer@" | head -n1)
     [ -e $MARK ] && [ -n "$PID" ] || return 1
     UP=$(ps -o etimes= -p "$PID" | tr -d ' ')
     AGE=$(( $(date +%s) - $(stat -c %Y $MARK) ))
@@ -26,4 +26,14 @@ if old; then
     hwc start
     for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
 fi
+# A composer just started is let settle before item draws through it: a
+# shell started 0.7 s after it reset the phone (2026-10-03), as test runs
+# and boots, which gave it seconds, never did.
+SETTLE=2
+for i in $(seq 1 50); do
+    PID=$(pgrep "composer@" | head -n1)
+    UP=$([ -n "$PID" ] && ps -o etimes= -p "$PID" | tr -d ' ')
+    [ "${UP:-0}" -ge $SETTLE ] && break
+    sleep 0.1
+done
 touch $MARK

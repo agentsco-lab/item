@@ -36,9 +36,8 @@ use crate::shade::{local_time, ShellElement};
 use crate::pinpad::{ease, shake, PinPad, Press, SHAKE_NS};
 use crate::text::{Font, Label};
 
-/// How long "Face recognized" shows before the doors open: a few frames, so
-/// the doors carry it.
-const FACE_SAID_NS: u64 = 100_000_000;
+/// Said in the hint's place once a face is known.
+const FACE_OK: &str = "Unlocked · swipe up";
 /// A face opens the lock only this long after the PIN was last given.
 const FACE_PIN_FOR: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
 /// The mark's flash at a known finger.
@@ -143,9 +142,10 @@ pub struct Lock {
     /// The hint, and a passing notice in its place until when.
     hint_base: String,
     notice_until: u64,
-    /// A face known (face.rs): the doors open at this time, the notice
-    /// read first.
-    face_open_at: Option<u64>,
+    /// A face known (face.rs): unlocked, not opened - the doors wait for a
+    /// swipe up or a finger, so the phone is not opened before it is in
+    /// hand. Said in the hint's place until then.
+    face_ok: bool,
     /// Face Unlock turned on: the face taken as the PIN is typed, kept
     /// with it (face.rs).
     face_enrol: bool,
@@ -376,7 +376,7 @@ impl Lock {
             hint: Label::new(15.0, [1.0, 1.0, 1.0, 0.5]),
             hint_base: "Swipe up to unlock".into(),
             notice_until: 0,
-            face_open_at: None,
+            face_ok: false,
             face_enrol: false,
             pin_len: pin_len(),
             sent_len: 0,
@@ -541,8 +541,24 @@ impl Lock {
             return;
         }
         self.hint_base = text.to_owned();
+        let shown = self.hint_now();
         if let (Some((_, regular)), 0) = (&self.fonts, self.notice_until) {
-            self.hint.set(regular, text);
+            self.hint.set(regular, &shown);
+        }
+    }
+
+    /// The hint as it stands: the face's word over the usual one.
+    fn hint_now(&self) -> String {
+        if self.face_ok { FACE_OK.to_owned() } else { self.hint_base.clone() }
+    }
+
+    /// The face's word given up (locked again, dark): the usual hint back.
+    fn face_forgotten(&mut self) {
+        if std::mem::take(&mut self.face_ok) {
+            let shown = self.hint_now();
+            if let (Some((_, regular)), 0) = (&self.fonts, self.notice_until) {
+                self.hint.set(regular, &shown);
+            }
         }
     }
 
@@ -556,17 +572,13 @@ impl Lock {
 
     /// The notice's time is up: the hint is back; whether it changed.
     pub fn notice_done(&mut self, now_ns: u64) -> bool {
-        if self.face_open_at.is_some_and(|t| now_ns >= t) {
-            self.face_open_at = None;
-            self.unlock();
-            return true;
-        }
         if self.notice_until == 0 || now_ns < self.notice_until {
             return false;
         }
         self.notice_until = 0;
         if let Some((_, regular)) = &self.fonts {
-            self.hint.set(regular, &self.hint_base);
+            let shown = self.hint_now();
+            self.hint.set(regular, &shown);
         }
         true
     }
@@ -724,6 +736,7 @@ impl Lock {
         self.locked = true;
         self.fading = None;
         self.lift = 0.0;
+        self.face_forgotten();
         self.entering = self.after_boot;
         self.pad.clear();
         self.fails = 0;
@@ -750,14 +763,24 @@ impl Lock {
         std::mem::take(&mut self.face_enrol)
     }
 
-    /// A known face (face.rs): said, then the doors - no picture of it.
+    /// A known face (face.rs): unlocked, said so - no picture of it. The
+    /// doors open with a swipe up or a finger on the reader.
     pub fn unlock_face(&mut self) {
-        if !self.locked || self.fading.is_some() || self.face_open_at.is_some() {
+        if !self.locked || self.fading.is_some() || self.face_ok {
             return;
         }
-        tracing::info!("lock: a known face");
-        self.notice("Face recognized");
-        self.face_open_at = Some(hybris_hwc::now_ns() + FACE_SAID_NS);
+        tracing::info!("lock: a known face: unlocked, waiting for a swipe");
+        self.face_ok = true;
+        self.mark_flash = Some(hybris_hwc::now_ns());
+        if let Some((_, regular)) = &self.fonts {
+            self.hint.set(regular, FACE_OK);
+        }
+        self.notice_until = 0;
+    }
+
+    /// Whether a face has unlocked it (the doors wait for a swipe).
+    pub fn face_unlocked(&self) -> bool {
+        self.face_ok && self.locked
     }
 
     pub fn unlock(&mut self) {
@@ -775,6 +798,9 @@ impl Lock {
             return;
         }
         self.blank = blank;
+        if blank {
+            self.face_forgotten();
+        }
         let ok = hybris_hwc::set_display_power(!blank);
         tracing::info!("lock: screen {}{}", if blank { "off" } else { "on" }, if ok { "" } else { " (hwcomposer refused)" });
         if !blank {
@@ -860,7 +886,14 @@ impl Lock {
             return;
         }
         if self.lift > UNLOCK || g.3 < -FLING {
-            self.pad_in();
+            if self.face_ok {
+                // Unlocked by a face: the swipe opens it.
+                tracing::info!("lock: opened by a swipe, the face known");
+                self.touched_at = Self::mark_centre();
+                self.open_doors();
+            } else {
+                self.pad_in();
+            }
         }
         self.lift = 0.0;
     }

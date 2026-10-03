@@ -1,35 +1,34 @@
 //! The system screen's page, read and drawn on a thread of its own
-//! (sysscreen.rs shows it): item's cards (#109, as sfduo-system-screen had
-//! them), one under another on the light page.
+//! (sysscreen.rs shows it, on frosted glass): rows, not cards (#109, as
+//! sfduo-system-screen had them, thinned out 2026-10-03).
 //!
-//! - **Battery** (#115): the level and what it is doing, UPower's estimate,
-//!   the power and the temperature, the last 24 hours of charge.
-//! - **Load** (#116): the clusters' clocks, the hottest core, and the last
-//!   10 minutes of use, a sample every 10 s while the screen is lit (none
-//!   while it is dark: nobody sees that histogram), the little cores above
-//!   in grey, the big ones below in blue.
-//! - **Memory**: used of total, the swap if any is in use.
-//! - **Storage**: the system image and /userdata apart, red under 1 GB free.
-//! - **Network** (#117): the Wi-Fi network, its signal, band and speed
+//! - **The head**: the greeting and the date.
+//! - **Battery** (#115): the level, and what it is doing (UPower's
+//!   estimate).
+//! - **Next up** (#118): Clocks' next alarm and how long until it rings; the
+//!   calendar's next event (phosh's calendar server, which reads Evolution's
+//!   calendars: a thread keeps the week's events as it tells them).
+//! - **Weather** (#120): for the first city chosen in GNOME Weather, from
+//!   met.no: now, the high and low of the next 24 hours, the next hours in
+//!   one quiet line; asked when the last answer is over half an hour old.
+//! - **Connections** (#117): the Wi-Fi network, its signal, band and speed
 //!   (nmcli); the operator, the technology, the signal and whether data is
 //!   on (mmcli); today's data, Wi-Fi and mobile apart - the interfaces count
 //!   from boot, so a ledger keeps the counts the day started with
 //!   (`~/.local/state/item/traffic`), brought up to date with the samples
 //!   and written once a minute.
-//! - **Next up** (#118): Clocks' next alarm, and how long until it rings;
-//!   the calendar's next event (phosh's calendar server, which reads
-//!   Evolution's calendars: a thread keeps the week's events as it tells
-//!   them).
-//! - **This device** (#119): the hinge's angle (org.sfduo.Posture), the
-//!   uptime, the port's version and whether a newer is out (GitHub, asked at
-//!   most once a day while the page is open, the answer kept in
-//!   `~/.local/state/item/update`), Droidian and the kernel.
-//! - **Weather** (#120): for the first city chosen in GNOME Weather, from
-//!   met.no: now, the high and low of the next 24 hours, a strip of the next
-//!   12; asked when the last answer is over half an hour old.
+//! - **Storage**: free on the system image and /userdata, red under 1 GB.
+//! - **Update**: only when a newer port is out (GitHub, asked at most once
+//!   a day while the page is open, the answer kept in
+//!   `~/.local/state/item/update`).
+//! - **Details**, shut until tapped (#116, #119): the power and the
+//!   battery's temperature, the clusters' clocks and the hottest core
+//!   (sampled every 10 s while the screen is lit), memory, the hinge's
+//!   angle (org.sfduo.Posture), the uptime, the port's version, Droidian
+//!   and the kernel.
 //!
 //! Each read draws the whole page into one picture, taller than the panel
-//! (it scrolls), handed to the loop to show.
+//! (it scrolls), handed to the loop to show with where Details' row is.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -56,16 +55,17 @@ pub enum Job {
     Read,
     /// The screen lit or dark: load samples or none.
     Display(bool),
+    /// Details opened or shut: read and drawn so.
+    Details(bool),
 }
 
-/// A drawn page: premultiplied RGBA, its size in physical px.
-pub type Page = (Vec<u8>, i32, i32);
+/// A drawn page: premultiplied RGBA, its size in physical px, and where
+/// Details' row is (logical y, top and bottom).
+pub type Page = (Vec<u8>, i32, i32, (f32, f32));
 
-const INK: [f32; 4] = [0.12, 0.12, 0.13, 1.0];
-const DIM: [f32; 4] = [0.42, 0.42, 0.45, 1.0];
-const RED: [f32; 4] = [0.78, 0.16, 0.16, 1.0];
-const LITTLE: [u8; 3] = [0x8e, 0x8e, 0x93];
-const BIG: [u8; 3] = [0x0a, 0x84, 0xff];
+const INK: [f32; 4] = [0.95, 0.95, 0.96, 1.0];
+const DIM: [f32; 4] = [0.66, 0.68, 0.72, 1.0];
+const RED: [f32; 4] = [0.96, 0.45, 0.42, 1.0];
 
 fn run(cmd: &str, args: &[&str]) -> String {
     std::process::Command::new(cmd).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
@@ -258,7 +258,6 @@ struct Facts {
     to_empty_s: i64,
     to_full_s: i64,
     name: Option<String>,
-    history: Vec<(u64, f64, u32)>,
     load_line: String,
     memory: Option<(f64, f64, f64)>,
     storage: Vec<(&'static str, f64, f64)>,
@@ -292,17 +291,12 @@ fn battery(f: &mut Facts) {
         let out = run("busctl", &["--system", "get-property", "org.freedesktop.UPower", "/org/freedesktop/UPower/devices/DisplayDevice", "org.freedesktop.UPower.Device", name]);
         out.split_whitespace().nth(1).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0)
     };
-    let hist = run("busctl", &["--system", "call", "org.freedesktop.UPower", "/org/freedesktop/UPower/devices/battery_battery", "org.freedesktop.UPower.Device", "GetHistory", "suu", "charge", "86400", "400"]);
-    let words: Vec<&str> = hist.split_whitespace().skip(2).collect();
-    let mut history: Vec<(u64, f64, u32)> = words.chunks(3).filter_map(|c| Some((c.first()?.parse().ok()?, c.get(1)?.parse().ok()?, c.get(2)?.parse().ok()?))).collect();
-    history.sort_by_key(|h| h.0);
     f.level = num("capacity") as u32;
     f.status = file("status");
     f.power_w = (num("current_now") * num("voltage_now")).abs() / 1e12;
     f.temp_c = num("temp") / 10.0;
     f.to_empty_s = prop("TimeToEmpty");
     f.to_full_s = prop("TimeToFull");
-    f.history = history;
 }
 
 /// The clusters' clocks now and the hottest core.
@@ -754,11 +748,20 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
     let mut weather_cache: Option<(Instant, Result<Weather, String>)> = None;
     let events = calendar();
     let mut asked_update = false;
+    let mut details = false;
     let (mut lit, mut samples) = (true, 0u32);
     let mut next_sample = Instant::now();
     loop {
         let wait = if lit { next_sample.saturating_duration_since(Instant::now()) } else { Duration::from_secs(3600) };
-        match rx.recv_timeout(wait) {
+        let job = match rx.recv_timeout(wait) {
+            Ok(Job::Details(open)) => {
+                details = open;
+                Ok(Job::Read)
+            }
+            other => other,
+        };
+        match job {
+            Ok(Job::Details(_)) => {}
             Ok(Job::Display(on)) => {
                 if on && !lit {
                     // A span of darkness is not one long sample.
@@ -793,7 +796,7 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
                     Some((_, Err(e))) => f.weather_note = e.clone(),
                     None => {}
                 }
-                if let Some(p) = draw(&fonts, &f, &sampler, twelve) {
+                if let Some(p) = draw(&fonts, &f, twelve, details) {
                     tracing::debug!("system: read and drawn in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
                     *page.lock().unwrap() = Some(p);
                     wake.ping();
@@ -842,13 +845,18 @@ fn rounded_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Pat
     pb.finish()
 }
 
-/// The page: the head, then the cards, as tall as they make it.
-fn draw(fonts: &(Font, Font), f: &Facts, sampler: &Sampler, twelve: bool) -> Option<Page> {
+/// The page, on frosted glass (sysscreen.rs draws the glass): the head, the
+/// battery, then what the day holds - next
+/// up, the weather, the connections, the storage - plain rows under small
+/// titles, no cards; the rest (load, memory, the hinge, uptime, the port,
+/// the system) under Details, opened by a tap. Returns the page and where
+/// Details' row is (logical y, top and bottom).
+fn draw(fonts: &(Font, Font), f: &Facts, twelve: bool, details: bool) -> Option<Page> {
     let (thin, regular) = fonts;
     let s = SCALE as f32;
     let panel = layout::panels()[0];
     let pw = panel.size.w as f32;
-    // Tall enough for every card; cut to what they took after.
+    // Tall enough for everything; cut to what it took after.
     let tall = 2200.0f32;
     let mut c = tiny_skia::Pixmap::new((pw * s) as u32, (tall * s) as u32)?;
     let text = |c: &mut tiny_skia::Pixmap, font: &Font, t: &str, size: f32, color: [f32; 4], x: f32, y: f32, align: i32, max_w: f32| -> (f32, f32) {
@@ -892,196 +900,131 @@ fn draw(fonts: &(Font, Font), f: &Facts, sampler: &Sampler, twelve: bool) -> Opt
             c.draw_pixmap((x * s) as i32, (y * s) as i32, pm.as_ref(), &tiny_skia::PixmapPaint::default(), tiny_skia::Transform::identity(), None);
         }
     };
+    let (cx, inner) = (40.0f32, pw - 80.0);
     let now = crate::shade::local_time();
 
-    // The head: the time, the date, the greeting.
-    let (_, h) = text(&mut c, thin, &format!("{}:{:02}", now.tm_hour, now.tm_min), 72.0, INK, 0.0, 70.0, 0, pw);
-    text(&mut c, regular, &date_line(&now), 18.0, DIM, 0.0, 72.0 + h, 0, pw);
+    // The head: the greeting and the date (the time is the desktop's).
     let part = crate::sysscreen::part_of_day(now.tm_hour);
     let greeting = match &f.name {
         Some(n) => format!("{part}, {n}"),
         None => part.to_owned(),
     };
-    text(&mut c, regular, &greeting, 24.0, INK, 0.0, 230.0, 0, pw);
+    text(&mut c, regular, &greeting, 26.0, INK, cx, 72.0, -1, inner);
+    text(&mut c, regular, &date_line(&now), 16.0, DIM, cx, 108.0, -1, inner);
 
-    let (cx, cw) = (30.0f32, pw - 60.0);
-    let inner = cw - 40.0;
-    let mut y = 300.0f32;
-    // A card: its white, its title; `body` draws in it from the y it is
-    // given, and says how far it went.
-    let mut card = |c: &mut tiny_skia::Pixmap, title: &str, height: f32, body: &mut dyn FnMut(&mut tiny_skia::Pixmap, f32)| {
-        fill(c, cx, y, cw, height, 20.0, [255, 255, 255, 255]);
-        text(c, regular, title, 15.0, DIM, cx + 20.0, y + 16.0, -1, inner);
-        body(c, y + 42.0);
-        y += height + 14.0;
+    // The battery: its level large, what it is doing.
+    let mut y = 170.0f32;
+    let (lw, lh) = text(&mut c, thin, &format!("{}%", f.level), 64.0, INK, cx - 3.0, y, -1, inner);
+    let doing = match f.status.as_str() {
+        "Charging" => match hours(f.to_full_s) {
+            Some(t) => format!("Charging · full in {t}"),
+            None => "Charging".to_owned(),
+        },
+        "Full" | "Not charging" => "Charged".to_owned(),
+        _ => match hours(f.to_empty_s) {
+            Some(t) => format!("{t} left"),
+            None => String::new(),
+        },
+    };
+    text(&mut c, regular, &doing, 16.0, DIM, cx + lw + 16.0, y + lh - 30.0, -1, inner - lw - 16.0);
+    y += lh + 30.0;
+
+    // A part: a hairline, its title small and dim.
+    let section = |c: &mut tiny_skia::Pixmap, title: &str, y: &mut f32| {
+        fill(c, cx, *y, inner, 1.0, 0.0, [255, 255, 255, 22]);
+        text(c, regular, title, 13.0, DIM, cx, *y + 18.0, -1, inner);
+        *y += 50.0;
     };
     // A row: its name on the left, its value on the right.
-    let row = |c: &mut tiny_skia::Pixmap, name: &str, value: &str, color: [f32; 4], y: f32| {
-        let (nw, _) = text(c, regular, name, 16.0, INK, cx + 20.0, y, -1, inner);
-        text(c, regular, value, 16.0, color, cx + 20.0 + inner, y, 1, inner - nw - 16.0);
-    };
-    // A bar: a share of a track.
-    let bar = |c: &mut tiny_skia::Pixmap, share: f64, y: f32, rgba: [u8; 4]| {
-        fill(c, cx + 20.0, y, inner, 8.0, 4.0, [0, 0, 0, 18]);
-        let w = inner * share.clamp(0.0, 1.0) as f32;
-        if w > 1.0 {
-            fill(c, cx + 20.0, y, w.max(8.0), 8.0, 4.0, rgba);
-        }
+    let row = |c: &mut tiny_skia::Pixmap, name: &str, value: &str, color: [f32; 4], y: &mut f32| {
+        let (nw, _) = text(c, regular, name, 16.0, INK, cx, *y, -1, inner);
+        text(c, regular, value, 16.0, color, cx + inner, *y, 1, inner - nw - 16.0);
+        *y += 34.0;
     };
 
-    // Battery.
-    card(&mut c, "Battery", 290.0, &mut |c, y| {
-        let doing = match f.status.as_str() {
-            "Charging" => match hours(f.to_full_s) {
-                Some(t) => format!("{}% · full in {t}", f.level),
-                None => format!("{}% · charging", f.level),
-            },
-            "Full" | "Not charging" => format!("{}% · charged", f.level),
-            _ => match hours(f.to_empty_s) {
-                Some(t) => format!("{}% · {t} left", f.level),
-                None => format!("{} %", f.level),
-            },
-        };
-        text(c, regular, &doing, 22.0, INK, cx + 20.0, y - 2.0, -1, inner);
-        text(c, regular, &format!("{:.1} W · {:.0} °C", f.power_w, f.temp_c), 14.0, DIM, cx + 20.0, y + 34.0, -1, inner);
-        let (gx, gy, gw, gh) = (cx + 20.0, y + 70.0, inner, 150.0);
-        let mut grid = tiny_skia::Paint::default();
-        grid.set_color_rgba8(220, 220, 224, 255);
-        let stroke = tiny_skia::Stroke { width: s, ..Default::default() };
-        for frac in [0.0f32, 0.5, 1.0] {
-            let gy2 = (gy + gh * (1.0 - frac)) * s;
-            let mut pb = tiny_skia::PathBuilder::new();
-            pb.move_to(gx * s, gy2);
-            pb.line_to((gx + gw) * s, gy2);
-            if let Some(path) = pb.finish() {
-                c.stroke_path(&path, &grid, &stroke, tiny_skia::Transform::identity(), None);
-            }
-        }
-        let end = now_s();
-        let start = end.saturating_sub(86_400);
-        let pts: Vec<&(u64, f64, u32)> = f.history.iter().filter(|h| h.0 >= start).collect();
-        let line = tiny_skia::Stroke { width: 3.0 * s, line_cap: tiny_skia::LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
-        for pair in pts.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            if a.2 == 0 || b.2 == 0 {
-                continue;
-            }
-            let x = |t: u64| (gx + gw * (t - start) as f32 / 86_400.0) * s;
-            let yy = |v: f64| (gy + gh * (1.0 - (v as f32 / 100.0).clamp(0.0, 1.0))) * s;
-            let mut paint = tiny_skia::Paint::default();
-            paint.anti_alias = true;
-            if b.2 == 1 || b.2 == 4 {
-                paint.set_color_rgba8(0x2e, 0xc2, 0x7e, 255);
-            } else {
-                paint.set_color_rgba8(0x5e, 0x5c, 0x64, 255);
-            }
-            let mut pb = tiny_skia::PathBuilder::new();
-            pb.move_to(x(a.0), yy(a.1));
-            pb.line_to(x(b.0), yy(b.1));
-            if let Some(path) = pb.finish() {
-                c.stroke_path(&path, &paint, &line, tiny_skia::Transform::identity(), None);
-            }
-        }
-        text(c, regular, "24 h ago", 11.0, DIM, gx, gy + gh + 4.0, -1, inner);
-        text(c, regular, "now", 11.0, DIM, gx + gw, gy + gh + 4.0, 1, inner);
-    });
+    section(&mut c, "Next up", &mut y);
+    row(&mut c, "Alarm", &f.alarm, DIM, &mut y);
+    row(&mut c, "Event", &f.event, DIM, &mut y);
+    y += 14.0;
 
-    // Load: the clocks, the hottest core, ten minutes of use.
-    card(&mut c, "Load", 170.0, &mut |c, y| {
-        text(c, regular, &f.load_line, 16.0, INK, cx + 20.0, y, -1, inner);
-        let (row_h, gap) = (28.0f32, 6.0f32);
-        let top = y + 30.0;
-        let now = Instant::now();
-        let bar_w = inner / (LOAD_SPAN_S as f32 / LOAD_EVERY.as_secs_f32());
-        for (k, rgb) in [(0usize, LITTLE), (1, BIG)] {
-            let ry = top + k as f32 * (row_h + gap);
-            fill(c, cx + 20.0, ry, inner, row_h, 3.0, [0, 0, 0, 13]);
-            for smp in &sampler.samples {
-                let v = if k == 0 { smp.1 } else { smp.2 } as f32;
-                let x = cx + 20.0 + inner * (1.0 - now.duration_since(smp.0).as_secs_f32() / LOAD_SPAN_S as f32) - bar_w;
-                let hh = (row_h * v).max(1.0);
-                fill(c, x + 0.5, ry + row_h - hh, (bar_w - 1.0).max(1.0), hh, 0.0, [rgb[0], rgb[1], rgb[2], 255]);
-            }
-        }
-        let axis = top + 2.0 * row_h + gap + 4.0;
-        text(c, regular, "10 min ago · little above, big below", 11.0, DIM, cx + 20.0, axis, -1, inner);
-        text(c, regular, "now", 11.0, DIM, cx + 20.0 + inner, axis, 1, inner);
-    });
-
-    // Memory.
-    if let Some((used, total, swap)) = f.memory {
-        card(&mut c, "Memory", if swap >= 50e6 { 124.0 } else { 100.0 }, &mut |c, y| {
-            text(c, regular, &format!("{} used of {}", size(used), size(total)), 20.0, INK, cx + 20.0, y - 2.0, -1, inner);
-            bar(c, used / total, y + 34.0, [0x0a, 0x84, 0xff, 255]);
-            if swap >= 50e6 {
-                text(c, regular, &format!("Swap {} in use", size(swap)), 13.0, DIM, cx + 20.0, y + 50.0, -1, inner);
-            }
-        });
-    }
-
-    // Storage.
-    let rows = f.storage.len() as f32;
-    card(&mut c, "Storage", 48.0 + rows * 50.0, &mut |c, y| {
-        for (i, (name, free, total)) in f.storage.iter().enumerate() {
-            let ry = y + i as f32 * 50.0;
-            let low = *free < 1e9;
-            row(c, name, &format!("{} free of {}", size(*free), size(*total)), if low { RED } else { DIM }, ry);
-            bar(c, 1.0 - free / total, ry + 28.0, if low { [0xc8, 0x28, 0x28, 255] } else { [0x5e, 0x5c, 0x64, 255] });
-        }
-    });
-
-    // Network.
-    card(&mut c, "Network", 150.0, &mut |c, y| {
-        row(c, "Wi-Fi", &f.wifi, DIM, y);
-        row(c, "Mobile", &f.mobile, DIM, y + 32.0);
-        row(c, "Today", &format!("Wi-Fi {} · mobile {}", size(f.today[0] as f64), size(f.today[1] as f64)), DIM, y + 64.0);
-    });
-
-    // Next up.
-    card(&mut c, "Next up", 118.0, &mut |c, y| {
-        row(c, "Event", &f.event, DIM, y);
-        row(c, "Alarm", &f.alarm, DIM, y + 32.0);
-    });
-
-    // This device.
-    card(&mut c, "This device", 182.0, &mut |c, y| {
-        row(c, "Hinge", &f.hinge, DIM, y);
-        row(c, "Uptime", &f.uptime, DIM, y + 32.0);
-        row(c, "Port", &f.port, DIM, y + 64.0);
-        row(c, "System", &f.system, DIM, y + 96.0);
-    });
-
-    // Weather.
+    section(&mut c, "Weather", &mut y);
     match &f.weather {
-        Some(w) => card(&mut c, "Weather", 214.0, &mut |c, y| {
-            icon(c, &w.now.2, cx + 20.0, y, 28.0);
-            text(c, regular, &format!("{:.0}° · {}", w.now.0, w.now.1), 22.0, INK, cx + 58.0, y - 2.0, -1, inner - 140.0);
-            text(c, regular, &w.city, 14.0, DIM, cx + 20.0 + inner, y + 4.0, 1, 140.0);
+        Some(w) => {
+            icon(&mut c, &w.now.2, cx, y + 2.0, 24.0);
+            text(&mut c, regular, &format!("{:.0}° · {}", w.now.0, w.now.1), 18.0, INK, cx + 36.0, y, -1, inner - 160.0);
+            text(&mut c, regular, &w.city, 14.0, DIM, cx + inner, y + 3.0, 1, 150.0);
+            y += 34.0;
             if let Some((hi, lo)) = w.high_low {
-                text(c, regular, &format!("High {hi:.0}° · low {lo:.0}° in the next 24 h"), 13.0, DIM, cx + 20.0, y + 36.0, -1, inner);
+                text(&mut c, regular, &format!("High {hi:.0}° · low {lo:.0}°"), 14.0, DIM, cx, y, -1, inner);
+                y += 30.0;
             }
+            // The next hours, one quiet line: when and how warm.
             let col = inner / WEATHER_HOURS.len() as f32;
-            for (i, (t, temp, ic)) in w.hours.iter().enumerate() {
-                let x0 = cx + 20.0 + col * i as f32;
-                let mid = x0 + col / 2.0;
+            for (i, (t, temp, _)) in w.hours.iter().enumerate() {
+                let mid = cx + col * i as f32 + col / 2.0;
                 let tm = local(*t);
                 let when = if i == 0 { "Now".to_owned() } else if twelve { format!("{} {}", if tm.tm_hour % 12 == 0 { 12 } else { tm.tm_hour % 12 }, if tm.tm_hour < 12 { "AM" } else { "PM" }) } else { format!("{}:00", tm.tm_hour) };
-                let (ww, _) = (regular.rasterize(&when, 11.0, DIM).1 as f32 / s, 0.0);
-                text(c, regular, &when, 11.0, DIM, mid - ww / 2.0, y + 68.0, -1, col);
-                icon(c, ic, mid - 10.0, y + 90.0, 20.0);
+                let ww = regular.rasterize(&when, 12.0, DIM).1 as f32 / s;
+                text(&mut c, regular, &when, 12.0, DIM, mid - ww / 2.0, y, -1, col);
                 let tt = format!("{temp:.0}°");
-                let tw = regular.rasterize(&tt, 14.0, INK).1 as f32 / s;
-                text(c, regular, &tt, 14.0, INK, mid - tw / 2.0, y + 118.0, -1, col);
+                let tw = regular.rasterize(&tt, 15.0, INK).1 as f32 / s;
+                text(&mut c, regular, &tt, 15.0, INK, mid - tw / 2.0, y + 20.0, -1, col);
             }
-        }),
-        None => card(&mut c, "Weather", 80.0, &mut |c, y| {
-            text(c, regular, if f.weather_note.is_empty() { "Asking met.no…" } else { &f.weather_note }, 16.0, DIM, cx + 20.0, y, -1, inner);
-        }),
+            y += 56.0;
+        }
+        None => {
+            text(&mut c, regular, if f.weather_note.is_empty() { "Asking met.no…" } else { &f.weather_note }, 16.0, DIM, cx, y, -1, inner);
+            y += 34.0;
+        }
     }
+    y += 14.0;
 
-    // Cut to what the cards took, and a margin.
-    let used = ((y + 24.0) * s) as u32;
+    section(&mut c, "Connections", &mut y);
+    row(&mut c, "Wi-Fi", &f.wifi, DIM, &mut y);
+    row(&mut c, "Mobile", &f.mobile, DIM, &mut y);
+    row(&mut c, "Today", &format!("Wi-Fi {} · mobile {}", size(f.today[0] as f64), size(f.today[1] as f64)), DIM, &mut y);
+    y += 14.0;
+
+    section(&mut c, "Storage", &mut y);
+    for (name, free, _) in &f.storage {
+        row(&mut c, name, &format!("{} free", size(*free)), if *free < 1e9 { RED } else { DIM }, &mut y);
+    }
+    // A newer port, only when there is one.
+    if f.port.contains(" is out") {
+        y += 14.0;
+        section(&mut c, "Update", &mut y);
+        row(&mut c, "Port", &f.port, INK, &mut y);
+    }
+    y += 14.0;
+
+    // Details: shut, one row to tap; open, the rest.
+    fill(&mut c, cx, y, inner, 1.0, 0.0, [255, 255, 255, 22]);
+    let details_top = y;
+    text(&mut c, regular, "Details", 15.0, DIM, cx, y + 20.0, -1, inner);
+    text(&mut c, regular, if details { "Hide" } else { "Show" }, 15.0, DIM, cx + inner, y + 20.0, 1, inner);
+    y += 60.0;
+    let details_bottom = y;
+    if details {
+        row(&mut c, "Power", &format!("{:.1} W · {:.0} °C", f.power_w, f.temp_c), DIM, &mut y);
+        row(&mut c, "Load", &f.load_line, DIM, &mut y);
+        if let Some((used, total, swap)) = f.memory {
+            let mut m = format!("{} of {}", size(used), size(total));
+            if swap >= 50e6 {
+                m += &format!(" · swap {}", size(swap));
+            }
+            row(&mut c, "Memory", &m, DIM, &mut y);
+        }
+        row(&mut c, "Hinge", &f.hinge, DIM, &mut y);
+        row(&mut c, "Uptime", &f.uptime, DIM, &mut y);
+        if !f.port.contains(" is out") {
+            row(&mut c, "Port", &f.port, DIM, &mut y);
+        }
+        row(&mut c, "System", &f.system, DIM, &mut y);
+        y += 10.0;
+    }
+    // Cut to what it took, and room to scroll the last row above the dock.
+    let used = ((y + 160.0) * s) as u32;
     let (w, h) = (c.width(), used.min(c.height()));
     let data = c.data()[..(w * h * 4) as usize].to_vec();
-    Some((data, w as i32, h as i32))
+    Some((data, w as i32, h as i32, (details_top, details_bottom)))
 }

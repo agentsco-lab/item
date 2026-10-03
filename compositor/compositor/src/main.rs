@@ -35,6 +35,7 @@ mod pinpad;
 mod door;
 mod logind;
 mod face;
+mod foldcam;
 mod fingerprint;
 mod follow;
 mod status;
@@ -360,10 +361,17 @@ impl Data {
         // taken, kept once the PIN is accepted.
         let setup_face = self.state.setup.wants_face();
         let facing = self.state.posture.angle() < face::FOLD_MAX;
-        self.state.face.hold(self.state.lock.locked);
+        // Folded back to back from the lock screen: a camera (foldcam.rs),
+        // the camera taken from item-face meanwhile - its look given up
+        // first, then the device.
+        if self.state.foldcam.tick(now, self.state.posture.angle(), self.state.lock.locked, !self.state.lock.blank) {
+            self.state.needs_redraw = true;
+        }
+        let folded_camera = self.state.foldcam.wants_camera();
         let lock_enrol = self.state.lock.enrolling_face();
         let enrol = setup_face || lock_enrol;
-        self.state.face.want((self.state.lock.wants_face() && facing) || enrol, enrol);
+        self.state.face.want(((self.state.lock.wants_face() && facing) || enrol) && !folded_camera, enrol);
+        self.state.face.hold(self.state.lock.locked && !folded_camera);
         if self.state.face.take_taken() {
             self.state.setup.face_taken();
         }
@@ -795,6 +803,7 @@ impl Data {
         if self.state.ribbon.unsettled && !self.state.ribbon.moving() {
             self.state.apply_ribbon();
         }
+        self.state.foldcam.settle(self.pacing.target_ns);
         if self.state.system.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
@@ -1061,6 +1070,9 @@ fn main() {
             // A wallpaper decoded, to the GPU; the picker's small pictures.
             if let Some(picture) = data.state.walls.take_loaded() {
                 data.screen.set_wallpaper(picture);
+            }
+            if let Some(frost) = data.state.walls.take_frost() {
+                data.state.system.set_frost(frost);
             }
             if data.state.walls.take_thumbs() {
                 data.state.needs_redraw = true;

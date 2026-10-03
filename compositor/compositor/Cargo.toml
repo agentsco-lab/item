@@ -9,6 +9,8 @@ hybris-hwc = { path = "../crates/hybris-hwc" }
 smithay-hybris = { path = "../crates/smithay-hybris" }
 # CV ID (face.rs): YuNet and SFace.
 cvid = { path = "../crates/cvid" }
+# The fold camera's shots (foldcam.rs).
+jpeg-encoder = "0.7"
 smithay = { version = "0.7", default-features = false, features = ["renderer_gl", "wayland_frontend", "desktop", "use_system_lib", "backend_libinput"] }
 # libwayland-server is opened at run time, not linked: the cross build has none.
 wayland-sys = { version = "0.31", features = ["dlopen"] }

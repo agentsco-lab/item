@@ -148,6 +148,8 @@ pub struct State {
     pub camera_peek: crate::camera::Peek,
     /// CV ID (face.rs).
     pub face: crate::face::Face,
+    /// Folded back to back from the lock screen, a camera (foldcam.rs).
+    pub foldcam: crate::foldcam::FoldCam,
     /// The hinge's angle (posture.rs).
     pub posture: crate::posture::Posture,
     /// The privacy dot: camera, microphone, location in use.
@@ -258,6 +260,7 @@ impl State {
             posture: crate::posture::Posture::new(wake.clone()),
             camera_peek: crate::camera::Peek::new(wake.clone()),
             face,
+            foldcam: crate::foldcam::FoldCam::new(wake.clone()),
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),

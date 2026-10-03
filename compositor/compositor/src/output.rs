@@ -265,6 +265,11 @@ impl Screen {
                 elements.push(FrameElement::Shell(ShellElement::Text(e)));
             }
         }
+        // The bezel, the whole system's: each panel's outer edges soft into
+        // the dark, corners rounded - over whatever is shown (the desktop,
+        // windows, the system screen, the pen sheet, the shades, the lock
+        // screen, the keyboard), under only the dim and the privacy dot.
+        elements.extend(self.edges(0));
         elements.extend(state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The tour: its words and Skip, and the finger's way as a faint drop.
         if state.tour.active() {
@@ -298,7 +303,6 @@ impl Screen {
         elements.extend(rings);
         elements.extend(state.setup.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         if state.setup.active {
-            elements.extend(self.edges(0));
             elements.extend(setup_drop);
             elements.extend(self.setup_wall(state.setup.shown(frame_ns) as f32));
         }
@@ -306,15 +310,14 @@ impl Screen {
         elements.extend(state.calls.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // An alarm ringing, under a call (alert.rs).
         elements.extend(state.alert.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        // The lock screen: its soft edges over it; its words and dark; under
-        // the dark its keys as drops and the wallpaper, each half's moving
-        // with it as the doors open.
+        // The lock screen: its words and dark; under the dark its keys as
+        // drops and the wallpaper, each half's moving with it as the doors
+        // open (the bezel stays, over all).
         let doors = state.lock.doors(frame_ns);
-        if doors.is_some() {
-            elements.extend(self.edges(0));
-        }
         // The camera's peek over the lock screen (camera.rs).
         elements.extend(state.camera_peek.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // Folded back to back: the camera over the lock screen (foldcam.rs).
+        elements.extend(state.foldcam.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         let lock = state.lock.elements(&mut self.renderer, frame_ns);
         elements.extend(lock.into_iter().map(FrameElement::from));
         if let Some((ldx, rdx)) = doors {
@@ -523,8 +526,6 @@ impl Screen {
         // The wallpaper, under everything; it moves a little with the ribbon.
         let shift = crate::state::wallpaper_shift(state.ribbon.position(frame_ns)) as f32;
         let wall = self.wallpaper(shift, frame_ns);
-        // The wallpaper's edges soft into the bezel; the windows over them.
-        elements.extend(self.edges(1));
         elements.extend(wall.into_iter().map(FrameElement::Snapshot));
         let elements_ns = hybris_hwc::now_ns() - t0;
         let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
@@ -1004,7 +1005,6 @@ impl Screen {
         use smithay::backend::renderer::Offscreen;
         let size = self.output.current_mode()?.size;
         let mut elements: Vec<FrameElement> = Vec::new();
-        elements.extend(self.edges(0));
         elements.extend(state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         elements.extend(self.lock_drops(state, frame_ns, 0.0));
         elements.extend(self.lock_wall(0.0, 0.0));

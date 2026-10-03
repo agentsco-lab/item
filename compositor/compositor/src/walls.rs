@@ -31,6 +31,8 @@ pub struct Walls {
     pub names: Vec<String>,
     pub current: String,
     loaded: Arc<Mutex<Option<Picture>>>,
+    /// The picture frosted (`frost`): Some(None) for Aurora, which has none.
+    frosted: Arc<Mutex<Option<Option<(Vec<u8>, u32, u32)>>>>,
     thumbs_loaded: Arc<Mutex<Option<Vec<(usize, Vec<u8>, u32, u32)>>>>,
     /// The small pictures, once read (the picker asks for them).
     pub thumbs: Vec<Option<MemoryRenderBuffer>>,
@@ -70,6 +72,63 @@ fn round_corners(rgba: &mut [u8], w: u32, h: u32, r: f64) {
     }
 }
 
+/// The frosted wallpaper's px: one for each FROST_STEP of the picture's.
+pub const FROST_STEP: u32 = 8;
+
+/// A picture frosted for the system screen's glass (sysscreen.rs): an
+/// FROST_STEP-th of its size, blurred hard (three box passes, ~a fifth of
+/// the panel across) and darkened as the desktop's cards are - opaque.
+fn frost(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
+    let (fw, fh) = ((w / FROST_STEP).max(1) as usize, (h / FROST_STEP).max(1) as usize);
+    let step = FROST_STEP as usize;
+    let mut px = vec![[0f32; 3]; fw * fh];
+    for y in 0..fh {
+        for x in 0..fw {
+            let mut acc = [0f32; 3];
+            for dy in 0..step {
+                for dx in 0..step {
+                    let i = ((y * step + dy) * w as usize + x * step + dx) * 4;
+                    for c in 0..3 {
+                        acc[c] += rgba.get(i + c).copied().unwrap_or(0) as f32;
+                    }
+                }
+            }
+            px[y * fw + x] = acc.map(|v| v / (step * step) as f32);
+        }
+    }
+    // Box blurs, sideways then down, three times: nearly a Gaussian.
+    let r = 6usize;
+    for _ in 0..3 {
+        for horizontal in [true, false] {
+            let (n, m) = if horizontal { (fh, fw) } else { (fw, fh) };
+            let at = |a: usize, b: usize| if horizontal { a * fw + b } else { b * fw + a };
+            let src = px.clone();
+            for a in 0..n {
+                for b in 0..m {
+                    let (lo, hi) = (b.saturating_sub(r), (b + r).min(m - 1));
+                    let mut acc = [0f32; 3];
+                    for k in lo..=hi {
+                        let p = src[at(a, k)];
+                        acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+                    }
+                    let cnt = (hi - lo + 1) as f32;
+                    px[at(a, b)] = acc.map(|v| v / cnt);
+                }
+            }
+        }
+    }
+    // Darkened toward the night's blue, matte: text reads on it.
+    const DARK: [f32; 3] = [16.0, 19.0, 27.0];
+    let mut out = vec![0u8; fw * fh * 4];
+    for (i, p) in px.iter().enumerate() {
+        for c in 0..3 {
+            out[i * 4 + c] = (p[c] * 0.38 + DARK[c] * 0.62).round().clamp(0.0, 255.0) as u8;
+        }
+        out[i * 4 + 3] = 255;
+    }
+    (out, fw as u32, fh as u32)
+}
+
 /// A JPEG file, decoded to RGBA.
 fn decode(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
     use zune_core::colorspace::ColorSpace;
@@ -103,7 +162,7 @@ impl Walls {
         let current = std::fs::read_to_string(kept()).map(|s| s.trim().to_owned()).ok().filter(|n| names.contains(n)).unwrap_or_else(|| if names.iter().any(|n| n == DEFAULT) { DEFAULT.to_owned() } else { AURORA.to_owned() });
         tracing::info!("walls: {} pictures, {current} on", names.len() - 1);
         let n = names.len();
-        let mut walls = Walls { dir, names, current: String::new(), loaded: Default::default(), thumbs_loaded: Default::default(), thumbs: vec![None; n], thumbs_asked: false, wake };
+        let mut walls = Walls { dir, names, current: String::new(), loaded: Default::default(), frosted: Default::default(), thumbs_loaded: Default::default(), thumbs: vec![None; n], thumbs_asked: false, wake };
         walls.choose(&current, false);
         walls
     }
@@ -122,7 +181,7 @@ impl Walls {
             let _ = std::fs::write(&path, name);
             tracing::info!("walls: {name} on");
         }
-        let (slot, wake, path, name) = (self.loaded.clone(), self.wake.clone(), self.dir.join(name), name.to_owned());
+        let (slot, frosted, wake, path, name) = (self.loaded.clone(), self.frosted.clone(), self.wake.clone(), self.dir.join(name), name.to_owned());
         std::thread::spawn(move || {
             let t = std::time::Instant::now();
             let picture = if name == AURORA { Some((Vec::new(), 0, 0)) } else { decode(&path) };
@@ -131,10 +190,16 @@ impl Walls {
                     tracing::info!("walls: {name} decoded in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
                 }
                 crate::accent::set_wall(if name == AURORA { [0x6f, 0xd6, 0xc4, 255] } else { crate::accent::from_picture(&rgba, w, h) });
+                *frosted.lock().unwrap() = Some((!rgba.is_empty()).then(|| frost(&rgba, w, h)));
                 *slot.lock().unwrap() = Some((name, rgba, w, h));
                 wake.ping();
             }
         });
+    }
+
+    /// The picture frosted, once it is (None inside: none to frost).
+    pub fn take_frost(&self) -> Option<Option<(Vec<u8>, u32, u32)>> {
+        self.frosted.lock().unwrap().take()
     }
 
     /// A picture decoded and waiting for the GPU (Aurora's has no rows).
