@@ -79,6 +79,7 @@ struct DisplayConfig {
 
 const HWC2_ERROR_NONE: i32 = 0;
 const HWC2_ERROR_HAS_CHANGES: i32 = 5;
+const HWC2_ERROR_NOT_VALIDATED: i32 = 7;
 const HWC2_POWER_MODE_ON: i32 = 2;
 const HWC2_VSYNC_ENABLE: i32 = 1;
 const HWC2_COMPOSITION_CLIENT: i32 = 1;
@@ -153,6 +154,7 @@ unsafe impl Send for Presenter {}
 #[derive(Default)]
 struct Stats {
     fast: u32,
+    skipped: u32,
     frames: u32,
     long: u32,
     sum_ms: f64,
@@ -242,6 +244,20 @@ static LAST_PRESENT_TOOK_NS: AtomicU64 = AtomicU64::new(0);
 /// Android side of libhybris' hwc2 layer, Halium 11).
 static PRESENT_OR_VALIDATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Whether to present without validating while nothing but the client
+/// target changed (`HWC_SKIP_VALIDATE=1`; off by default): one call less to
+/// the Android composer a frame, ~1 ms - but the Duo's composer refuses it
+/// (NOT_VALIDATED, every frame, 2026-10-03), so it stays off there. Our one client layer never changes;
+/// the first frame, and the first after the display's power changed,
+/// validate. hwcomposer refusing (NOT_VALIDATED or any error) validates at
+/// once, the same frame; refused again and again, the skipping stops.
+static SKIP_VALIDATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A validate has been accepted since the layers or the power last changed.
+static VALIDATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Presents refused without a validate, in a row.
+static REFUSED: AtomicU64 = AtomicU64::new(0);
+const REFUSED_MAX: u64 = 8;
+
 /// How long the last present callback took: validate, set the client target,
 /// present, and the fences (ns).
 pub fn last_present_took_ns() -> u64 {
@@ -294,24 +310,51 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
     if fast {
         p.stats.fast += 1;
     } else {
-        if !PRESENT_OR_VALIDATE.load(Ordering::Relaxed) {
+        // Validated before and nothing but the client target changed: the
+        // present alone; refused, the usual way, the same frame.
+        let mut presented = false;
+        if SKIP_VALIDATE.load(Ordering::Relaxed) && VALIDATED.load(Ordering::Relaxed) && !PRESENT_OR_VALIDATE.load(Ordering::Relaxed) {
+            present_fence = -1;
             let t = now_ns();
-            let err = (h.validate)(p.display, &mut types, &mut requests);
-            detail.validate_ns = now_ns() - t;
-            if err != HWC2_ERROR_NONE && err != HWC2_ERROR_HAS_CHANGES {
-                p.stats.errors += 1;
-                return;
+            let err = (h.present)(p.display, &mut present_fence);
+            detail.present_ns = now_ns() - t;
+            if err == HWC2_ERROR_NONE {
+                presented = true;
+                p.stats.skipped += 1;
+                REFUSED.store(0, Ordering::Relaxed);
+            } else {
+                VALIDATED.store(false, Ordering::Relaxed);
+                if REFUSED.load(Ordering::Relaxed) == 0 {
+                    eprintln!("hybris-hwc: a present without a validate refused: error {err}");
+                }
+                if err != HWC2_ERROR_NOT_VALIDATED || REFUSED.fetch_add(1, Ordering::Relaxed) + 1 >= REFUSED_MAX {
+                    // Not what a skipped validate meets: no more skipping.
+                    SKIP_VALIDATE.store(false, Ordering::Relaxed);
+                }
             }
         }
-        if types != 0 || requests != 0 {
-            (h.accept_changes)(p.display);
+        if !presented {
+            if !PRESENT_OR_VALIDATE.load(Ordering::Relaxed) {
+                let t = now_ns();
+                let err = (h.validate)(p.display, &mut types, &mut requests);
+                detail.validate_ns = now_ns() - t;
+                if err != HWC2_ERROR_NONE && err != HWC2_ERROR_HAS_CHANGES {
+                    p.stats.errors += 1;
+                    return;
+                }
+            }
+            if types != 0 || requests != 0 {
+                (h.accept_changes)(p.display);
+            }
+            present_fence = -1;
+            let t = now_ns();
+            if (h.present)(p.display, &mut present_fence) != HWC2_ERROR_NONE {
+                p.stats.errors += 1;
+            } else {
+                VALIDATED.store(true, Ordering::Relaxed);
+            }
+            detail.present_ns = now_ns() - t;
         }
-        present_fence = -1;
-        let t = now_ns();
-        if (h.present)(p.display, &mut present_fence) != HWC2_ERROR_NONE {
-            p.stats.errors += 1;
-        }
-        detail.present_ns = now_ns() - t;
     }
 
     let mut fences: *mut Fences = null_mut();
@@ -374,6 +417,8 @@ pub struct Output {
 pub struct FrameStats {
     /// Frames presented at once by presentOrValidate, without a validate.
     pub fast: u32,
+    /// Frames presented without a validate (SKIP_VALIDATE).
+    pub skipped: u32,
     pub frames: u32,
     pub over_20ms: u32,
     pub mean_ms: f64,
@@ -392,6 +437,8 @@ pub fn set_display_power(on: bool) -> bool {
     let guard = PRESENTER.lock().unwrap();
     let Some(p) = guard.as_ref() else { return false };
     let mode = if on { HWC2_POWER_MODE_ON } else { 0 };
+    // The next frame validates again.
+    VALIDATED.store(false, Ordering::Relaxed);
     (p.hwc.set_power_mode)(p.display, mode) == HWC2_ERROR_NONE
 }
 
@@ -399,7 +446,7 @@ pub fn take_stats() -> FrameStats {
     let mut guard = PRESENTER.lock().unwrap();
     let st = std::mem::take(&mut guard.as_mut().expect("presenter").stats);
     let f = st.frames.max(1) as f64;
-    FrameStats { fast: st.fast, frames: st.frames, over_20ms: st.long, mean_ms: st.sum_ms / f, max_ms: st.max_ms, errors: st.errors }
+    FrameStats { fast: st.fast, skipped: st.skipped, frames: st.frames, over_20ms: st.long, mean_ms: st.sum_ms / f, max_ms: st.max_ms, errors: st.errors }
 }
 
 pub fn now_ns() -> u64 {
@@ -452,6 +499,7 @@ impl Output {
             std::env::var("HWC_PRESENT_OR_VALIDATE").map(|v| v == "1").unwrap_or(false),
             Ordering::Relaxed,
         );
+        SKIP_VALIDATE.store(std::env::var("HWC_SKIP_VALIDATE").map(|v| v == "1").unwrap_or(false), Ordering::Relaxed);
 
         let listener = Box::leak(Box::new(Listener { on_vsync, on_hotplug, on_refresh }));
         let dev = (hwc.device_new)(false);

@@ -883,9 +883,9 @@ impl Data {
             format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
         };
         tracing::info!(
-            "drawn {:3} of {:3}  missed {:2}  commits {:3} (at once {})  draw {} (elements {}) swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  pen->screen {} (to here {}) ms  GPU boost {:.0}%  errors {}",
+            "drawn {:3} of {:3}  missed {:2}  commits {:3} (at once {})  draw {} (elements {}) swap {} (present {}, fast {}, no validate {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  pen->screen {} (to here {}) ms  GPU boost {:.0}%  errors {}",
             r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits), r.asap,
-            mean_max(&r.draw_ms), mean_max(&r.elements_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), st.fast, mean_max(&r.damaged_share),
+            mean_max(&r.draw_ms), mean_max(&r.elements_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), st.fast, st.skipped, mean_max(&r.damaged_share),
             r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text,
             mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms), mean_max(&r.pen_ms), mean_max(&r.pen_in_ms),
             self.state.boost.take_share(hybris_hwc::now_ns(), 1_000_000_000), st.errors
