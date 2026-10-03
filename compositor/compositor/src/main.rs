@@ -855,7 +855,7 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
-        if self.state.clock.fading(now) || self.screen.wall_fading(now) || self.screen.fold_developing(now) {
+        if self.state.clock.fading(now) || self.screen.wall_fading(now) || self.screen.fold_developing(now) || self.state.posture.far_moving() {
             self.state.needs_redraw = true;
         }
         if self.state.ribbon.unsettled && !self.state.ribbon.moving() {

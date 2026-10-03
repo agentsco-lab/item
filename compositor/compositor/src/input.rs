@@ -435,11 +435,14 @@ impl State {
             self.needs_redraw = true;
             return;
         }
-        // Folded back past flat while locked: the left panel is glass, its
-        // touches nobody's (#117).
+        // Folded back past flat while locked: the near panel is glass, its
+        // touches nobody's; folded all the way, the far one's neither (the
+        // palm is on it) (#117).
         if self.lock.locked && self.posture.fold_back() > 0.0 {
             if let Contact::Down(_, pos, _) = &contact {
-                if crate::layout::panel_at(*pos) == Some(0) {
+                let near = self.posture.near();
+                let panel = crate::layout::panel_at(*pos);
+                if panel == Some(near) || (self.posture.fold_back() >= 1.0 && panel == Some(1 - near)) {
                     return;
                 }
             }
