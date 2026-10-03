@@ -187,6 +187,11 @@ const ROW_H: f64 = 64.0;
 const BAR_W: f64 = 12.0;
 const BAR_H: f64 = 220.0;
 const VOLUME_SHOW_NS: u64 = 1_500_000_000;
+/// The volume bar's place (logical px): its top, its gap from the screen's
+/// right edge; a finger this near it takes it.
+const BAR_Y: f64 = 110.0;
+const BAR_EDGE: f64 = 22.0;
+const BAR_REACH: f64 = 36.0;
 const VOLUME_FADE_NS: u64 = 200_000_000;
 /// Power off and restart wait this long for their second tap.
 const POWER_ASK_NS: u64 = 4_000_000_000;
@@ -230,6 +235,8 @@ pub struct Quick {
     power_asked: std::cell::Cell<u64>,
     /// When a volume key was last pressed (0: never).
     volume_at: std::cell::Cell<u64>,
+    /// The finger on the volume bar, dragging it.
+    volume_finger: std::cell::Cell<Option<smithay::backend::input::TouchSlot>>,
     bar_track: MemoryRenderBuffer,
     bar_fill: MemoryRenderBuffer,
     /// The banner's card as last drawn, and its notification, for touches.
@@ -299,6 +306,7 @@ impl Quick {
             power_asked: std::cell::Cell::new(0),
             banner_at: std::cell::Cell::new(None),
             volume_at: std::cell::Cell::new(0),
+            volume_finger: std::cell::Cell::new(None),
             bar_track: crate::grid::rounded(BAR_W, BAR_H, BAR_W / 2.0, [30, 32, 36, 220]),
             bar_fill: crate::grid::rounded(BAR_W, BAR_H, BAR_W / 2.0, [240, 240, 240, 240]),
         }
@@ -446,9 +454,61 @@ impl Quick {
 
     /// Whether the volume bar is up at `now`, and whether it is fading.
     pub fn volume_bar_state(&self, now: u64) -> (bool, bool) {
+        if self.volume_finger.get().is_some() {
+            return (true, false);
+        }
         let age = now.saturating_sub(self.volume_at.get());
         let up = self.volume_at.get() != 0 && age < VOLUME_SHOW_NS + VOLUME_FADE_NS;
         (up, up && age >= VOLUME_SHOW_NS)
+    }
+
+    /// The bar's rectangle (logical): its x, top, width, height.
+    fn bar_rect() -> (f64, f64, f64, f64) {
+        (crate::layout::LAYOUT.0 as f64 - BAR_EDGE - BAR_W, BAR_Y, BAR_W, BAR_H)
+    }
+
+    /// A finger down: on the volume bar while it is up, it takes the bar
+    /// and sets the volume where it is (#80) - up as well as down, muted at
+    /// the bottom; a broken volume key no longer leaves the phone stuck.
+    pub fn volume_down(&self, slot: smithay::backend::input::TouchSlot, x: f64, y: f64) -> bool {
+        if !self.volume_bar_state(hybris_hwc::now_ns()).0 {
+            return false;
+        }
+        let (bx, by, bw, bh) = Self::bar_rect();
+        if x < bx - BAR_REACH || x > bx + bw + BAR_REACH || y < by - BAR_REACH || y > by + bh + BAR_REACH {
+            return false;
+        }
+        self.volume_finger.set(Some(slot));
+        self.volume_drag(y);
+        true
+    }
+
+    /// The finger on the bar moved: the volume follows it.
+    pub fn volume_motion(&self, slot: smithay::backend::input::TouchSlot, y: f64) -> bool {
+        if self.volume_finger.get() != Some(slot) {
+            return false;
+        }
+        self.volume_drag(y);
+        true
+    }
+
+    /// The finger off the bar: it stays up its time from now.
+    pub fn volume_up(&self, slot: smithay::backend::input::TouchSlot) -> bool {
+        if self.volume_finger.get() != Some(slot) {
+            return false;
+        }
+        self.volume_finger.set(None);
+        self.volume_at.set(hybris_hwc::now_ns());
+        true
+    }
+
+    fn volume_drag(&self, y: f64) {
+        let (_, by, _, bh) = Self::bar_rect();
+        let v = ((by + bh - y) / bh).clamp(0.0, 1.0);
+        self.sys.lock().unwrap().volume = v;
+        let _ = self.jobs.send(Job::Volume(v));
+        // Up while the finger is on it.
+        self.volume_at.set(hybris_hwc::now_ns());
     }
 
     /// The volume as an upright bar beside the keys (item's): at the right
@@ -459,12 +519,11 @@ impl Quick {
         if !up {
             return Vec::new();
         }
-        let age = now.saturating_sub(self.volume_at.get());
+        let age = if self.volume_finger.get().is_some() { 0 } else { now.saturating_sub(self.volume_at.get()) };
         let alpha = if age < VOLUME_SHOW_NS { 1.0 } else { 1.0 - (age - VOLUME_SHOW_NS) as f32 / VOLUME_FADE_NS as f32 };
         let v = self.sys.lock().unwrap().volume;
         let (w, h) = (BAR_W, BAR_H);
-        let x = crate::layout::LAYOUT.0 as f64 - 22.0 - w;
-        let y = 110.0;
+        let (x, y, _, _) = Self::bar_rect();
         let s = SCALE as f64;
         let mut out = Vec::new();
         let filled = (h * v).round();

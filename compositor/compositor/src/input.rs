@@ -408,6 +408,22 @@ impl State {
             }
             _ => {}
         }
+        // The volume bar, up beside the keys: a finger drags it (#80).
+        match &contact {
+            Contact::Down(slot, pos, _) if self.shade.quick.volume_down(*slot, pos.x, pos.y) => {
+                self.needs_redraw = true;
+                return;
+            }
+            Contact::Motion(slot, pos, _) if self.shade.quick.volume_motion(*slot, pos.y) => {
+                self.needs_redraw = true;
+                return;
+            }
+            Contact::Up(slot, _) if self.shade.quick.volume_up(*slot) => {
+                self.needs_redraw = true;
+                return;
+            }
+            _ => {}
+        }
         // A call over the lock screen: every touch is its own.
         if self.calls.holds_screen() {
             match contact {
