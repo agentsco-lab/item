@@ -65,6 +65,9 @@ const SLAB: [u8; 4] = [37, 46, 42, 255];
 /// How long a move takes (item's MOVE_CROSS_MS was 440 ms; drops of water
 /// go slower).
 const MOVE_NS: u64 = 640_000_000;
+/// A paced scrub's fastest: this much of the way in MOVE_NS - about the
+/// dock's own eased move at its quickest.
+const PACE: f64 = 1.4;
 /// The hinge as the halves cross it: a tunnel an icon long (item's TUNNEL_PX).
 const TUNNEL: f64 = (ICON + 2) as f64;
 /// The arriving half's inner padding, tucked under where the two meet
@@ -280,6 +283,10 @@ pub struct Dock {
     pick_up: bool,
     /// The move scrubbed by the ribbon: from, to, how far.
     scrub: Option<(Mode, Mode, f64)>,
+    /// A paced scrub (`scrub_paced`): its from and to, how far it is shown,
+    /// when; and whether it is still behind the finger.
+    paced: Option<(Mode, Mode, f64, u64)>,
+    behind: bool,
     /// When the last move ended: the halves wobble to rest from it.
     landed: Option<u64>,
     /// Each half's x as last drawn and when, and its stretch from moving.
@@ -387,7 +394,7 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, paced: None, behind: false, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -740,6 +747,26 @@ impl Dock {
         }
     }
 
+    /// As `scrub` with pick-up, the halves no faster than the dock's own
+    /// pace (PACE of the way in MOVE_NS): a window flicked away is quicker
+    /// than the dock should go, and it went with the finger at once. Behind
+    /// the finger, it catches up; let go, it goes on from where it is.
+    pub fn scrub_paced(&mut self, from: [bool; 2], to: [bool; 2], k: f64, frame_ns: u64) {
+        let (a, b) = (mode_for(from), mode_for(to));
+        let k = k.clamp(0.0, 1.0);
+        let shown = match self.paced {
+            Some((pa, pb, pk, at)) if (pa, pb) == (a, b) => {
+                let step = PACE * frame_ns.saturating_sub(at) as f64 / MOVE_NS as f64;
+                pk + (k - pk).clamp(-step, step)
+            }
+            // A new gesture: from where the halves stand.
+            _ => 0.0,
+        };
+        self.behind = (shown - k).abs() > 1e-3;
+        self.paced = Some((a, b, shown, frame_ns));
+        self.scrub(from, to, shown, true);
+    }
+
     /// How far along its way (0..1) the half that goes furthest is, `k` of
     /// a move from `from` to `to` (`linear`: as a finger has it).
     fn progress(&self, from: Mode, to: Mode, k: f64, linear: bool) -> f64 {
@@ -778,6 +805,8 @@ impl Dock {
 
     /// The ribbon stopped: the halves stand where it left them.
     pub fn end_scrub(&mut self) {
+        self.paced = None;
+        self.behind = false;
         if let Some((from, to, k)) = self.scrub.take() {
             self.mode = if k >= 0.5 { to } else { from };
         }
@@ -785,6 +814,10 @@ impl Dock {
 
     /// After a frame for `frame_ns`: whether the halves are still moving.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
+        // Behind a finger (scrub_paced): frames until it catches up.
+        if self.behind {
+            return true;
+        }
         // An icon carried, or one drying away.
         if self.carry.is_some() || self.drying.as_ref().is_some_and(|(_, _, t)| (frame_ns.saturating_sub(*t) as f64) < DRY_NS) {
             for half in &mut self.halves {

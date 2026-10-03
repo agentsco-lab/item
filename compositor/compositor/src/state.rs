@@ -482,9 +482,9 @@ impl State {
             if let Some(p) = self.grid.panel() {
                 to[p] = true;
             }
-            // Let go part of the way, the dock goes on from there (the clock
-            // with it), not snapped.
-            self.dock.scrub(from, to, k, true);
+            // At the dock's own pace, not the flick's; let go part of the way,
+            // it goes on from there (the clock with it), not snapped.
+            self.dock.scrub_paced(from, to, k, frame_ns);
         } else {
             let taken = self.dock_taken(view);
             // A move begins: the clocks up now, before its first frame.
