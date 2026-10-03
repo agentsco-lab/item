@@ -331,15 +331,18 @@ impl Data {
         // holds the screen on; dimmed before it goes dark.
         let held = self.state.idle_held();
         // The tour: what the user did, and the next step when back.
-        if self.state.tour.active() {
+        if self.state.tour.watching() {
             use crate::ribbon::Page;
             let home = self.state.ribbon.at(self.state.ribbon.view);
+            let app_panel = (0..2).find(|&i| matches!(home[i], Some(Page::App(_)) | Some(Page::Wide(_))));
             let seen = crate::tour::Seen {
                 grid: self.state.grid.panel().is_some(),
                 shade: self.state.shade.visible(),
                 ribbon_moved: self.state.ribbon.moving(),
                 ribbon_home: !self.state.ribbon.moving() && home == [Some(&Page::Desk(0)), Some(&Page::Desk(1))],
                 carried: self.state.dock.carrying(),
+                app_panel,
+                gone: self.state.windows_gone,
             };
             if self.state.tour.watch(&seen, now) {
                 self.state.needs_redraw = true;

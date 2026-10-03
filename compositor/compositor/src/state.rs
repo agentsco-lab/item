@@ -127,6 +127,9 @@ pub struct State {
     pub paces: crate::pace::Paces,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
+    /// How many windows have been put away or closed (the tour's hint for
+    /// apps goes when one is).
+    pub windows_gone: u64,
     /// A touch in a panel's bottom band, until it shows which way it goes:
     /// up puts the window away, sideways moves the ribbon.
     pub bottom_start: Option<(smithay::backend::input::TouchSlot, Point<f64, Logical>)>,
@@ -254,6 +257,7 @@ impl State {
             pen_drawing: false,
             paces: Default::default(),
             put_away: Vec::new(),
+            windows_gone: 0,
             ribbon: crate::ribbon::Ribbon::new(),
             polkit: crate::polkit::Polkit::new(wake.clone()),
             dialog: crate::dialog::Dialog::new(),
@@ -714,6 +718,7 @@ impl State {
         self.space.unmap_elem(&window);
         self.ribbon.remove(&window);
         self.put_away.push((window.clone(), panel));
+        self.windows_gone += 1;
         // The keyboard goes to what is left on top.
         let keyboard = self.seat.get_keyboard().unwrap();
         if keyboard.current_focus().is_some_and(|f| &f == window.toplevel().unwrap().wl_surface()) {
@@ -1049,6 +1054,7 @@ impl XdgShellHandler for State {
         // The space drops the window at its next refresh; the dock may come
         // back onto its panel. Its last frame is seen closing.
         self.closing.push((surface.wl_surface().id(), hybris_hwc::now_ns()));
+        self.windows_gone += 1;
         self.boost.kick(hybris_hwc::now_ns());
         // Its page leaves the row.
         let page = self.ribbon.pages.iter().find_map(|p| match p {

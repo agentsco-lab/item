@@ -283,7 +283,7 @@ impl Screen {
         elements.extend(self.edges(0));
         elements.extend(state.shade.quick.volume_bar(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         // The tour: its words and Skip, and the finger's way as a faint drop.
-        if state.tour.active() {
+        if state.tour.watching() && !state.lock.locked {
             elements.extend(state.tour.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
             if let (Some((c, r, a)), Some(texture)) = (state.tour.hint(frame_ns), self.wall.clone()) {
                 let shift = crate::state::wallpaper_shift(state.ribbon.position(frame_ns));
