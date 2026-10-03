@@ -41,6 +41,22 @@ const MIN_STEP: f32 = 1.5;
 const WIDTH_EASE: f32 = 0.35;
 /// The stroke's ends: this much of its width.
 const TAPER: f32 = 0.55;
+/// The tip drawn ahead of the pen: this far ahead in time (us), at most
+/// this long and only when longer than this (physical px); the speed from
+/// this much of the pen's way (us).
+const PREDICT_US: f32 = 10_000.0;
+const PREDICT_MAX: f32 = 40.0;
+/// Turning more than this (the cosine between the speed now and before), the
+/// tip is let go; straight on, kept whole.
+const TURN_COS: f32 = 0.85;
+const PREDICT_MIN: f32 = 3.0;
+const SPEED_SPAN_US: u64 = 25_000;
+/// How far the tip's reach goes toward each move's (0-1).
+const REACH_EASE: f32 = 0.3;
+/// The guess ahead of the pen: drawn in this many pieces, fading from this
+/// much of the ink to none.
+const FADE_PIECES: usize = 6;
+const FADE_FROM: f32 = 0.7;
 /// A curve is drawn in pieces about this long (physical px).
 const PIECE: f32 = 2.5;
 /// The toolbar's buttons, logical px from the panel's top right.
@@ -82,6 +98,16 @@ pub struct PenSheet {
     /// The stroke under way: its last points (x, y, width; physical px),
     /// the newest last, and whether it erases.
     stroke: Option<(Vec<(f32, f32, f32)>, bool)>,
+    /// The pen's last samples with their times (x, y physical; us), for its
+    /// speed; and the stroke's tip drawn ahead of them - from where the
+    /// curve has got to, through the last sample, on along the way the pen
+    /// is going - not in the sheet, drawn anew at each move (its top left,
+    /// physical, and its picture).
+    recent: std::collections::VecDeque<(f32, f32, u64)>,
+    tip: Option<(f32, f32, MemoryRenderBuffer)>,
+    /// The tip's reach ahead (physical px, x and y), eased from move to
+    /// move: worked out anew from each, it jumped under the pen.
+    reach: std::cell::Cell<(f32, f32)>,
     /// The stroke's cost, for the log: events, pieces drawn, time drawing,
     /// the longest event, when it began.
     cost: (u32, u32, u64, u64, u64),
@@ -106,6 +132,9 @@ impl PenSheet {
             run: None,
             canvas: None,
             stroke: None,
+            recent: Default::default(),
+            tip: None,
+            reach: Default::default(),
             cost: (0, 0, 0, 0, 0),
             eraser: false,
             barrel: false,
@@ -312,8 +341,87 @@ impl PenSheet {
         let erase = eraser_end || self.barrel || self.eraser;
         let w = Self::width(pressure, erase);
         self.cost = (0, 0, 0, 0, hybris_hwc::now_ns());
+        self.recent.clear();
+        self.tip = None;
+        self.reach.set((0.0, 0.0));
         self.ink(&[(x, y, w * TAPER), (x, y, w * TAPER)], erase);
         self.stroke = Some((vec![(x, y, w * TAPER)], erase));
+    }
+
+    /// The tip ahead: from `from` (where the curve has got to) through `at`
+    /// (the pen's last sample) and on as far as the pen goes in PREDICT_US at
+    /// its speed - no further than PREDICT_MAX, none when it is slow - the
+    /// width thinning toward its end.
+    fn tip_ahead(&self, from: (f32, f32, f32), at: (f32, f32, f32)) -> Option<(f32, f32, MemoryRenderBuffer)> {
+        let last = *self.recent.back()?;
+        // The speed now (the last ~12 ms) and before (the ~12 ms before):
+        // slowing, the tip shortens as much; turning, it is let go - else it
+        // shot on past a turn or a stop.
+        let velocity = |from_us: u64, to_us: u64| -> Option<(f32, f32)> {
+            let span: Vec<_> = self.recent.iter().filter(|p| p.2 >= from_us && p.2 <= to_us).collect();
+            let (a, b) = (span.first()?, span.last()?);
+            let dt = b.2.saturating_sub(a.2) as f32;
+            (dt > 0.0).then(|| ((b.0 - a.0) / dt, (b.1 - a.1) / dt))
+        };
+        let half = SPEED_SPAN_US / 2;
+        let now_v = velocity(last.2.saturating_sub(half), last.2);
+        let before_v = velocity(last.2.saturating_sub(SPEED_SPAN_US), last.2.saturating_sub(half));
+        let mut pts = vec![from, at];
+        if let Some((vx, vy)) = now_v {
+            let speed = vx.hypot(vy);
+            let keep = match before_v {
+                Some((bx, by)) if speed > 0.0 && bx.hypot(by) > 0.0 => {
+                    let before = bx.hypot(by);
+                    let cos = (vx * bx + vy * by) / (speed * before);
+                    (speed / before).min(1.0) * ((cos - TURN_COS) / (1.0 - TURN_COS)).clamp(0.0, 1.0)
+                }
+                _ => 0.0,
+            };
+            let (mut dx, mut dy) = (vx * PREDICT_US * keep, vy * PREDICT_US * keep);
+            let len = dx.hypot(dy);
+            if len > PREDICT_MAX {
+                (dx, dy) = (dx * PREDICT_MAX / len, dy * PREDICT_MAX / len);
+            }
+            // Eased from the last reach: the samples' speed is noisy.
+            let (rx, ry) = self.reach.get();
+            let (dx, dy) = (rx + (dx - rx) * REACH_EASE, ry + (dy - ry) * REACH_EASE);
+            self.reach.set((dx, dy));
+            if dx.hypot(dy) > PREDICT_MIN {
+                pts.push((at.0 + dx, at.1 + dy, at.2 * TAPER));
+            }
+        }
+        let wmax = pts.iter().map(|p| p.2).fold(0.0, f32::max);
+        let pad = wmax / 2.0 + 2.0;
+        let (bx, by) = (pts.iter().map(|p| p.0).fold(f32::MAX, f32::min) - pad, pts.iter().map(|p| p.1).fold(f32::MAX, f32::min) - pad);
+        let (ex, ey) = (pts.iter().map(|p| p.0).fold(f32::MIN, f32::max) + pad, pts.iter().map(|p| p.1).fold(f32::MIN, f32::max) + pad);
+        let (w, h) = ((ex - bx).ceil().max(1.0) as u32, (ey - by).ceil().max(1.0) as u32);
+        let mut pm = tiny_skia::Pixmap::new(w, h)?;
+        let mut paint = tiny_skia::Paint::default();
+        paint.anti_alias = true;
+        // To the pen, whole; the guess ahead of it fades out and thins, so
+        // its small jumps hardly show.
+        let mut pieces = vec![(pts[0], pts[1], 1.0f32)];
+        if let Some(&end) = pts.get(2) {
+            let k = FADE_PIECES as f32;
+            for i in 0..FADE_PIECES {
+                let (t0, t1) = (i as f32 / k, (i + 1) as f32 / k);
+                let lerp = |t: f32| (at.0 + (end.0 - at.0) * t, at.1 + (end.1 - at.1) * t, at.2 + (end.2 - at.2) * t);
+                pieces.push((lerp(t0), lerp(t1), (1.0 - (t0 + t1) / 2.0) * FADE_FROM));
+            }
+        }
+        for ((x0, y0, w0), (x1, y1, w1), a) in pieces {
+            paint.set_color_rgba8(INK[0], INK[1], INK[2], (INK[3] as f32 * a) as u8);
+            let mut pb = tiny_skia::PathBuilder::new();
+            pb.move_to(x0 - bx, y0 - by);
+            pb.line_to(x1 - bx + if x0 == x1 && y0 == y1 { 0.01 } else { 0.0 }, y1 - by);
+            let Some(path) = pb.finish() else { continue };
+            // The fading pieces end flat: round ends would overlap, darker
+            // at each joint.
+            let cap = if a < 1.0 { tiny_skia::LineCap::Butt } else { tiny_skia::LineCap::Round };
+            let stroke = tiny_skia::Stroke { width: (w0 + w1) / 2.0, line_cap: cap, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
+            pm.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+        }
+        Some((bx, by, MemoryRenderBuffer::from_slice(pm.data(), Fourcc::Abgr8888, (w as i32, h as i32), SCALE, Transform::Normal, None)))
     }
 
     /// The line's width at a pressure (physical px).
@@ -321,12 +429,15 @@ impl PenSheet {
         if erase { ERASER } else { THIN + (THICK - THIN) * pressure.clamp(0.0, 1.0) as f32 }
     }
 
-    /// The pen moved: the stroke goes on as a curve - a quadratic through
-    /// the midpoints of the samples, each sample its control point - its
-    /// width eased toward the pressure's, so neither the line nor its width
-    /// steps at the samples. A sample too near the last is left out (the
-    /// tip's tremble).
-    pub fn pen_motion(&mut self, pos: Point<f64, Logical>, pressure: f64, eraser_end: bool) {
+    /// The pen moved: the stroke goes on as a curve through the pen's own
+    /// samples (Catmull-Rom: each piece from one sample to the next, shaped
+    /// by those either side), its width eased toward the pressure's, so
+    /// neither the line nor its width steps at the samples. A piece is drawn
+    /// once the sample after it is known; the tip covers the rest, to the
+    /// pen, and since both pass through the same samples the tip never
+    /// shows a corner the line then cuts. A sample too near the last is left
+    /// out (the tip's tremble).
+    pub fn pen_motion(&mut self, pos: Point<f64, Logical>, pressure: f64, eraser_end: bool, time_us: u64) {
         let Some((mut pts, erase)) = self.stroke.take() else { return };
         let (x, y) = self.local(pos);
         let &(lx, ly, lw) = pts.last().expect("a point");
@@ -337,16 +448,20 @@ impl PenSheet {
         let w = lw + (Self::width(pressure, erase || eraser_end) - lw) * WIDTH_EASE;
         pts.push((x, y, w));
         let n = pts.len();
-        let mid = |a: (f32, f32, f32), b: (f32, f32, f32)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.2 + b.2) / 2.0);
-        let line = if n == 2 {
-            // The start: straight to the first midpoint.
-            vec![pts[0], mid(pts[0], pts[1])]
-        } else {
-            let (a, b, c) = (pts[n - 3], pts[n - 2], pts[n - 1]);
-            curve(mid(a, b), b, mid(b, c))
-        };
-        self.ink(&line, erase);
-        if pts.len() > 3 {
+        // The piece from the last-but-one sample to the one before it: the
+        // first stroke's start stands in for the sample before it.
+        if n >= 3 {
+            let p0 = if n >= 4 { pts[n - 4] } else { pts[n - 3] };
+            let line = spline(p0, pts[n - 3], pts[n - 2], pts[n - 1]);
+            self.ink(&line, erase);
+        }
+        // Its speed from the last ~25 ms of samples: the tip ahead.
+        self.recent.push_back((x, y, time_us));
+        while self.recent.len() > 2 && self.recent.front().is_some_and(|f| time_us.saturating_sub(f.2) > SPEED_SPAN_US) {
+            self.recent.pop_front();
+        }
+        self.tip = if erase { None } else { self.tip_ahead(pts[n - 2], (x, y, w)) };
+        if pts.len() > 4 {
             pts.remove(0);
         }
         self.stroke = Some((pts, erase));
@@ -355,6 +470,8 @@ impl PenSheet {
     /// The tip lifted: the stroke's end, from the last midpoint to the last
     /// sample, tapering out.
     pub fn pen_up(&mut self) {
+        self.tip = None;
+        self.recent.clear();
         let (events, pieces, ns, worst, at) = self.cost;
         if at > 0 {
             let long = (hybris_hwc::now_ns() - at) as f64 / 1e9;
@@ -363,9 +480,10 @@ impl PenSheet {
         if let Some((pts, erase)) = self.stroke.take() {
             let n = pts.len();
             if n >= 2 {
-                let (a, b) = (pts[n - 2], pts[n - 1]);
-                let m = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.2 + b.2) / 2.0);
-                self.ink(&[m, (b.0, b.1, b.2 * TAPER)], erase);
+                // The last piece, to the last sample, tapering out.
+                let p0 = if n >= 3 { pts[n - 3] } else { pts[n - 2] };
+                let (p1, p2) = (pts[n - 2], pts[n - 1]);
+                self.ink(&spline(p0, p1, (p2.0, p2.1, p2.2 * TAPER), (p2.0, p2.1, p2.2 * TAPER)), erase);
             }
         }
     }
@@ -381,11 +499,11 @@ impl PenSheet {
         self.pen_down(at(0.0), 0.0, false);
         for i in 1..=200 {
             let k = i as f64 / 200.0;
-            self.pen_motion(at(k), k, false);
+            self.pen_motion(at(k), k, false, i as u64 * 4000);
         }
         self.pen_up();
         self.pen_down(at(0.7) + Point::from((0.0, -150.0)), 1.0, true);
-        self.pen_motion(at(0.7) + Point::from((0.0, 150.0)), 1.0, true);
+        self.pen_motion(at(0.7) + Point::from((0.0, 150.0)), 1.0, true, 900_000);
         self.pen_up();
     }
 
@@ -514,23 +632,28 @@ impl PenSheet {
             let bg = if lit { self.button_on.get() } else { self.button_bg.clone() };
             put(&mut out, &bg, r.loc.x, r.loc.y);
         }
+        // The stroke's tip ahead of the pen, over the sheet.
+        if let Some((tx, ty, tip)) = &self.tip {
+            put(&mut out, tip, panel.loc.x as f64 + *tx as f64 / s, *ty as f64 / s);
+        }
         put(&mut out, canvas, panel.loc.x as f64, 0.0);
         out
     }
 }
 
-/// A quadratic from `a` to `c` with `b` its control, as short pieces, the
-/// width going from `a`'s to `c`'s.
-fn curve(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32)) -> Vec<(f32, f32, f32)> {
-    let len = (b.0 - a.0).hypot(b.1 - a.1) + (c.0 - b.0).hypot(c.1 - b.1);
+/// A Catmull-Rom piece from `p1` to `p2`, shaped by `p0` before and `p3`
+/// after, as short pieces, the width going from `p1`'s to `p2`'s.
+fn spline(p0: (f32, f32, f32), p1: (f32, f32, f32), p2: (f32, f32, f32), p3: (f32, f32, f32)) -> Vec<(f32, f32, f32)> {
+    let len = (p2.0 - p1.0).hypot(p2.1 - p1.1);
     let n = ((len / PIECE).ceil() as usize).clamp(1, 64);
+    let at = |a: f32, b: f32, c: f32, d: f32, t: f32| {
+        let (t2, t3) = (t * t, t * t * t);
+        0.5 * (2.0 * b + (c - a) * t + (2.0 * a - 5.0 * b + 4.0 * c - d) * t2 + (3.0 * b - a - 3.0 * c + d) * t3)
+    };
     (0..=n)
         .map(|i| {
             let t = i as f32 / n as f32;
-            let u = 1.0 - t;
-            let x = u * u * a.0 + 2.0 * u * t * b.0 + t * t * c.0;
-            let y = u * u * a.1 + 2.0 * u * t * b.1 + t * t * c.1;
-            (x, y, a.2 + (c.2 - a.2) * t)
+            (at(p0.0, p1.0, p2.0, p3.0, t), at(p0.1, p1.1, p2.1, p3.1, t), p1.2 + (p2.2 - p1.2) * t)
         })
         .collect()
 }
