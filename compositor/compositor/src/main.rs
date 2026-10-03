@@ -118,6 +118,9 @@ pub struct Data {
 /// takes in whatever came during the frame. Too late, and it misses the vsync
 /// and shows a frame later: a stutter. `LATE_MARGIN_MS` sets the margin
 /// (default 4), `LATE=0` draws at the vsync as before.
+/// The pen's frames' margin before the vsync, over their estimate.
+const PEN_MARGIN_NS: u64 = 3_000_000;
+
 struct Pacing {
     late: bool,
     margin_ns: u64,
@@ -127,6 +130,15 @@ struct Pacing {
     /// redraws the screen after a rest costs much more than those before,
     /// and drawn by the average alone it misses its vsync.
     peak_ns: f64,
+    /// The pen drawing on its sheet: the same two, learnt from its frames
+    /// alone - cheap ones, a stroke's piece and its upload - the peak
+    /// forgotten quickly, so the frame is drawn as late as they allow and a
+    /// stroke shows sooner (the usual budget, set by the heaviest frames of
+    /// the last seconds, drew right after the vsync).
+    pen_render_ns: f64,
+    pen_peak_ns: f64,
+    /// Whether the frame being drawn is the pen's.
+    pen: bool,
     /// The vsync the frame being drawn aims for.
     target_ns: u64,
     /// When the last frame went to hwcomposer.
@@ -166,7 +178,7 @@ impl Pacing {
     fn from_env() -> Pacing {
         let late = std::env::var("LATE").map(|v| v != "0").unwrap_or(true);
         let margin_ms: f64 = std::env::var("LATE_MARGIN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
-        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, peak_ns: 0.0, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
+        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, peak_ns: 0.0, pen_render_ns: 6e6, pen_peak_ns: 0.0, pen: false, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
             callbacks: match std::env::var("CALLBACKS").as_deref() {
                 Ok("vsync") => Callbacks::Vsync,
                 Ok("after") => Callbacks::After,
@@ -178,6 +190,9 @@ impl Pacing {
     }
 
     fn budget_ns(&self) -> u64 {
+        if self.pen {
+            return (self.pen_render_ns * 1.25).max(self.pen_peak_ns * 1.05) as u64 + PEN_MARGIN_NS;
+        }
         (self.render_ns * 1.5).max(self.peak_ns * 1.1) as u64 + self.margin_ns
     }
 
@@ -210,6 +225,9 @@ struct Report {
     /// From a finger's move on the shade (the kernel's time) to the frame
     /// showing it.
     shade_ms: Vec<f64>,
+    /// The pen on the sheet: its move to the screen, and to the compositor.
+    pen_ms: Vec<f64>,
+    pen_in_ms: Vec<f64>,
     /// The same, from when the move reached the compositor.
     shade_loop_ms: Vec<f64>,
     /// Frames by buffer age.
@@ -273,6 +291,7 @@ impl Data {
             self.draw_if_needed();
             return;
         }
+        self.pacing.pen = self.state.pen_drawing;
         let draw_at = self.pacing.target_ns.saturating_sub(self.pacing.budget_ns());
         let now = hybris_hwc::now_ns();
         if draw_at <= now {
@@ -676,6 +695,11 @@ impl Data {
                 // The peak: up at once, down by 0.5 % a frame (half in some
                 // 2.3 s of motion), never past the period.
                 self.pacing.peak_ns = (self.pacing.peak_ns * 0.995).max(took as f64).min(self.screen.vsync_period_ns as f64 * 0.8);
+                if self.state.pen_drawing {
+                    let weight = if took as f64 > self.pacing.pen_render_ns { 0.5 } else { 0.15 };
+                    self.pacing.pen_render_ns += (took as f64 - self.pacing.pen_render_ns) * weight;
+                    self.pacing.pen_peak_ns = (self.pacing.pen_peak_ns * 0.96).max(took as f64).min(self.screen.vsync_period_ns as f64 * 0.8);
+                }
             }
         }
         self.report.render_max_ms = self.report.render_max_ms.max(took as f64 / 1e6);
@@ -709,6 +733,13 @@ impl Data {
         if cost.swapped {
             let feedback = self.screen.take_feedback(&self.state);
             self.feedback.push((shown_at, feedback));
+        }
+        if let Some((moved_us, reached_ns)) = self.state.pen_moved.take() {
+            let moved_ns = moved_us * 1000;
+            if moved_ns <= reached_ns {
+                self.report.pen_ms.push(shown_at.saturating_sub(moved_ns) as f64 / 1e6);
+                self.report.pen_in_ms.push((reached_ns - moved_ns) as f64 / 1e6);
+            }
         }
         if let Some(touched) = self.state.touch_answered.take() {
             self.report.touch_to_screen_ms.push(shown_at.saturating_sub(touched) as f64 / 1e6);
@@ -852,11 +883,11 @@ impl Data {
             format!("{} mean {:.1} max {:.1} ms", lat.len(), mean, max)
         };
         tracing::info!(
-            "drawn {:3} of {:3}  missed {:2}  commits {:3} (at once {})  draw {} (elements {}) swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  GPU boost {:.0}%  errors {}",
+            "drawn {:3} of {:3}  missed {:2}  commits {:3} (at once {})  draw {} (elements {}) swap {} (present {}, fast {}) ms  redrawn {}%  no damage {}  budget {:4.1}  touches {}  touch->screen {}  shade->screen {} (from the loop {}) ms  pen->screen {} (to here {}) ms  GPU boost {:.0}%  errors {}",
             r.drawn, v - r.vsyncs_at_last, r.missed, std::mem::take(&mut self.state.commits), r.asap,
             mean_max(&r.draw_ms), mean_max(&r.elements_ms), mean_max(&r.swap_ms), mean_max(&r.present_ms), st.fast, mean_max(&r.damaged_share),
             r.no_damage, self.pacing.budget_ns() as f64 / 1e6, self.state.touches, lat_text,
-            mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms),
+            mean_max(&r.shade_ms), mean_max(&r.shade_loop_ms), mean_max(&r.pen_ms), mean_max(&r.pen_in_ms),
             self.state.boost.take_share(hybris_hwc::now_ns(), 1_000_000_000), st.errors
         );
         self.report.vsyncs_at_last = v;

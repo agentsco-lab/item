@@ -260,6 +260,11 @@ impl State {
                     let pos = event.position_transformed(LAYOUT.into());
                     let eraser = TabletToolEvent::<LibinputInputBackend>::tool(&event).tool_type == TabletToolType::Eraser;
                     self.pen.pen_motion(pos, TabletToolEvent::<LibinputInputBackend>::pressure(&event), eraser);
+                    // The first move not yet on screen: its kernel time and
+                    // when it reached here, for the report's pen->screen.
+                    if self.pen_moved.is_none() {
+                        self.pen_moved = Some((event.time(), hybris_hwc::now_ns()));
+                    }
                     self.boost.kick(hybris_hwc::now_ns());
                     self.needs_redraw = true;
                     return;

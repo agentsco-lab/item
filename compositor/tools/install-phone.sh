@@ -21,6 +21,7 @@ SSH="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o LogLevel
 
 aarch64-linux-gnu-strip -o $STAGE/item-compositor $R/item-compositor
 aarch64-linux-gnu-strip -o $STAGE/item-face $R/item-face
+aarch64-linux-gnu-strip -o $STAGE/pen-split $R/pen-split
 cp $HERE/tools/camera-warm.c $HERE/session/item-session $HERE/session/item-switch $HERE/session/item-composer-fresh \
    $HERE/session/item.session $HERE/session/item-portals.conf $HERE/session/org.sfduo.Face.conf \
    $HERE/session/item.service $HERE/session/item-fallback.service $HERE/session/item-face.service $STAGE/
@@ -41,6 +42,18 @@ put 755 item-compositor /usr/libexec/item/item-compositor
 put 755 item-session /usr/libexec/item/item-session
 put 755 item-composer-fresh /usr/libexec/item/item-composer-fresh
 put 755 item-face /usr/libexec/item/item-face
+put 755 pen-split /usr/libexec/item/pen-split
+# The digitizer split by item's pen-split (Rust) in place of the port's
+# Python sfduo-pen-split - same devices and socket - at a real-time
+# priority: every finger and pen event passes through it.
+cat > pen-split.conf <<'CONF'
+[Service]
+ExecStart=
+ExecStart=/usr/libexec/item/pen-split
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=50
+CONF
+put 644 pen-split.conf /etc/systemd/system/sfduo-pen-split.service.d/50-item-rust.conf
 gcc -O2 -o camera-warm camera-warm.c -lpthread -l:libgstreamer-1.0.so.0 -l:libgobject-2.0.so.0
 put 755 camera-warm /usr/libexec/item/camera-warm
 for m in *.onnx; do put 644 $m /usr/share/item/cvid/$m; done

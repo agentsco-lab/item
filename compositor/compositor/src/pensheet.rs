@@ -35,6 +35,14 @@ const INK: [u8; 4] = [28, 28, 32, 255];
 const THIN: f32 = 2.0;
 const THICK: f32 = 8.0;
 const ERASER: f32 = 40.0;
+/// A sample nearer the last than this (physical px) is left out.
+const MIN_STEP: f32 = 1.5;
+/// How far the width goes toward each new sample's (0-1).
+const WIDTH_EASE: f32 = 0.35;
+/// The stroke's ends: this much of its width.
+const TAPER: f32 = 0.55;
+/// A curve is drawn in pieces about this long (physical px).
+const PIECE: f32 = 2.5;
 /// The toolbar's buttons, logical px from the panel's top right.
 const BUTTON: f64 = 44.0;
 const BUTTON_GAP: f64 = 10.0;
@@ -71,7 +79,12 @@ pub struct PenSheet {
     canvas: Option<MemoryRenderBuffer>,
     /// The last point of the stroke being drawn (physical px on the sheet),
     /// and its width.
-    stroke: Option<(f32, f32, f32)>,
+    /// The stroke under way: its last points (x, y, width; physical px),
+    /// the newest last, and whether it erases.
+    stroke: Option<(Vec<(f32, f32, f32)>, bool)>,
+    /// The stroke's cost, for the log: events, pieces drawn, time drawing,
+    /// the longest event, when it began.
+    cost: (u32, u32, u64, u64, u64),
     /// The toolbar's eraser picked.
     eraser: bool,
     /// The pen's barrel button held.
@@ -93,6 +106,7 @@ impl PenSheet {
             run: None,
             canvas: None,
             stroke: None,
+            cost: (0, 0, 0, 0, 0),
             eraser: false,
             barrel: false,
             pressed: None,
@@ -130,6 +144,7 @@ impl PenSheet {
             self.canvas();
         }
         self.p = if out { 1.0 } else { 0.0 };
+        tell_pen_split(out);
     }
 
     pub fn out(&self) -> bool {
@@ -286,7 +301,8 @@ impl PenSheet {
         self.barrel = held;
     }
 
-    /// The pen's tip down: a toolbar button, or a stroke begun.
+    /// The pen's tip down: a toolbar button, or a stroke begun - a dot, a
+    /// little thinner than the line will be (the tip tapers in).
     pub fn pen_down(&mut self, pos: Point<f64, Logical>, pressure: f64, eraser_end: bool) {
         if let Some(b) = Self::button_at(pos) {
             self.button(b);
@@ -294,24 +310,64 @@ impl PenSheet {
         }
         let (x, y) = self.local(pos);
         let erase = eraser_end || self.barrel || self.eraser;
-        let w = if erase { ERASER } else { THIN + (THICK - THIN) * pressure as f32 };
-        self.stroke = Some((x, y, w));
-        self.segment(x, y, x, y, w, erase);
+        let w = Self::width(pressure, erase);
+        self.cost = (0, 0, 0, 0, hybris_hwc::now_ns());
+        self.ink(&[(x, y, w * TAPER), (x, y, w * TAPER)], erase);
+        self.stroke = Some((vec![(x, y, w * TAPER)], erase));
     }
 
+    /// The line's width at a pressure (physical px).
+    fn width(pressure: f64, erase: bool) -> f32 {
+        if erase { ERASER } else { THIN + (THICK - THIN) * pressure.clamp(0.0, 1.0) as f32 }
+    }
+
+    /// The pen moved: the stroke goes on as a curve - a quadratic through
+    /// the midpoints of the samples, each sample its control point - its
+    /// width eased toward the pressure's, so neither the line nor its width
+    /// steps at the samples. A sample too near the last is left out (the
+    /// tip's tremble).
     pub fn pen_motion(&mut self, pos: Point<f64, Logical>, pressure: f64, eraser_end: bool) {
-        let Some((lx, ly, lw)) = self.stroke else { return };
+        let Some((mut pts, erase)) = self.stroke.take() else { return };
         let (x, y) = self.local(pos);
-        let erase = eraser_end || self.barrel || self.eraser;
-        let w = if erase { ERASER } else { THIN + (THICK - THIN) * pressure as f32 };
-        // The width eased from the last point's, so a line does not step.
-        let w = lw * 0.5 + w * 0.5;
-        self.segment(lx, ly, x, y, w, erase);
-        self.stroke = Some((x, y, w));
+        let &(lx, ly, lw) = pts.last().expect("a point");
+        if (x - lx).hypot(y - ly) < MIN_STEP {
+            self.stroke = Some((pts, erase));
+            return;
+        }
+        let w = lw + (Self::width(pressure, erase || eraser_end) - lw) * WIDTH_EASE;
+        pts.push((x, y, w));
+        let n = pts.len();
+        let mid = |a: (f32, f32, f32), b: (f32, f32, f32)| ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.2 + b.2) / 2.0);
+        let line = if n == 2 {
+            // The start: straight to the first midpoint.
+            vec![pts[0], mid(pts[0], pts[1])]
+        } else {
+            let (a, b, c) = (pts[n - 3], pts[n - 2], pts[n - 1]);
+            curve(mid(a, b), b, mid(b, c))
+        };
+        self.ink(&line, erase);
+        if pts.len() > 3 {
+            pts.remove(0);
+        }
+        self.stroke = Some((pts, erase));
     }
 
+    /// The tip lifted: the stroke's end, from the last midpoint to the last
+    /// sample, tapering out.
     pub fn pen_up(&mut self) {
-        self.stroke = None;
+        let (events, pieces, ns, worst, at) = self.cost;
+        if at > 0 {
+            let long = (hybris_hwc::now_ns() - at) as f64 / 1e9;
+            tracing::info!("pen: a stroke: {events} events ({:.0}/s), {pieces} pieces, drawing {:.1} ms in all, {:.2} ms the longest", events as f64 / long.max(1e-3), ns as f64 / 1e6, worst as f64 / 1e6);
+        }
+        if let Some((pts, erase)) = self.stroke.take() {
+            let n = pts.len();
+            if n >= 2 {
+                let (a, b) = (pts[n - 2], pts[n - 1]);
+                let m = ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0, (a.2 + b.2) / 2.0);
+                self.ink(&[m, (b.0, b.1, b.2 * TAPER)], erase);
+            }
+        }
     }
 
     /// For tests: a wave across the sheet, its pressure rising from 0 to 1,
@@ -338,29 +394,50 @@ impl PenSheet {
         (((pos.x - p.loc.x as f64) * SCALE as f64) as f32, (pos.y * SCALE as f64) as f32)
     }
 
-    /// One segment of a stroke into the sheet's memory; only its bounds are
-    /// damage.
-    fn segment(&mut self, x0: f32, y0: f32, x1: f32, y1: f32, width: f32, erase: bool) {
+    /// A run of a stroke into the sheet's memory - short pieces, each with
+    /// its own width between its ends', round-capped so they join; only
+    /// their bounds are damage.
+    fn ink(&mut self, pts: &[(f32, f32, f32)], erase: bool) {
+        if pts.len() < 2 {
+            return;
+        }
+        let t = hybris_hwc::now_ns();
+        self.ink_now(pts, erase);
+        let d = hybris_hwc::now_ns() - t;
+        let (e, p, ns, worst, at) = self.cost;
+        self.cost = (e + 1, p + pts.len() as u32 - 1, ns + d, worst.max(d), at);
+    }
+
+    fn ink_now(&mut self, pts: &[(f32, f32, f32)], erase: bool) {
         let p = layout::panels()[1];
         let (w, h) = ((p.size.w * SCALE) as u32, (p.size.h * SCALE) as u32);
         let canvas = self.canvas();
         let mut ctx = canvas.render();
         let _ = ctx.draw(|mem| {
             let Some(mut pm) = tiny_skia::PixmapMut::from_bytes(mem, w, h) else { return Ok::<_, ()>(vec![]) };
-            let mut pb = tiny_skia::PathBuilder::new();
-            pb.move_to(x0, y0);
-            // A dot for a tap: a zero-length line with round caps.
-            pb.line_to(x1 + if x0 == x1 && y0 == y1 { 0.01 } else { 0.0 }, y1);
-            let Some(path) = pb.finish() else { return Ok(vec![]) };
             let mut paint = tiny_skia::Paint::default();
             paint.anti_alias = true;
             let c = if erase { PAPER } else { INK };
             paint.set_color_rgba8(c[0], c[1], c[2], c[3]);
-            let stroke = tiny_skia::Stroke { width, line_cap: tiny_skia::LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
-            pm.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
-            let r = width / 2.0 + 2.0;
-            let (ax, ay) = ((x0.min(x1) - r).max(0.0) as i32, (y0.min(y1) - r).max(0.0) as i32);
-            let (bx, by) = ((x0.max(x1) + r).min(w as f32) as i32, (y0.max(y1) + r).min(h as f32) as i32);
+            let (mut ax, mut ay, mut bx, mut by) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for pair in pts.windows(2) {
+                let ((x0, y0, w0), (x1, y1, w1)) = (pair[0], pair[1]);
+                let mut pb = tiny_skia::PathBuilder::new();
+                pb.move_to(x0, y0);
+                // A dot for a tap: a zero-length line with round caps.
+                pb.line_to(x1 + if x0 == x1 && y0 == y1 { 0.01 } else { 0.0 }, y1);
+                let Some(path) = pb.finish() else { continue };
+                let width = (w0 + w1) / 2.0;
+                let stroke = tiny_skia::Stroke { width, line_cap: tiny_skia::LineCap::Round, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
+                pm.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+                let r = width / 2.0 + 2.0;
+                (ax, ay, bx, by) = (ax.min(x0.min(x1) - r), ay.min(y0.min(y1) - r), bx.max(x0.max(x1) + r), by.max(y0.max(y1) + r));
+            }
+            if ax > bx {
+                return Ok(vec![]);
+            }
+            let (ax, ay) = (ax.max(0.0) as i32, ay.max(0.0) as i32);
+            let (bx, by) = (bx.min(w as f32) as i32, by.min(h as f32) as i32);
             Ok(vec![Rectangle::<i32, Buffer>::new((ax, ay).into(), ((bx - ax).max(1), (by - ay).max(1)).into())])
         });
     }
@@ -439,5 +516,35 @@ impl PenSheet {
         }
         put(&mut out, canvas, panel.loc.x as f64, 0.0);
         out
+    }
+}
+
+/// A quadratic from `a` to `c` with `b` its control, as short pieces, the
+/// width going from `a`'s to `c`'s.
+fn curve(a: (f32, f32, f32), b: (f32, f32, f32), c: (f32, f32, f32)) -> Vec<(f32, f32, f32)> {
+    let len = (b.0 - a.0).hypot(b.1 - a.1) + (c.0 - b.0).hypot(c.1 - b.1);
+    let n = ((len / PIECE).ceil() as usize).clamp(1, 64);
+    (0..=n)
+        .map(|i| {
+            let t = i as f32 / n as f32;
+            let u = 1.0 - t;
+            let x = u * u * a.0 + 2.0 * u * t * b.0 + t * t * c.0;
+            let y = u * u * a.1 + 2.0 * u * t * b.1 + t * t * c.1;
+            (x, y, a.2 + (c.2 - a.2) * t)
+        })
+        .collect()
+}
+
+/// The port's sfduo-pen-split, which owns the digitizer, told whether the
+/// sheet is out: only then does it give the pen over the sheet as a tablet
+/// tool (pressure, the eraser end); elsewhere the pen stays one more finger,
+/// so the shell's swipes take it. As sfduo-pen-screen told it under phosh;
+/// never told, it kept the pen a finger and the sheet did not draw.
+fn tell_pen_split(out: bool) {
+    let sock = std::os::unix::net::UnixDatagram::unbound();
+    if let Ok(s) = sock {
+        if s.send_to(if out { b"1" } else { b"0" }, "/run/sfduo-pen.sock").is_err() {
+            tracing::debug!("pen: sfduo-pen-split not listening");
+        }
     }
 }

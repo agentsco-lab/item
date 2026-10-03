@@ -1,0 +1,9 @@
+[package]
+name = "pen-split"
+version = "0.1.0"
+edition = "2021"
+description = "The Duo's digitizer split into fingers and a pen tablet (sfduo-pen-split, in Rust)"
+
+[dependencies]
+evdev = "0.13"
+libc = "0.2"
