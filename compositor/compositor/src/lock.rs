@@ -708,7 +708,8 @@ impl Lock {
             self.greeting.set(regular, &greeting);
         }
         if self.notice_until == 0 {
-            self.hint.set(regular, &self.hint_base);
+            let shown = self.hint_now();
+            self.hint.set(regular, &shown);
         }
         true
     }
@@ -1110,7 +1111,7 @@ impl Lock {
         // Talking: a passing notice, else the hint, else after a boot why
         // the PIN.
         let talk_y = (left.size.h - TALK_FROM_FOOT) as f64;
-        if self.notice_until != 0 || !self.hint_base.is_empty() {
+        if self.notice_until != 0 || !self.hint_base.is_empty() || self.face_ok {
             put(&mut out, &self.hint.buffer, cx(&self.hint, left), talk_y, left_dx, 1.0);
         } else if self.after_boot {
             put(&mut out, &self.status.buffer, cx(&self.status, left), talk_y, left_dx, 1.0);
