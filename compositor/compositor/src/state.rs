@@ -357,6 +357,10 @@ impl State {
         if let Some(p) = self.layers.keyboard_panel() {
             taken[p] = true;
         }
+        // The pen's sheet spread over the left panel too.
+        if self.pen.spread() {
+            taken[0] = true;
+        }
         taken
     }
 

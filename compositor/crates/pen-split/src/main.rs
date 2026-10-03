@@ -16,7 +16,7 @@
 //!
 //! The pen is a tablet tool only where it draws - over the pen's sheet while
 //! it is out, which the sheet says with a datagram to /run/sfduo-pen.sock
-//! ("1" out, "0" not); everywhere else it is one more finger, so the shell's
+//! ("1" out over the right panel, "2" spread over both, "0" not); everywhere else it is one more finger, so the shell's
 //! swipes take it, and its hovering is nothing. Which one a stroke is, is
 //! decided as the pen comes near and kept until it leaves. If this stops,
 //! the grab goes with it and the original node reaches the compositor again.
@@ -67,6 +67,8 @@ struct Splitter {
     touch: VirtualDevice,
     pen: VirtualDevice,
     sheet_out: bool,
+    /// The sheet over both panels: the pen is its anywhere.
+    sheet_spread: bool,
     sheet_x: i32,
     pen_route: Option<Route>,
     /// The pen, as a finger: down.
@@ -182,7 +184,7 @@ impl Splitter {
         let get = |c: Abs| st.get(&c.0).copied();
         let present = get(Abs::ABS_MT_TRACKING_ID) == Some(PEN_ID);
         if present && self.pen_route.is_none() {
-            let over_sheet = get(Abs::ABS_MT_POSITION_X).unwrap_or(0) >= self.sheet_x;
+            let over_sheet = self.sheet_spread || get(Abs::ABS_MT_POSITION_X).unwrap_or(0) >= self.sheet_x;
             self.pen_route = Some(if self.sheet_out && over_sheet { Route::Tablet } else { Route::Touch });
         }
         if self.pen_route == Some(Route::Touch) || (!present && self.pen_touching) {
@@ -395,6 +397,7 @@ fn run() -> i32 {
         touch,
         pen,
         sheet_out: false,
+        sheet_spread: false,
         sheet_x: (max_x as f64 * SHEET_FROM) as i32,
         pen_route: None,
         pen_touching: false,
@@ -436,7 +439,9 @@ fn run() -> i32 {
                     s.bench = Some((now, now + Duration::from_secs_f64(secs), now));
                     log(&format!("bench: {secs} s"));
                 } else {
-                    s.sheet_out = said == "1";
+                    // "0" in, "1" out over the right panel, "2" over both.
+                    s.sheet_out = said == "1" || said == "2";
+                    s.sheet_spread = said == "2";
                 }
             }
         }
