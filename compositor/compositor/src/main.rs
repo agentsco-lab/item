@@ -22,6 +22,7 @@
 mod apps;
 mod back;
 mod boost;
+mod mirror;
 mod clock;
 mod curtain;
 mod dock;
@@ -327,6 +328,11 @@ impl Data {
     /// draw anyway.
     fn on_watchdog(&mut self) {
         let now = hybris_hwc::now_ns();
+        // The mirror: someone just connected, or a change it was owed.
+        if self.screen.mirror.wants_frame(now) {
+            self.screen.mirror_now = true;
+            self.state.needs_redraw = true;
+        }
         // The idle delay as the settings have it, none while something
         // holds the screen on; dimmed before it goes dark.
         let held = self.state.idle_held();

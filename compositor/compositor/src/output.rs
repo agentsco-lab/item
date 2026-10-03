@@ -109,6 +109,11 @@ pub struct Screen {
     frames_drawn: u64,
     /// A screenshot asked for: the next frame is drawn whole and saved here.
     pub shot: Option<String>,
+    /// The live mirror (mirror.rs), its small texture, and a frame wanted
+    /// for it though nothing changed.
+    pub mirror: crate::mirror::Mirror,
+    mirror_tex: Option<smithay::backend::renderer::gles::GlesTexture>,
+    pub mirror_now: bool,
     /// Frames to draw whole and present whatever changed: after the display
     /// is lit again, as at start (hwcomposer does not show the first).
     pub reprime: u32,
@@ -233,7 +238,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -656,7 +661,7 @@ impl Screen {
             let damaged: i64 = result.damage.map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum()).unwrap_or(0);
             // hwcomposer's buffers still need a frame each after a start or a
             // power-on, changed or not.
-            if damaged == 0 && primed && self.shot.is_none() && !changed_night {
+            if damaged == 0 && primed && self.shot.is_none() && !changed_night && !self.mirror_now {
                 return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age, damaged_px: 0, swapped: false };
             }
             // Screenshots come from our buffer, copied before the swap (a read
@@ -666,6 +671,8 @@ impl Screen {
             let tr = hybris_hwc::now_ns();
             let cr = cpu_ns();
             let shot = Self::take_shot(&mut self.renderer, &mut self.shot, &mut self.frames_left, self.frames_drawn, size, &target, damaged);
+            self.mirror_now = false;
+            let mirrored = if self.mirror.due(hybris_hwc::now_ns()) { Self::take_mirror(&mut self.renderer, &mut self.mirror_tex, &target, size) } else { None };
             drop(target);
             let whole = smithay::utils::Rectangle::from_size((size.w, size.h).into());
             match (night, &self.night_program) {
@@ -696,7 +703,7 @@ impl Screen {
                     t0 as f64 / 1e9, elements.len(), ms(t0, tb), ms(c0, cb), ms(tb, tbound), ms(cb, cbound), ms(tbound, tr), ms(cbound, cr), ms(tr, now), ms(cr, cnow), damaged
                 );
             }
-            (damaged.max(1), age, shot)
+            (damaged.max(1), age, (shot, mirrored))
         } else {
             // CANVAS=0: every frame drawn whole into the window's buffer, as
             // before step 22. The damage tracker only says whether anything
@@ -715,7 +722,7 @@ impl Screen {
                 .expect("render_output");
             let damaged: i64 = result.damage.map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum()).unwrap_or(0);
             let shot = Self::take_shot(&mut self.renderer, &mut self.shot, &mut self.frames_left, self.frames_drawn, size, &target, damaged);
-            (damaged, 0, shot)
+            (damaged, 0, (shot, None))
         };
         let t1 = hybris_hwc::now_ns();
         let swapped = damaged_px > 0;
@@ -735,6 +742,14 @@ impl Screen {
             ids.dedup();
             let names: String = order.iter().map(|b| (b'A' + ids.iter().position(|x| x == b).unwrap() as u8) as char).collect();
             tracing::info!("buffers: frame {} age {age}: {names} ({} seen)", self.frames_drawn, ids.len());
+        }
+        let (shot, mirrored) = shot;
+        // The mirror's frame, read now the swap is done.
+        if let Some((mapping, w, h)) = mirrored {
+            match self.renderer.map_texture(&mapping) {
+                Ok(bytes) => self.mirror.send(w, h, bytes.to_vec()),
+                Err(e) => tracing::warn!("mirror: {e}"),
+            }
         }
         if let Some((path, mapping, size)) = shot {
             let saved = self
@@ -756,6 +771,23 @@ impl Screen {
             damaged_px,
             swapped,
         }
+    }
+
+    /// The frame shrunk for the mirror by the GPU and copied out (read after
+    /// the swap): its mapping and size.
+    fn take_mirror(renderer: &mut GlesRenderer, tex: &mut Option<smithay::backend::renderer::gles::GlesTexture>, target: &smithay::backend::renderer::gles::GlesTarget<'_>, size: smithay::utils::Size<i32, smithay::utils::Physical>) -> Option<(smithay::backend::renderer::gles::GlesMapping, i32, i32)> {
+        use smithay::backend::renderer::{Bind, Blit, ExportMem, Offscreen};
+        let (w, h) = (size.w / crate::mirror::SHRINK, size.h / crate::mirror::SHRINK);
+        if tex.is_none() {
+            *tex = renderer.create_buffer(Fourcc::Abgr8888, (w, h).into()).map_err(|e| tracing::warn!("mirror: {e}")).ok();
+        }
+        let small = tex.as_mut()?;
+        let mut to = renderer.bind(small).ok()?;
+        let whole = smithay::utils::Rectangle::from_size((size.w, size.h).into());
+        let rect = smithay::utils::Rectangle::from_size((w, h).into());
+        renderer.blit(target, &mut to, whole, rect, smithay::backend::renderer::TextureFilter::Linear).map_err(|e| tracing::warn!("mirror: {e}")).ok()?;
+        let mapping = renderer.copy_framebuffer(&to, smithay::utils::Rectangle::from_size((w, h).into()), Fourcc::Abgr8888).map_err(|e| tracing::warn!("mirror: {e}")).ok()?;
+        Some((mapping, w, h))
     }
 
     /// The screenshot or frame run asked for, copied out of `target`; read

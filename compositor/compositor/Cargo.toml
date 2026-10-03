@@ -5,6 +5,8 @@ edition = "2021"
 description = "A Wayland compositor for the Surface Duo, drawing through hwcomposer: the base of item-shell"
 
 [dependencies]
+# The mirror's frames, compressed (mirror.rs).
+lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode"] }
 hybris-hwc = { path = "../crates/hybris-hwc" }
 smithay-hybris = { path = "../crates/smithay-hybris" }
 # CV ID (face.rs): YuNet and SFace.
