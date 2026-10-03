@@ -1133,6 +1133,11 @@ impl Lock {
     /// Where the two halves stand while it is drawn (as doors, how far
     /// out each has gone, logical px); None while it is not, or goes as a
     /// picture (door.rs).
+    /// Whether the doors are opening (an unlock under way).
+    pub fn opening(&self) -> bool {
+        self.fading.is_some()
+    }
+
     pub fn doors(&self, frame_ns: u64) -> Option<(f64, f64)> {
         if !self.locked || self.turning(frame_ns).is_some() {
             return None;

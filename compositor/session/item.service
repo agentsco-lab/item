@@ -38,7 +38,8 @@ LimitRTPRIO=10
 # The GPU's and big cores' minimum clocks, the compositor's boost's
 # (boost.rs) to write.
 ExecStartPre=+/bin/sh -c 'chown @USER@ /sys/class/kgsl/kgsl-3d0/devfreq/min_freq /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 2>/dev/null; true'
-# A start after the first in a boot: the vendor composer afresh.
+# A start after the first in a boot: the vendor composer afresh - never by
+# systemd's stop of it (that reset the phone), by Android's, forced.
 ExecStartPre=+/usr/libexec/item/item-composer-fresh
 ExecStartPre=+chvt 7
 ExecStart=/usr/libexec/item/item-session

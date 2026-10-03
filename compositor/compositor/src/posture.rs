@@ -9,6 +9,9 @@ use smithay::reexports::calloop::ping::Ping;
 
 const NAME: &str = "org.sfduo.Posture";
 const PATH: &str = "/org/sfduo/Posture";
+/// Folded back: the left panel's glass from here (degrees) to here.
+const FOLD_FROM: f64 = 190.0;
+const FOLD_TO: f64 = 330.0;
 
 pub struct Posture {
     angle: Arc<AtomicU64>,
@@ -67,6 +70,13 @@ impl Posture {
     /// Whether the angle changed since last asked.
     pub fn take_changed(&self) -> bool {
         self.changed.swap(false, Ordering::Relaxed)
+    }
+
+    /// How far folded back past flat (#117): 0 up to FOLD_FROM degrees, 1
+    /// at FOLD_TO and beyond, eased between.
+    pub fn fold_back(&self) -> f64 {
+        let t = ((self.angle() - FOLD_FROM) / (FOLD_TO - FOLD_FROM)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
     }
 
     /// How far folded like a book, for the dock: 0 flat (and folded back),

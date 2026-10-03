@@ -130,6 +130,17 @@ pub struct Screen {
     canvas_ready: bool,
     /// The doors' picture of the lock screen, and since when (door.rs).
     door: Option<(u64, smithay::backend::renderer::gles::GlesTexture)>,
+    /// Folded back past flat while locked: the lock screen's picture (when
+    /// taken), seen through the left panel as glass (`fold_glass`), and its
+    /// shader.
+    fold_pic: Option<(u64, smithay::backend::renderer::gles::GlesTexture)>,
+    fold_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
+    /// How far the right panel has developed (0-1) and when that was: up
+    /// while folded all the way, fading back down as it unfolds; and how far
+    /// folded the last frame was.
+    fold_dev: (f64, u64),
+    fold_k: f64,
+    fold_was: bool,
     door_ids: Vec<smithay::backend::renderer::element::Id>,
     wave_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     orb_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
@@ -222,7 +233,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -316,6 +327,34 @@ impl Screen {
         let doors = state.lock.doors(frame_ns);
         // The camera's peek over the lock screen (camera.rs).
         elements.extend(state.camera_peek.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // Folded back past flat, locked: the left panel turns to glass, the
+        // right one seen through it (#117).
+        let fold = state.posture.fold_back();
+        let glass = fold > 0.0 && state.lock.locked && !state.lock.blank && !state.lock.opening() && !state.setup.active;
+        if glass != self.fold_was {
+            self.fold_was = glass;
+            tracing::info!("fold: the left panel {} (angle {:.0})", if glass { "glass" } else { "back" }, state.posture.angle());
+        }
+        if glass {
+            let stale = self.fold_pic.as_ref().is_none_or(|(at, _)| frame_ns.saturating_sub(*at) > FOLD_PIC_EVERY_NS);
+            if stale {
+                if let Some(t) = self.cover_picture(state, frame_ns) {
+                    self.fold_pic = Some((frame_ns, t));
+                }
+            }
+            // Folded all the way: the right panel develops behind the wave;
+            // unfolding, it fades back out - not at once.
+            let (level, at) = self.fold_dev;
+            let dt = frame_ns.saturating_sub(at).min(100_000_000) as f64;
+            let level = if fold >= 1.0 { (level + dt / FOLD_DEVELOP_NS as f64).min(1.0) } else { (level - dt / FOLD_FADE_NS as f64).max(0.0) };
+            self.fold_dev = (level, frame_ns);
+            self.fold_k = fold;
+            elements.extend(self.fold_glass(fold, level));
+        } else {
+            self.fold_pic = None;
+            self.fold_dev = (0.0, frame_ns);
+            self.fold_k = 0.0;
+        }
         // Folded back to back: the camera over the lock screen (foldcam.rs).
         elements.extend(state.foldcam.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         let lock = state.lock.elements(&mut self.renderer, frame_ns);
@@ -768,6 +807,16 @@ impl Screen {
     }
 
     /// Whether a wallpaper is still fading in.
+    /// Whether the fold's glass wants frames: the wave lives while the
+    /// phone is held part-way; the right panel develops or fades.
+    pub fn fold_developing(&self, _now_ns: u64) -> bool {
+        if !self.fold_was {
+            return false;
+        }
+        let (level, _) = self.fold_dev;
+        (self.fold_k > 0.0 && self.fold_k < 1.0) || (self.fold_k >= 1.0 && level < 1.0) || (self.fold_k < 1.0 && level > 0.0)
+    }
+
     pub fn wall_fading(&self, now_ns: u64) -> bool {
         self.wall_old.as_ref().is_some_and(|(_, at, _)| now_ns < at + WALL_FADE_NS + 20_000_000)
     }
@@ -997,6 +1046,41 @@ impl Screen {
         ];
         let program = self.orb_program.clone()?;
         Some(FrameElement::Pixel(smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, None, alpha, uniforms, smithay::backend::renderer::element::Kind::Unspecified)))
+    }
+
+    /// The left panel as glass, `k` of the way (0 flat, 1 folded back to
+    /// back): fold.frag over the lock screen's picture - the left panel
+    /// receding, the right one seen through it from behind in perspective,
+    /// frosted at first, a sheen sliding across.
+    fn fold_glass(&mut self, k: f64, develop: f64) -> Vec<FrameElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        let Some((_, picture)) = self.fold_pic.clone() else { return Vec::new() };
+        if self.fold_program.is_none() {
+            let names = [UniformName::new("texl", UniformType::_2f), UniformName::new("left", UniformType::_2f), UniformName::new("right", UniformType::_2f), UniformName::new("k", UniformType::_1f), UniformName::new("t", UniformType::_1f), UniformName::new("develop", UniformType::_1f)];
+            match self.renderer.compile_custom_texture_shader(include_str!("fold.frag"), &names) {
+                Ok(p) => self.fold_program = Some(p),
+                Err(e) => {
+                    tracing::warn!("fold: the shader: {e}");
+                    return Vec::new();
+                }
+            }
+        }
+        let program = self.fold_program.clone().expect("compiled");
+        let [left, right] = crate::layout::panels();
+        let (w, h) = crate::layout::LAYOUT;
+        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((left.loc.x as f64, 0.0).into(), (left.size.w as f64, h as f64).into());
+        let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((left.size.w * SCALE, h * SCALE).into());
+        let inner = TextureRenderElement::from_static_texture(smithay::backend::renderer::element::Id::new(), self.renderer.context_id(), (left.loc.x as f64 * SCALE as f64, 0.0), picture, SCALE, Transform::Normal, None, Some(src), Some(left.size), Some(vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified);
+        let uniforms = vec![
+            Uniform::new("texl", (w as f32, h as f32)),
+            Uniform::new("left", (left.loc.x as f32, left.size.w as f32)),
+            Uniform::new("right", (right.loc.x as f32, right.size.w as f32)),
+            Uniform::new("k", k as f32),
+            Uniform::new("t", (hybris_hwc::now_ns() % 1_000_000_000_000) as f32 / 1e9),
+            Uniform::new("develop", develop as f32),
+        ];
+        vec![FrameElement::Shaded(smithay::backend::renderer::gles::element::TextureShaderElement::new(inner, program, uniforms))]
     }
 
     /// The lock screen, or the setup with its circle, as it stood at
@@ -1229,6 +1313,14 @@ fn warm_white(kelvin: u32) -> [f32; 3] {
 const WALL_FADE_NS: u64 = 450_000_000;
 
 /// The wallpaper's width, logical px: the screen's and the parallax's room.
+/// The lock screen's picture under the fold's glass taken again this often
+/// (the clock goes on).
+const FOLD_PIC_EVERY_NS: u64 = 1_000_000_000;
+/// How long the right panel takes to develop once folded all the way, and
+/// to fade as it unfolds.
+const FOLD_DEVELOP_NS: u64 = 700_000_000;
+const FOLD_FADE_NS: u64 = 450_000_000;
+
 fn wall_width() -> i32 {
     crate::layout::LAYOUT.0 + (crate::state::WALL_LEFT + crate::state::WALL_RIGHT) as i32
 }

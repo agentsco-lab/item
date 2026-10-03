@@ -422,6 +422,15 @@ impl State {
             self.needs_redraw = true;
             return;
         }
+        // Folded back past flat while locked: the left panel is glass, its
+        // touches nobody's (#117).
+        if self.lock.locked && self.posture.fold_back() > 0.0 {
+            if let Contact::Down(_, pos, _) = &contact {
+                if crate::layout::panel_at(*pos) == Some(0) {
+                    return;
+                }
+            }
+        }
         // Folded into a camera: its touches (foldcam.rs).
         if self.foldcam.active() {
             if let Contact::Down(_, pos, _) = &contact {

@@ -62,18 +62,13 @@ put 755 item-switch /usr/bin/item-switch
 # with item it goes with whichever shell runs.
 mkdir -p /etc/systemd/system/android-service@hwcomposer.service.d
 cat > hwc.conf <<'CONF'
-# item (item-switch): the vendor composer goes with whichever shell runs -
-# phosh or item - not with phosh alone (the port's 20-phosh.conf, replaced).
+# item (item-switch): the vendor composer bound to no shell - the port's
+# 20-phosh.conf (BindsTo=phosh.service) replaced. Stopped by systemd with a
+# shell (BindsTo, then PartOf), it reset the phone one restart in two
+# (2026-10-03); the shell's own start puts in a fresh one instead, as the
+# test runs always did (item-composer-fresh), which never did.
 [Unit]
-PartOf=phosh.service item.service
 Before=phosh.service item.service
-
-[Service]
-# Stopped only once its process is gone: Android's stop returns while the
-# old composer still dies (~0.6 s), and a new one and a shell started over
-# it reset the phone (2026-10-03).
-# By its name, which a dead one keeps until Android's init reaps it.
-ExecStopPost=/bin/sh -c 'for i in $(seq 1 50); do pgrep "composer@" >/dev/null || exit 0; sleep 0.1; done'
 CONF
 put 644 hwc.conf /etc/systemd/system/android-service@hwcomposer.service.d/20-phosh.conf
 mv $LIST.new $LIST
