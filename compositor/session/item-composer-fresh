@@ -1,0 +1,29 @@
+#!/bin/sh
+# item-composer-fresh: run as root before item starts (item.service). The
+# first start in a boot takes the vendor composer as the boot brought it up;
+# any later one - after a crash, after phosh - starts it afresh first, as
+# tools/session-run.sh does: a new compositor on the old composer reset the
+# phone (2026-10-03).
+MARK=/run/item-composer-used
+SVC='(vendor.hwcomposer-.*|vendor.qti.hardware.display.composer)'
+composers() { ps -eo comm | grep -c "composer@"; }
+hwc() { ANDROID_SERVICE_FORCE_KILL=yes ANDROID_SERVICE="$SVC" /usr/lib/halium-wrappers/android-service.sh hwcomposer $1 >/dev/null 2>&1; }
+
+# Afresh only if the composer is older than item's last start: one systemd
+# has just started (item.service restarted, PartOf) is left alone - started
+# twice in a second, it reset the phone.
+old() {
+    PID=$(pgrep -f 'composer@2\.4-service' | head -n1)
+    [ -e $MARK ] && [ -n "$PID" ] || return 1
+    UP=$(ps -o etimes= -p "$PID" | tr -d ' ')
+    AGE=$(( $(date +%s) - $(stat -c %Y $MARK) ))
+    [ "${UP:-0}" -ge "$AGE" ]
+}
+if old; then
+    echo "item-composer-fresh: the composer started afresh"
+    hwc stop
+    for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
+    hwc start
+    for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
+fi
+touch $MARK

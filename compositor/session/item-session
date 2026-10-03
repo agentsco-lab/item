@@ -14,6 +14,27 @@ export XDG_SESSION_DESKTOP=item
 export EGL_PLATFORM=hwcomposer
 export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_libhybris.json
 
+# item's overlay of the XDG configuration: the portals' choice for item, and
+# copies of the port's old autostarts marked NotShowIn=item (the compositor
+# has its own dock, system screen, pen sheet, fingerprint client and
+# brightness).
+ITEM_XDG=/usr/share/item/xdg
+if [ -d "$ITEM_XDG" ]; then
+  case ":$XDG_CONFIG_DIRS:" in
+    *":$ITEM_XDG:"*) ;;
+    *) export XDG_CONFIG_DIRS="$ITEM_XDG:${XDG_CONFIG_DIRS:-/etc/xdg}" ;;
+  esac
+fi
+
+# The user's services - the portals, apps started by D-Bus - told of this
+# session; the portals started again with it.
+if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
+  VARS="XDG_CURRENT_DESKTOP=$XDG_CURRENT_DESKTOP WAYLAND_DISPLAY=wayland-item${XDG_CONFIG_DIRS:+ XDG_CONFIG_DIRS=$XDG_CONFIG_DIRS}"
+  systemctl --user set-environment $VARS 2>/dev/null
+  dbus-update-activation-environment $VARS 2>/dev/null
+  systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service xdg-desktop-portal-phosh.service xdg-desktop-portal-gnome.service 2>/dev/null
+fi
+
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
   echo "item-session: no session bus, starting one"
   DBUS_RUN_SESSION="dbus-run-session --"

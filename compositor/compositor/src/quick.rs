@@ -256,7 +256,9 @@ impl Quick {
             .name("quick settings".into())
             .spawn(move || worker(rx, shared, shared_media, wake))
             .expect("quick settings thread");
-        // Read once at the start: night light is drawn from it.
+        // The brightness kept, on both panels; then read once: night light
+        // is drawn from it.
+        let _ = tx.send(Job::Brightness(kept_brightness()));
         let _ = tx.send(Job::Read);
         let panel_w = crate::layout::panels()[0].size.w as f64;
         let tile_w = (panel_w - 2.0 * SIDE - 2.0 * TILE_GAP) / 3.0;
@@ -742,6 +744,26 @@ fn set(cmd: &str, args: &[&str]) {
     run(cmd, args);
 }
 
+/// The brightness item keeps (~/.config/item/brightness, 0-1): both panels
+/// are set to it at the start - left alone they came up apart, one at the
+/// level systemd-backlight saved (12 of 255), the other at 200.
+fn brightness_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/item/brightness")
+}
+
+/// The level kept; 40 % at first, as the port's own default.
+fn kept_brightness() -> f64 {
+    std::fs::read_to_string(brightness_path()).ok().and_then(|s| s.trim().parse::<f64>().ok()).filter(|v| (0.01..=1.0).contains(v)).unwrap_or(0.4)
+}
+
+fn keep_brightness(v: f64) {
+    let path = brightness_path();
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(path, format!("{v:.3}\n"));
+}
+
 fn read_sys() -> Sys {
     let num = |p: &str| std::fs::read_to_string(p).ok().and_then(|s| s.trim().parse::<f64>().ok());
     let bl = "/sys/class/backlight/panel0-backlight";
@@ -851,17 +873,24 @@ fn worker(rx: mpsc::Receiver<Job>, sys: Arc<Mutex<Sys>>, media: Arc<Mutex<Option
                     }
                 }
                 Job::Brightness(v) if Some(i) == last_b => {
+                    keep_brightness(v);
+                    let mut levels = Vec::new();
                     for bl in ["panel0-backlight", "panel1-backlight"] {
                         let max = std::fs::read_to_string(format!("/sys/class/backlight/{bl}/max_brightness"))
                             .ok()
                             .and_then(|s| s.trim().parse::<f64>().ok())
                             .unwrap_or(255.0);
                         let n = ((v * max).round() as u32).max(1).to_string();
+                        levels.push(n.clone());
                         set(
                             "busctl",
                             &["call", "--system", "org.freedesktop.login1", "/org/freedesktop/login1/session/auto", "org.freedesktop.login1.Session", "SetBrightness", "ssu", "backlight", bl, &n],
                         );
                     }
+                    // For the port's lid daemon: the panels' numbers, put back
+                    // as they light (they come up at full).
+                    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+                    let _ = std::fs::write(format!("{dir}/sfduo-brightness"), format!("{}\n", levels.join(" ")));
                 }
                 Job::VolumeStep(up) => {
                     let now = read_sys();

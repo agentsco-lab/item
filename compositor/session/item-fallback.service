@@ -1,0 +1,9 @@
+# item failed to stay up (item.service: three failures within a minute):
+# phosh, so the phone is never left with a dark screen.
+[Unit]
+Description=item failed: phosh instead
+
+[Service]
+Type=oneshot
+# Only if item stays down: never both shells at once.
+ExecStart=/bin/sh -c 'sleep 2; s=$(systemctl show -p ActiveState --value item.service); case $s in active|activating|reloading) echo "item is $s: no phosh"; exit 0;; esac; echo "item failed: starting phosh"; systemctl reset-failed item.service; /usr/libexec/item/item-composer-fresh; systemctl start phosh.service'

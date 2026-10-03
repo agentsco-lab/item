@@ -41,7 +41,7 @@ session_env() {
 }
 
 RUNTIME_UNITS=/run/user/$UID_N/systemd/user
-AUTOSTART_OLD="sfduo-dock sfduo-system-screen sfduo-pen-screen sfduo-fingerprint"
+AUTOSTART_OLD="sfduo-dock sfduo-system-screen sfduo-pen-screen sfduo-fingerprint sfduo-brightness"
 
 session_files() {
     mkdir -p /tmp/item-session/share/gnome-session/sessions $RUNTIME_UNITS/gnome-session@item.target.d
@@ -119,13 +119,17 @@ rollback() {
     sleep 1
     hwc stop
     systemctl unmask --runtime phosh >/dev/null 2>&1
-    systemctl start phosh sfduo-composer-watchdog
+    systemctl start ${SHELL_AFTER:-phosh} sfduo-composer-watchdog
     sleep 8
-    log "phosh $(systemctl is-active phosh)"
+    log "${SHELL_AFTER:-phosh} $(systemctl is-active ${SHELL_AFTER:-phosh})"
 }
 trap rollback EXIT
 
-systemctl stop sfduo-composer-watchdog phosh
+# The installed shell (item.service, item-switch) stopped for the run, and
+# started again after it, as phosh is when it is the one enabled.
+SHELL_AFTER=phosh
+systemctl is-enabled item.service >/dev/null 2>&1 && SHELL_AFTER=item
+systemctl stop sfduo-composer-watchdog phosh item 2>/dev/null
 # phosh's fingerprint client, stopped mid-Identify, leaves the reader busy
 # for ~30 s, and the session's first finger unheard: the reader's service
 # started afresh.

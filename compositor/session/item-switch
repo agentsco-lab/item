@@ -1,0 +1,36 @@
+#!/bin/sh
+# item-switch item|phosh|status: which shell the phone starts, changed now
+# and for the boots after.
+set -e
+case "$1" in
+item)
+    systemctl disable phosh.service 2>/dev/null || true
+    systemctl stop phosh.service 2>/dev/null || true
+    systemctl reset-failed item.service 2>/dev/null || true
+    systemctl enable item.service item-face.service
+    systemctl start item-face.service
+    # The composer phosh used: item starts it afresh (item-composer-fresh).
+    touch /run/item-composer-used
+    systemctl start item.service
+    ;;
+phosh)
+    systemctl disable item.service
+    systemctl stop item.service
+    systemctl enable phosh.service
+    /usr/libexec/item/item-composer-fresh
+    # The user's session environment back to phosh's.
+    U=$(systemctl show -p User --value item.service)
+    runuser -u "${U:-droidian}" -- env XDG_RUNTIME_DIR=/run/user/$(id -u "${U:-droidian}") \
+        systemctl --user unset-environment XDG_CURRENT_DESKTOP XDG_CONFIG_DIRS WAYLAND_DISPLAY 2>/dev/null || true
+    systemctl start phosh.service
+    ;;
+status|"")
+    for u in item phosh item-face; do
+        printf '%-10s %s, %s\n' "$u" "$(systemctl is-enabled $u.service 2>/dev/null)" "$(systemctl is-active $u.service 2>/dev/null)"
+    done
+    ;;
+*)
+    echo "item-switch item|phosh|status" >&2
+    exit 2
+    ;;
+esac

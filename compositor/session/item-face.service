@@ -1,12 +1,18 @@
+# item-face: CV ID's service (crates/item-face) - the camera, the models and
+# the faces kept (/var/lib/item-face, root's alone); on the system bus as
+# org.sfduo.Face.
 [Unit]
-Description=item-face: CV ID, face unlock for item's lock screen
-After=dbus.service
+Description=item-face, face unlock for item's lock screen
+After=dbus.service lxc@android.service
 
 [Service]
 Type=dbus
 BusName=org.sfduo.Face
-ExecStart=/usr/libexec/item-face
+ExecStart=/usr/libexec/item/item-face
+Environment=CVID_MODELS=/usr/share/item/cvid
+Environment=CAMERA_WARM=/usr/libexec/item/camera-warm
 Restart=on-failure
+RestartSec=2s
 StateDirectory=item-face
 StateDirectoryMode=0700
 

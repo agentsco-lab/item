@@ -1,0 +1,63 @@
+# item: the phone's shell - item-compositor with gnome-session for the rest
+# (item-session) - in place of phosh.service, as it runs phosh: the user on
+# tty7, bound to the vendor hwcomposer. Three failures within a minute and
+# item-fallback.service brings phosh back. item-switch changes between them.
+[Unit]
+Description=item, the shell (item-compositor)
+Documentation=https://github.com/agentsco-lab/item-next
+# Not Conflicts=phosh.service: the composer is part of both (item-switch
+# keeps one at a time), and a conflict would stop it under item's start.
+Conflicts=getty@tty1.service
+After=getty@tty1.service rc-local.service plymouth-quit-wait.service systemd-user-sessions.service
+Wants=dbus.socket item-face.service
+After=dbus.socket item-face.service
+After=lxc@android.service
+BindsTo=android-service@hwcomposer.service
+Requires=android-service@hwcomposer.service
+After=android-service@hwcomposer.service
+Before=graphical.target
+ConditionPathExists=/dev/tty0
+StartLimitIntervalSec=60
+StartLimitBurst=3
+OnFailure=item-fallback.service
+
+[Service]
+User=@USER@
+PAMName=phosh
+WorkingDirectory=~
+Environment=LANG=C.UTF-8
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@UID@/bus
+# CV ID through item-face.
+Environment=CVID=1
+# The phone's alarm clock and sleep (sleep.rs): the kernel's alarm timer and
+# wakelocks.
+AmbientCapabilities=CAP_WAKE_ALARM CAP_BLOCK_SUSPEND
+SupplementaryGroups=android_wakelock
+LimitRTPRIO=10
+# The GPU's and big cores' minimum clocks, the compositor's boost's
+# (boost.rs) to write.
+ExecStartPre=+/bin/sh -c 'chown @USER@ /sys/class/kgsl/kgsl-3d0/devfreq/min_freq /sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq /sys/devices/system/cpu/cpufreq/policy7/scaling_min_freq 2>/dev/null; true'
+# A start after the first in a boot: the vendor composer afresh.
+ExecStartPre=+/usr/libexec/item/item-composer-fresh
+ExecStartPre=+chvt 7
+ExecStart=/usr/libexec/item/item-session
+Restart=always
+RestartSec=500ms
+# A restart goes straight back to starting: OnFailure= (phosh) only once the
+# start limit is hit, not at each crash - phosh and item restarting at once
+# fought over the composer and left a panel dark.
+RestartMode=direct
+TTYPath=/dev/tty7
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=item
+UtmpIdentifier=tty7
+UtmpMode=user
+
+[Install]
+WantedBy=graphical.target
