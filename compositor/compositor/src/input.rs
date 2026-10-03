@@ -157,6 +157,9 @@ impl State {
                             tracing::info!("power key: dark with the lid open: lit");
                             if self.lock.locked {
                                 self.camera_peek.start(hybris_hwc::now_ns());
+                                if self.posture.angle() < crate::face::FOLD_MAX {
+                                    self.face.look_now();
+                                }
                             }
                             self.lock.set_blank(false);
                         }
@@ -202,6 +205,9 @@ impl State {
                         // (its own process) starts meanwhile.
                         if self.lock.locked {
                             self.camera_peek.start(hybris_hwc::now_ns());
+                            if self.posture.angle() < crate::face::FOLD_MAX {
+                                self.face.look_now();
+                            }
                         }
                         self.lock.set_blank(false);
                     }

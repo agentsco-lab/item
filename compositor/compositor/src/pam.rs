@@ -59,12 +59,19 @@ extern "C" fn conversation(n: c_int, msgs: *mut *const PamMessage, resp: *mut *m
 }
 
 /// Whether `pin` is the session user's: PAM's answer.
+#[allow(dead_code)]
 pub fn check(pin: &str) -> bool {
     let user = std::env::var("USER").ok().or_else(|| unsafe {
         let pw = libc::getpwuid(libc::getuid());
         (!pw.is_null()).then(|| CStr::from_ptr((*pw).pw_name).to_string_lossy().into_owned())
     });
     let Some(user) = user else { return false };
+    check_for(&user, pin)
+}
+
+/// Whether `pin` is `user`'s (item-face, as root, for the caller's user).
+pub fn check_for(user: &str, pin: &str) -> bool {
+    let user = user.to_owned();
     unsafe {
         let lib = libc::dlopen(c"libpam.so.0".as_ptr(), libc::RTLD_NOW);
         if lib.is_null() {

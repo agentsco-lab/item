@@ -97,6 +97,9 @@ pub struct PinPad {
     /// The keys as water: born of a drop from when, gathering back from
     /// when; each key's last press and let go.
     water: bool,
+    /// The PIN's length, when known (lock.rs's pin-length): typed to it,
+    /// it is sent as with OK, and there is no OK key.
+    pub auto_len: Option<usize>,
     /// As water, born from the pad's middle each time it comes (the lock
     /// screen's), not of a drop above it (the setup's).
     bloom: bool,
@@ -132,6 +135,7 @@ impl PinPad {
             shown_since: 0,
             shaken_at: None,
             water: false,
+            auto_len: None,
             bloom: false,
             split_at: None,
             gather_at: None,
@@ -226,6 +230,7 @@ impl PinPad {
             .map(|row| {
                 let mut life: f64 = if k < 1.0 { 0.7 * (1.0 - k) } else { 0.0 };
                 let drops = (0..3)
+                    .filter(|&col| self.has_key(3 * row + col))
                     .map(|col| {
                         let i = 3 * row + col;
                         let (x, y) = centre(i);
@@ -304,10 +309,15 @@ impl PinPad {
         if !self.standing(now) {
             return;
         }
-        self.pressed = (0..KEYS.len()).find(|&i| Self::key_rect(i).contains((x, y)));
+        self.pressed = (0..KEYS.len()).filter(|&i| self.has_key(i)).find(|&i| Self::key_rect(i).contains((x, y)));
         if let Some(i) = self.pressed {
             self.poked[i] = now;
         }
+    }
+
+    /// Whether key `i` is there: no OK when the PIN's length is known.
+    fn has_key(&self, i: usize) -> bool {
+        !(self.auto_len.is_some() && KEYS[i] == "OK")
     }
 
     /// The finger moved off: no key.
@@ -332,6 +342,9 @@ impl PinPad {
             d => {
                 if self.pin.len() < MAX_PIN {
                     self.pin.push_str(d);
+                }
+                if self.auto_len == Some(self.pin.len()) {
+                    return Some(Press::Ok);
                 }
                 Some(Press::Edit)
             }
@@ -389,7 +402,7 @@ impl PinPad {
         for (i, l) in self.keys.iter().enumerate() {
             let r = Self::key_rect(i);
             let a = alpha * labels as f32;
-            if a <= 0.001 {
+            if a <= 0.001 || !self.has_key(i) {
                 continue;
             }
             let at = |out: &mut Vec<ShellElement>, renderer: &mut GlesRenderer, b: &MemoryRenderBuffer, x: f64, y: f64| {

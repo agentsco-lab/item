@@ -146,6 +146,16 @@ pub struct Lock {
     /// A face known (face.rs): the doors open at this time, the notice
     /// read first.
     face_open_at: Option<u64>,
+    /// Face Unlock turned on: the face taken as the PIN is typed, kept
+    /// with it (face.rs).
+    face_enrol: bool,
+    /// The PIN's length, once known (pin_len): typed to it, the PIN is
+    /// checked without OK; and the length just sent to be checked.
+    pin_len: Option<usize>,
+    sent_len: usize,
+    /// The PIN sent without OK: wrong, OK is wanted again (the PIN may
+    /// have changed length) until one is accepted.
+    auto_sent: bool,
     minute: i32,
     id: Id,
     id_right: Id,
@@ -286,6 +296,29 @@ fn glow(size: f64) -> Option<MemoryRenderBuffer> {
     Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (px as i32, px as i32), SCALE, smithay::utils::Transform::Normal, None))
 }
 
+/// Where the PIN's length is kept - the length alone, never the PIN - so a
+/// PIN typed to it is checked without OK, as Android's auto-confirm.
+fn pin_len_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/item/pin-length")
+}
+
+pub fn pin_len() -> Option<usize> {
+    std::fs::read_to_string(pin_len_path()).ok()?.trim().parse().ok().filter(|n| (4..=16).contains(n))
+}
+
+/// A PIN accepted, or set (setup.rs): its length kept.
+pub fn remember_pin_len(n: usize) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = pin_len_path();
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&path) {
+        let _ = f.write_all(n.to_string().as_bytes());
+    }
+}
+
 impl Lock {
     pub fn new(wake: smithay::reexports::calloop::ping::Ping) -> Lock {
         let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
@@ -344,6 +377,10 @@ impl Lock {
             hint_base: "Swipe up to unlock".into(),
             notice_until: 0,
             face_open_at: None,
+            face_enrol: false,
+            pin_len: pin_len(),
+            sent_len: 0,
+            auto_sent: false,
             minute: -1,
             id: Id::new(),
             id_right: Id::new(),
@@ -371,6 +408,7 @@ impl Lock {
     pub fn after_boot(&mut self) {
         self.after_boot = true;
         self.lock_now();
+        self.pad.auto_len = self.pin_len;
         self.pad.show();
         self.minute = -1;
         self.refresh();
@@ -473,7 +511,7 @@ impl Lock {
     /// once the PIN is asked for.
     pub fn wants_face(&self) -> bool {
         let pin_lately = self.pin_at.elapsed().map_or(true, |d| d < FACE_PIN_FOR);
-        self.holds_screen() && !self.blank && !self.after_boot && self.fails < FAILS_FOR_PIN && pin_lately
+        !self.face_enrol && crate::face::enrolled() && self.holds_screen() && !self.blank && !self.after_boot && self.fails < FAILS_FOR_PIN && pin_lately
     }
 
     /// The reader did not know a finger.
@@ -492,6 +530,7 @@ impl Lock {
         if !self.entering {
             self.entering = true;
             self.pad_leaving = false;
+            self.pad.auto_len = self.pin_len;
             self.pad.show();
         }
     }
@@ -545,6 +584,7 @@ impl Lock {
         if pin.is_empty() {
             return;
         }
+        self.sent_len = pin.len();
         *self.checking.lock().unwrap() = Some(None);
         self.say("Checking…");
         let (slot, wake, verified) = (self.checking.clone(), self.wake.clone(), self.verified.clone());
@@ -575,10 +615,18 @@ impl Lock {
                 if ok {
                     tracing::info!("lock: unlocked");
                     self.pin_at = std::time::SystemTime::now();
+                    if self.pin_len != Some(self.sent_len) {
+                        self.pin_len = Some(self.sent_len);
+                        remember_pin_len(self.sent_len);
+                    }
                     self.touched_at = PinPad::ok_centre();
                     self.open_doors();
                 } else {
                     self.say("Wrong PIN");
+                    if self.auto_sent {
+                        self.pin_len = None;
+                        self.pad.auto_len = None;
+                    }
                     self.pad.shake();
                     crate::fingerprint::buzz("bell-terminal");
                 }
@@ -685,6 +733,23 @@ impl Lock {
 
     /// Unlocked from outside (logind's Unlock: the fingerprint reader,
     /// `loginctl unlock-session`): the doors open as after a PIN.
+    /// Face Unlock turned on: the PIN asked for, the face taken meanwhile.
+    pub fn enrol_face(&mut self) {
+        self.face_enrol = true;
+        self.pad_in();
+        self.say("Enter your PIN to add your face");
+    }
+
+    /// Whether the face is being taken with the PIN.
+    pub fn enrolling_face(&self) -> bool {
+        self.face_enrol && self.locked
+    }
+
+    /// The PIN given while the face was taken: the enrolling over.
+    pub fn take_face_enrol(&mut self) -> bool {
+        std::mem::take(&mut self.face_enrol)
+    }
+
     /// A known face (face.rs): said, then the doors - no picture of it.
     pub fn unlock_face(&mut self) {
         if !self.locked || self.fading.is_some() || self.face_open_at.is_some() {
@@ -780,7 +845,9 @@ impl Lock {
         if self.entering {
             let tapped = self.pad.pressing();
             if let Some(press) = self.pad.up() {
+                // OK, or the PIN's length reached: checked.
                 if press == Press::Ok {
+                    self.auto_sent = self.pad.auto_len.is_some();
                     self.submit();
                 }
             } else if !tapped && !self.after_boot && (g.2 .1 - g.1 > UNLOCK || g.3 > FLING) {

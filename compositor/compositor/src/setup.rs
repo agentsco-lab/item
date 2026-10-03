@@ -400,10 +400,10 @@ impl Setup {
         self.face_taken = true;
     }
 
-    /// Whether the PIN was accepted since last asked: the face taken while
-    /// it was typed is the owner's.
-    pub fn take_pin_done(&mut self) -> bool {
-        std::mem::take(&mut self.pin_done)
+    /// The PIN, once accepted (since last asked): the face taken while it
+    /// was typed is the owner's, kept with it (face.rs).
+    pub fn take_pin_done(&mut self) -> Option<String> {
+        std::mem::take(&mut self.pin_done).then(|| self.pin_for_keyring.clone()).flatten()
     }
 
     pub fn holds_screen(&self) -> bool {
@@ -626,6 +626,9 @@ impl Setup {
             changed = true;
             match result {
                 Ok(pin) => {
+                    if !self.dry {
+                        crate::lock::remember_pin_len(pin.len());
+                    }
                     tracing::info!("setup: the PIN {}", if self.dry { "kept (dry)" } else { "is set" });
                     self.pin_for_keyring = Some(pin);
                     self.pin_done = true;

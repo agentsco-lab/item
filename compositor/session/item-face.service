@@ -1,0 +1,14 @@
+[Unit]
+Description=item-face: CV ID, face unlock for item's lock screen
+After=dbus.service
+
+[Service]
+Type=dbus
+BusName=org.sfduo.Face
+ExecStart=/usr/libexec/item-face
+Restart=on-failure
+StateDirectory=item-face
+StateDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+[package]
+name = "item-face"
+version = "0.1.0"
+edition = "2021"
+description = "CV ID's service: the camera, the models and the faces kept, on the system bus as org.sfduo.Face"
+
+[dependencies]
+cvid = { path = "../cvid" }
+zbus = "5"
+libc = "0.2"
+async-channel = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

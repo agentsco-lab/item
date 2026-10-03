@@ -1124,6 +1124,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "item-face"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "cvid",
+ "libc",
+ "tracing",
+ "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
 name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

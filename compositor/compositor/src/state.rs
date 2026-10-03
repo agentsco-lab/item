@@ -256,7 +256,7 @@ impl State {
             lid_shut: false,
             lid_light_pending: false,
             posture: crate::posture::Posture::new(wake.clone()),
-            camera_peek: crate::camera::Peek::new(wake.clone(), face.sink()),
+            camera_peek: crate::camera::Peek::new(wake.clone()),
             face,
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
@@ -656,6 +656,17 @@ impl State {
                 tracing::info!("shade: lock");
                 self.shade.fold();
                 self.lock.lock_now();
+            }
+            crate::shade::ShadeAsk::Face => {
+                if crate::face::enrolled() {
+                    tracing::info!("shade: face unlock off");
+                    self.face.remove();
+                } else if self.face.on() {
+                    tracing::info!("shade: face unlock on: the face taken with the PIN");
+                    self.shade.fold();
+                    self.lock.lock_now();
+                    self.lock.enrol_face();
+                }
             }
             crate::shade::ShadeAsk::Settings(panel) => {
                 if let Some(e) = crate::apps::entry("org.sfduo.Settings.desktop").or_else(|| crate::apps::entry("org.gnome.Settings.desktop")) {

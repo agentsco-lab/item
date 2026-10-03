@@ -116,6 +116,7 @@ impl Dialog {
     pub fn ask_pin(&mut self, title: &str, message: &str) {
         self.mode = Mode::Pin;
         self.words(title, message);
+        self.pad.auto_len = crate::lock::pin_len();
         self.pad.show();
         self.pad.say("Enter your PIN");
         self.open = true;
@@ -196,6 +197,9 @@ impl Dialog {
     /// The answer was wrong: try again.
     pub fn wrong(&mut self) {
         self.pad.clear();
+        // Typed to the length kept and wrong: OK again (the PIN may have
+        // another length now).
+        self.pad.auto_len = None;
         self.pad.say("Wrong PIN, try again");
         self.pad.shake();
         crate::fingerprint::buzz("bell-terminal");

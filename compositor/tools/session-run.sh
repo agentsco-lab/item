@@ -82,9 +82,27 @@ CPU_MINS="/sys/devices/system/cpu/cpufreq/policy4/scaling_min_freq /sys/devices/
 CPU_OLD=""
 for f in $CPU_MINS; do CPU_OLD="$CPU_OLD $(cat $f 2>/dev/null)"; done
 
+# CVID=1: item-face (CV ID's service, from /tmp/item-face) for the run, its
+# D-Bus policy (from /tmp/org.sfduo.Face.conf) in place while it runs.
+FACE_POLICY=/etc/dbus-1/system.d/org.sfduo.Face.conf
+face_start() {
+    cp /tmp/org.sfduo.Face.conf $FACE_POLICY
+    busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null
+    systemd-run --unit=item-face --collect -p Restart=on-failure \
+        -p "Environment=CVID_MODELS=${CVID_MODELS:-/var/tmp/cvid}" /tmp/item-face >/dev/null 2>&1
+    log "item-face started, its policy in place"
+}
+face_stop() {
+    systemctl stop item-face 2>/dev/null
+    rm -f $FACE_POLICY
+    busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null
+    log "item-face stopped, its policy gone"
+}
+
 rollback() {
     log "rollback"
     systemctl stop item-compositor 2>/dev/null
+    [ -n "$CVID" ] && face_stop
     pkill -9 -x item-compositor 2>/dev/null
     [ -n "$SESSION" ] && session_files_restore
     session_env_restore
@@ -113,6 +131,7 @@ systemctl stop sfduo-composer-watchdog phosh
 # started afresh.
 systemctl restart droidian-fpd 2>/dev/null
 systemctl mask --runtime phosh >/dev/null
+[ -n "$CVID" ] && face_start
 hwc stop
 for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
 hwc start

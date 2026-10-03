@@ -5,9 +5,7 @@
 //! mirrored is read at each start from /tmp/item-camera (words: cw, ccw,
 //! none; mirror), to find the right way on the device.
 //!
-//! With CV ID on (CVID=1, face.rs) the camera runs the same way but nothing
-//! of it is shown: its frames only go to the face's thread - on the lock
-//! screen, and in the first setup while the PIN is typed.
+//! With CV ID on (CVID=1) the camera is item-face's (face.rs): no peek.
 //!
 //! The frames come through Droidian's camera stack as droidian-camera's do:
 //! GStreamer's droidcamsrc (droidmedia, Android's Camera1), 640x480 NV21,
@@ -93,18 +91,18 @@ enum Turn {
 }
 
 impl Peek {
-    pub fn new(wake: Ping, face: Option<crate::face::Sink>) -> Peek {
+    pub fn new(wake: Ping) -> Peek {
         let mut peek = Peek { orders: None, open: false, playing: false, play: 0, turn: Default::default(), since: 0, for_ns: FOR_NS, tried: 0, shown: false, first: None, frame: Default::default(), drawn: Default::default(), pane: Default::default(), wake, size: (W / 2, H / 2) };
-        let (peek_on, cvid) = (std::env::var_os("CAMERA_PEEK").is_some(), face.is_some());
-        peek.shown = peek_on && !cvid;
-        if peek_on || cvid {
-            peek.spawn(face);
+        // With CV ID on, the camera is item-face's (face.rs).
+        if std::env::var_os("CAMERA_PEEK").is_some() && std::env::var_os("CVID").is_none() {
+            peek.shown = true;
+            peek.spawn();
         }
         peek
     }
 
     /// The helper started, loading the camera stack while nothing waits.
-    fn spawn(&mut self, face: Option<crate::face::Sink>) {
+    fn spawn(&mut self) {
         let tool = std::env::var("CAMERA_WARM").unwrap_or_else(|_| "/var/tmp/gst/camera-warm".into());
         let log = std::fs::File::create("/tmp/camera-warm.log").map(Stdio::from).unwrap_or_else(|_| Stdio::null());
         let child = Command::new(&tool).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(log).spawn();
@@ -147,9 +145,6 @@ impl Peek {
                         break;
                     }
                     let t = turn.load(std::sync::atomic::Ordering::Relaxed);
-                    if let Some(face) = &face {
-                        face.offer(&buf[..n]);
-                    }
                     let rgba = half_rgba(&buf[..n], [Turn::None, Turn::Cw, Turn::Ccw][(t & 3) as usize % 3], t & 4 != 0);
                     buf.drain(..n);
                     let mut f = frame.lock().unwrap();

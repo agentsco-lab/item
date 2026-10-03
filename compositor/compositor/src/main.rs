@@ -316,6 +316,9 @@ impl Data {
                 // The camera first, as for the lid (input.rs).
                 if self.state.lock.locked {
                     self.state.camera_peek.start(now);
+                    if self.state.posture.angle() < face::FOLD_MAX {
+                        self.state.face.look_now();
+                    }
                 }
                 self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;
@@ -323,6 +326,9 @@ impl Data {
             if woken == sleep::Woken::PowerKey && self.state.lock.blank && !self.state.lid_shut {
                 if self.state.lock.locked {
                     self.state.camera_peek.start(now);
+                    if self.state.posture.angle() < face::FOLD_MAX {
+                        self.state.face.look_now();
+                    }
                 }
                 self.state.lock.set_blank(false);
                 self.state.needs_redraw = true;
@@ -344,28 +350,25 @@ impl Data {
             self.state.needs_redraw = true;
         }
         // The camera's peek: a new frame drawn; off when its time is up.
-        // In the first setup, while the PIN is typed: the camera on unseen
-        // for CV ID's face (face.rs, setup.rs).
-        let setup_face = self.state.setup.wants_face();
-        if setup_face && !self.state.camera_peek.playing() {
-            self.state.camera_peek.start_for(now, u64::MAX);
-        }
-        let showing = (self.state.lock.locked && !self.state.lock.blank) || setup_face;
-        if self.state.camera_peek.tick(now, showing, self.state.lock.locked || setup_face) {
+        let showing = self.state.lock.locked && !self.state.lock.blank;
+        if self.state.camera_peek.tick(now, showing, self.state.lock.locked) {
             self.state.needs_redraw = true;
         }
-        // CV ID: the camera's frames looked at while a face would open the
-        // lock, or taken while the setup's PIN is typed - kept once it is
-        // accepted.
-        // Not with the Duo folded camera out: the camera faces away.
+        // CV ID (face.rs): the camera held open while locked; a look while
+        // the lock screen is lit and a face would open it - not folded
+        // camera-out; in the first setup, the face of the one typing the PIN
+        // taken, kept once the PIN is accepted.
+        let setup_face = self.state.setup.wants_face();
         let facing = self.state.posture.angle() < face::FOLD_MAX;
-        let looking = self.state.camera_peek.playing() && ((self.state.lock.wants_face() && facing) || setup_face);
-        self.state.face.want(looking, setup_face);
+        self.state.face.hold(self.state.lock.locked);
+        let lock_enrol = self.state.lock.enrolling_face();
+        let enrol = setup_face || lock_enrol;
+        self.state.face.want((self.state.lock.wants_face() && facing) || enrol, enrol);
         if self.state.face.take_taken() {
             self.state.setup.face_taken();
         }
-        if self.state.setup.take_pin_done() {
-            self.state.face.keep();
+        if let Some(pin) = self.state.setup.take_pin_done() {
+            self.state.face.keep(pin);
         }
         if self.state.face.take_matched() && self.state.lock.wants_face() && facing {
             self.state.lock.unlock_face();
@@ -558,6 +561,10 @@ impl Data {
         }
         // The keyring's prompts: the PIN that unlocked answers those waiting.
         if let Some(pin) = self.state.lock.take_verified_pin() {
+            // Face Unlock turned on: the face taken as it was typed kept.
+            if self.state.lock.take_face_enrol() {
+                self.state.face.keep(pin.clone());
+            }
             self.state.keyring.unlocked_with(pin);
         }
         self.state.keyring.service(self.state.lock.locked || self.state.setup.holds_screen());

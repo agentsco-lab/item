@@ -143,6 +143,9 @@ pub enum ShadeAsk {
     /// Open Settings on this panel.
     Settings(usize),
     Lock,
+    /// The Face Unlock tile: off (the face removed), or on (the lock,
+    /// the face taken as the PIN is typed).
+    Face,
 }
 
 pub struct Shade {
@@ -336,6 +339,7 @@ impl Shade {
         if let Some(press) = self.press.take_if(|p| p.slot == slot) {
             return match press.control {
                 Control::Tile(Tile::Settings) => Some(ShadeAsk::Settings(press.panel)),
+                Control::Tile(Tile::Face) => Some(ShadeAsk::Face),
                 Control::Tile(t) => {
                     self.quick.toggle(t);
                     None

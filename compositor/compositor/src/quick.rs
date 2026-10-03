@@ -78,10 +78,12 @@ pub enum Tile {
     Dark,
     Airplane,
     Night,
+    /// CV ID (face.rs): on with a face kept; tapped, the caller's.
+    Face,
     Settings,
 }
 
-const TILES: [Tile; 9] = [Tile::Wifi, Tile::Data, Tile::Bluetooth, Tile::Mute, Tile::Dnd, Tile::Dark, Tile::Airplane, Tile::Night, Tile::Settings];
+const TILES: [Tile; 10] = [Tile::Wifi, Tile::Data, Tile::Bluetooth, Tile::Mute, Tile::Dnd, Tile::Dark, Tile::Airplane, Tile::Night, Tile::Face, Tile::Settings];
 
 impl Tile {
     fn label(self) -> &'static str {
@@ -94,6 +96,7 @@ impl Tile {
             Tile::Dark => "Dark Style",
             Tile::Airplane => "Airplane Mode",
             Tile::Night => "Night Light",
+            Tile::Face => "Face Unlock",
             Tile::Settings => "Settings",
         }
     }
@@ -108,6 +111,7 @@ impl Tile {
             Tile::Dark => "/usr/share/icons/Adwaita/symbolic/status/weather-clear-night-symbolic.svg",
             Tile::Airplane => "/usr/share/icons/Adwaita/symbolic/status/airplane-mode-symbolic.svg",
             Tile::Night => "/usr/share/icons/Adwaita/symbolic/status/night-light-symbolic.svg",
+            Tile::Face => "/usr/share/icons/Adwaita/symbolic/status/avatar-default-symbolic.svg",
             Tile::Settings => "/usr/share/icons/hicolor/symbolic/apps/org.gnome.Settings-symbolic.svg",
         }
     }
@@ -122,6 +126,7 @@ impl Tile {
             Tile::Dark => s.dark,
             Tile::Airplane => s.airplane,
             Tile::Night => s.night,
+            Tile::Face => crate::face::enrolled(),
             Tile::Settings => false,
         }
     }
@@ -166,11 +171,11 @@ pub struct Row {
 // edge (the content hangs from it, as the head does).
 const SIDE: f64 = 30.0;
 const SLIDER_H: f64 = 48.0;
-const BRIGHTNESS_Y: f64 = -560.0;
-const VOLUME_Y: f64 = -500.0;
+const BRIGHTNESS_Y: f64 = -644.0;
+const VOLUME_Y: f64 = -584.0;
 const TILE_H: f64 = 72.0;
 const TILE_GAP: f64 = 12.0;
-const TILES_Y: f64 = -428.0;
+const TILES_Y: f64 = -512.0;
 const POWER_Y: f64 = -164.0;
 const BUTTON_H: f64 = 52.0;
 const ICON: i32 = 24;
@@ -486,7 +491,7 @@ impl Quick {
             Tile::Dark => sys.dark = on,
             Tile::Airplane => sys.airplane = on,
             Tile::Night => sys.night = on,
-            Tile::Settings => return,
+            Tile::Settings | Tile::Face => return,
         }
         let _ = self.jobs.send(Job::Toggle(tile, on));
     }
@@ -895,7 +900,7 @@ fn worker(rx: mpsc::Receiver<Job>, sys: Arc<Mutex<Sys>>, media: Arc<Mutex<Option
                         Tile::Dark => {
                             set("gsettings", &["set", "org.gnome.desktop.interface", "color-scheme", if on { "prefer-dark" } else { "default" }]);
                         }
-                        Tile::Settings => {}
+                        Tile::Settings | Tile::Face => {}
                     }
                     // What the system says now.
                     *sys.lock().unwrap() = read_sys();
