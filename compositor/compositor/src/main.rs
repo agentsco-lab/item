@@ -139,6 +139,20 @@ struct Pacing {
     pen_peak_ns: f64,
     /// Whether the frame being drawn is the pen's.
     pen: bool,
+    /// The pen's budget the other way (`floor`, the default; `/tmp/item-
+    /// pen-tune` says `old` for the one above, to compare them): hwcomposer's
+    /// present waits for a moment of its own before the vsync, so its time
+    /// counted whole into the budget drew the frame earlier and made the
+    /// present wait longer still - the budget held itself up at ~19 ms
+    /// (measured 2026-10-03, the pen's bench). So the drawing on its own (an
+    /// average), the present's least (a floor that rises slowly), and a
+    /// margin that grows when a pen's frame misses its vsync and shrinks
+    /// slowly.
+    pen_floor: bool,
+    pen_draw_ns: f64,
+    pen_present_ns: f64,
+    pen_extra_ns: f64,
+    pen_margin_ns: u64,
     /// The vsync the frame being drawn aims for.
     target_ns: u64,
     /// When the last frame went to hwcomposer.
@@ -178,7 +192,7 @@ impl Pacing {
     fn from_env() -> Pacing {
         let late = std::env::var("LATE").map(|v| v != "0").unwrap_or(true);
         let margin_ms: f64 = std::env::var("LATE_MARGIN_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(4.0);
-        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, peak_ns: 0.0, pen_render_ns: 6e6, pen_peak_ns: 0.0, pen: false, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
+        Pacing { late, margin_ns: (margin_ms * 1e6) as u64, render_ns: 2e6, peak_ns: 0.0, pen_render_ns: 6e6, pen_peak_ns: 0.0, pen: false, pen_floor: true, pen_draw_ns: 3e6, pen_present_ns: 3e6, pen_extra_ns: 0.0, pen_margin_ns: PEN_MARGIN_NS, target_ns: 0, last_swap_ns: 0, asap: std::env::var("ASAP").map(|v| v != "0").unwrap_or(true),
             callbacks: match std::env::var("CALLBACKS").as_deref() {
                 Ok("vsync") => Callbacks::Vsync,
                 Ok("after") => Callbacks::After,
@@ -190,6 +204,9 @@ impl Pacing {
     }
 
     fn budget_ns(&self) -> u64 {
+        if self.pen && self.pen_floor {
+            return (self.pen_draw_ns * 1.3 + self.pen_present_ns * 1.15 + self.pen_extra_ns) as u64 + self.pen_margin_ns;
+        }
         if self.pen {
             return (self.pen_render_ns * 1.25).max(self.pen_peak_ns * 1.05) as u64 + PEN_MARGIN_NS;
         }
@@ -696,6 +713,12 @@ impl Data {
                 // 2.3 s of motion), never past the period.
                 self.pacing.peak_ns = (self.pacing.peak_ns * 0.995).max(took as f64).min(self.screen.vsync_period_ns as f64 * 0.8);
                 if self.state.pen_drawing {
+                    let p = &mut self.pacing;
+                    let draw = draw_ns as f64;
+                    p.pen_draw_ns += (draw - p.pen_draw_ns) * if draw > p.pen_draw_ns { 0.5 } else { 0.1 };
+                    let present = hybris_hwc::last_present_took_ns() as f64;
+                    p.pen_present_ns = (p.pen_present_ns + 2e4).min(present.max(5e5));
+                    p.pen_extra_ns *= 0.995;
                     let weight = if took as f64 > self.pacing.pen_render_ns { 0.5 } else { 0.15 };
                     self.pacing.pen_render_ns += (took as f64 - self.pacing.pen_render_ns) * weight;
                     self.pacing.pen_peak_ns = (self.pacing.pen_peak_ns * 0.96).max(took as f64).min(self.screen.vsync_period_ns as f64 * 0.8);
@@ -719,6 +742,9 @@ impl Data {
             target
         } else {
             self.report.missed += 1;
+            if self.state.pen_drawing {
+                self.pacing.pen_extra_ns = (self.pacing.pen_extra_ns + 1e6).min(8e6);
+            }
             // Each missed frame, with where its time went.
             let d = hybris_hwc::last_present_detail();
             let ms = |ns: u64| ns as f64 / 1e6;
@@ -738,6 +764,7 @@ impl Data {
             let moved_ns = moved_us * 1000;
             if moved_ns <= reached_ns {
                 self.report.pen_ms.push(shown_at.saturating_sub(moved_ns) as f64 / 1e6);
+                self.state.pen_latencies.push(shown_at.saturating_sub(moved_ns) as f64 / 1e6);
                 self.report.pen_in_ms.push((reached_ns - moved_ns) as f64 / 1e6);
             }
         }
@@ -871,6 +898,12 @@ impl Data {
     }
 
     fn log_report(&mut self) {
+        // The pen's budget's way, as /tmp/item-pen-tune says (for the bench).
+        // `old`, or `floor` and the margin in ms (`floor 2`).
+        let tune = std::fs::read_to_string("/tmp/item-pen-tune").unwrap_or_default();
+        let mut words = tune.split_whitespace();
+        self.pacing.pen_floor = words.next() != Some("old");
+        self.pacing.pen_margin_ns = words.next().and_then(|m| m.parse::<f64>().ok()).map_or(PEN_MARGIN_NS, |m| (m * 1e6) as u64);
         let st = take_stats();
         let v = vsyncs();
         let r = std::mem::take(&mut self.report);
@@ -1029,6 +1062,12 @@ fn main() {
             }
             // `touch /tmp/item-stroke` draws a wave with the pen's pressure
             // rising along it on the open sheet, for tests.
+            // `touch /tmp/item-sheet`: the pen's sheet out, for the pen's
+            // bench (tools/pen-bench.sh).
+            if std::fs::remove_file("/tmp/item-sheet").is_ok() {
+                data.state.ribbon.to_end();
+                data.state.needs_redraw = true;
+            }
             if std::fs::remove_file("/tmp/item-stroke").is_ok() {
                 data.state.pen.test_stroke();
                 data.state.needs_redraw = true;

@@ -57,6 +57,8 @@ const REACH_EASE: f32 = 0.3;
 /// much of the ink to none.
 const FADE_PIECES: usize = 6;
 const FADE_FROM: f32 = 0.7;
+/// The tip's buffer's side (physical px): the tip fits it with room.
+const TIP_PX: i32 = 256;
 /// A curve is drawn in pieces about this long (physical px).
 const PIECE: f32 = 2.5;
 /// The toolbar's buttons, logical px from the panel's top right.
@@ -104,10 +106,17 @@ pub struct PenSheet {
     /// is going - not in the sheet, drawn anew at each move (its top left,
     /// physical, and its picture).
     recent: std::collections::VecDeque<(f32, f32, u64)>,
-    tip: Option<(f32, f32, MemoryRenderBuffer)>,
+    tip: Option<(f32, f32)>,
+    /// The tip's buffer, kept from move to move, and the part of it last
+    /// drawn (x, y, w, h; physical).
+    tip_buf: Option<MemoryRenderBuffer>,
+    tip_rect: Option<(i32, i32, i32, i32)>,
     /// The tip's reach ahead (physical px, x and y), eased from move to
     /// move: worked out anew from each, it jumped under the pen.
     reach: std::cell::Cell<(f32, f32)>,
+    /// The sheet's elements' cost while drawing, for the stroke's log:
+    /// frames, total ns, the most.
+    elements_cost: std::cell::Cell<(u32, u64, u64)>,
     /// The stroke's cost, for the log: events, pieces drawn, time drawing,
     /// the longest event, when it began.
     cost: (u32, u32, u64, u64, u64),
@@ -134,7 +143,10 @@ impl PenSheet {
             stroke: None,
             recent: Default::default(),
             tip: None,
+            tip_buf: None,
+            tip_rect: None,
             reach: Default::default(),
+            elements_cost: Default::default(),
             cost: (0, 0, 0, 0, 0),
             eraser: false,
             barrel: false,
@@ -352,7 +364,7 @@ impl PenSheet {
     /// (the pen's last sample) and on as far as the pen goes in PREDICT_US at
     /// its speed - no further than PREDICT_MAX, none when it is slow - the
     /// width thinning toward its end.
-    fn tip_ahead(&self, from: (f32, f32, f32), at: (f32, f32, f32)) -> Option<(f32, f32, MemoryRenderBuffer)> {
+    fn tip_ahead(&mut self, from: (f32, f32, f32), at: (f32, f32, f32)) -> Option<(f32, f32)> {
         let last = *self.recent.back()?;
         // The speed now (the last ~12 ms) and before (the ~12 ms before):
         // slowing, the tip shortens as much; turning, it is let go - else it
@@ -394,10 +406,9 @@ impl PenSheet {
         let pad = wmax / 2.0 + 2.0;
         let (bx, by) = (pts.iter().map(|p| p.0).fold(f32::MAX, f32::min) - pad, pts.iter().map(|p| p.1).fold(f32::MAX, f32::min) - pad);
         let (ex, ey) = (pts.iter().map(|p| p.0).fold(f32::MIN, f32::max) + pad, pts.iter().map(|p| p.1).fold(f32::MIN, f32::max) + pad);
-        let (w, h) = ((ex - bx).ceil().max(1.0) as u32, (ey - by).ceil().max(1.0) as u32);
-        let mut pm = tiny_skia::Pixmap::new(w, h)?;
-        let mut paint = tiny_skia::Paint::default();
-        paint.anti_alias = true;
+        if ex - bx > TIP_PX as f32 || ey - by > TIP_PX as f32 {
+            return None;
+        }
         // To the pen, whole; the guess ahead of it fades out and thins, so
         // its small jumps hardly show.
         let mut pieces = vec![(pts[0], pts[1], 1.0f32)];
@@ -409,19 +420,42 @@ impl PenSheet {
                 pieces.push((lerp(t0), lerp(t1), (1.0 - (t0 + t1) / 2.0) * FADE_FROM));
             }
         }
-        for ((x0, y0, w0), (x1, y1, w1), a) in pieces {
-            paint.set_color_rgba8(INK[0], INK[1], INK[2], (INK[3] as f32 * a) as u8);
-            let mut pb = tiny_skia::PathBuilder::new();
-            pb.move_to(x0 - bx, y0 - by);
-            pb.line_to(x1 - bx + if x0 == x1 && y0 == y1 { 0.01 } else { 0.0 }, y1 - by);
-            let Some(path) = pb.finish() else { continue };
-            // The fading pieces end flat: round ends would overlap, darker
-            // at each joint.
-            let cap = if a < 1.0 { tiny_skia::LineCap::Butt } else { tiny_skia::LineCap::Round };
-            let stroke = tiny_skia::Stroke { width: (w0 + w1) / 2.0, line_cap: cap, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
-            pm.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
-        }
-        Some((bx, by, MemoryRenderBuffer::from_slice(pm.data(), Fourcc::Abgr8888, (w as i32, h as i32), SCALE, Transform::Normal, None)))
+        // Into the one buffer kept for it: the last tip cleared, this one
+        // drawn, only the two's rectangle uploaded - a new texture each move
+        // cost an allocation and a whole upload a frame.
+        let old = self.tip_rect.take();
+        let (w, h) = ((ex - bx).ceil() as i32, (ey - by).ceil() as i32);
+        let buf = self.tip_buf.get_or_insert_with(|| MemoryRenderBuffer::new(Fourcc::Abgr8888, (TIP_PX, TIP_PX), SCALE, Transform::Normal, None));
+        let mut ctx = buf.render();
+        let _ = ctx.draw(|mem| {
+            let Some(mut pm) = tiny_skia::PixmapMut::from_bytes(mem, TIP_PX as u32, TIP_PX as u32) else { return Ok::<_, ()>(vec![]) };
+            if let Some((ox, oy, ow, oh)) = old {
+                if let Some(r) = tiny_skia::Rect::from_xywh(ox as f32, oy as f32, ow as f32, oh as f32) {
+                    let mut clear = tiny_skia::Paint::default();
+                    clear.blend_mode = tiny_skia::BlendMode::Clear;
+                    pm.fill_rect(r, &clear, tiny_skia::Transform::identity(), None);
+                }
+            }
+            let mut paint = tiny_skia::Paint::default();
+            paint.anti_alias = true;
+            for ((x0, y0, w0), (x1, y1, w1), a) in pieces {
+                paint.set_color_rgba8(INK[0], INK[1], INK[2], (INK[3] as f32 * a) as u8);
+                let mut pb = tiny_skia::PathBuilder::new();
+                pb.move_to(x0 - bx, y0 - by);
+                pb.line_to(x1 - bx + if x0 == x1 && y0 == y1 { 0.01 } else { 0.0 }, y1 - by);
+                let Some(path) = pb.finish() else { continue };
+                // The fading pieces end flat: round ends would overlap,
+                // darker at each joint.
+                let cap = if a < 1.0 { tiny_skia::LineCap::Butt } else { tiny_skia::LineCap::Round };
+                let stroke = tiny_skia::Stroke { width: (w0 + w1) / 2.0, line_cap: cap, line_join: tiny_skia::LineJoin::Round, ..Default::default() };
+                pm.stroke_path(&path, &paint, &stroke, tiny_skia::Transform::identity(), None);
+            }
+            let (ow, oh) = old.map_or((0, 0), |o| (o.2, o.3));
+            Ok(vec![Rectangle::<i32, Buffer>::new((0, 0).into(), (w.max(ow).min(TIP_PX), h.max(oh).min(TIP_PX)).into())])
+        });
+        drop(ctx);
+        self.tip_rect = Some((0, 0, w, h));
+        Some((bx, by))
     }
 
     /// The line's width at a pressure (physical px).
@@ -475,7 +509,8 @@ impl PenSheet {
         let (events, pieces, ns, worst, at) = self.cost;
         if at > 0 {
             let long = (hybris_hwc::now_ns() - at) as f64 / 1e9;
-            tracing::info!("pen: a stroke: {events} events ({:.0}/s), {pieces} pieces, drawing {:.1} ms in all, {:.2} ms the longest", events as f64 / long.max(1e-3), ns as f64 / 1e6, worst as f64 / 1e6);
+            let (frames, ens, emax) = self.elements_cost.take();
+            tracing::info!("pen: a stroke: {events} events ({:.0}/s), {pieces} pieces, drawing {:.1} ms in all, {:.2} ms the longest; the sheet's elements {:.2} ms a frame, {:.2} the most ({frames} frames)", events as f64 / long.max(1e-3), ns as f64 / 1e6, worst as f64 / 1e6, ens as f64 / 1e6 / frames.max(1) as f64, emax as f64 / 1e6);
         }
         if let Some((pts, erase)) = self.stroke.take() {
             let n = pts.len();
@@ -605,6 +640,17 @@ impl PenSheet {
     }
 
     fn drawn_at(&self, renderer: &mut GlesRenderer, p: f64) -> Vec<ShellElement> {
+        let t = hybris_hwc::now_ns();
+        let out = self.drawn_at_inner(renderer, p);
+        if self.stroke.is_some() {
+            let d = hybris_hwc::now_ns() - t;
+            let (f, ns, max) = self.elements_cost.get();
+            self.elements_cost.set((f + 1, ns + d, max.max(d)));
+        }
+        out
+    }
+
+    fn drawn_at_inner(&self, renderer: &mut GlesRenderer, p: f64) -> Vec<ShellElement> {
         let Some(canvas) = &self.canvas else { return Vec::new() };
         if p <= 0.0 {
             return Vec::new();
@@ -614,6 +660,16 @@ impl PenSheet {
         let dx = panel.size.w as f64 * (1.0 - p);
         let s = SCALE as f64;
         let mut out = Vec::new();
+        // Only the part of its buffer the tip took: the whole buffer drew,
+        // and damaged, far more of the screen than the tip.
+        let mut tip = None;
+        if let (Some((tx, ty)), Some(buf), Some((_, _, w, h))) = (&self.tip, &self.tip_buf, self.tip_rect) {
+            let src = Rectangle::<f64, Logical>::new((0.0, 0.0).into(), (w as f64 / s, h as f64 / s).into());
+            let size = smithay::utils::Size::<i32, Logical>::from(((w as f64 / s).ceil() as i32, (h as f64 / s).ceil() as i32));
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (((panel.loc.x as f64 + *tx as f64 / s + dx) * s).round(), (*ty as f64).round()), buf, None, Some(src), Some(size), Kind::Unspecified) {
+                tip = Some(ShellElement::Text(e));
+            }
+        }
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64| {
             if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (((x + dx) * s).round(), (y * s).round()), b, None, None, None, Kind::Unspecified) {
                 out.push(ShellElement::Text(e));
@@ -633,9 +689,8 @@ impl PenSheet {
             put(&mut out, &bg, r.loc.x, r.loc.y);
         }
         // The stroke's tip ahead of the pen, over the sheet.
-        if let Some((tx, ty, tip)) = &self.tip {
-            put(&mut out, tip, panel.loc.x as f64 + *tx as f64 / s, *ty as f64 / s);
-        }
+        // The stroke's tip ahead of the pen, over the sheet.
+        out.extend(tip);
         put(&mut out, canvas, panel.loc.x as f64, 0.0);
         out
     }

@@ -153,6 +153,8 @@ pub struct State {
     /// The pen's first move on the sheet not yet shown: (libinput's time, us;
     /// when it reached the compositor, ns).
     pub pen_moved: Option<(u64, u64)>,
+    /// The stroke's pen->screen times so far (ms), for its percentiles.
+    pub pen_latencies: Vec<f64>,
     /// The hinge's angle (posture.rs).
     pub posture: crate::posture::Posture,
     /// The privacy dot: camera, microphone, location in use.
@@ -265,6 +267,7 @@ impl State {
             face,
             foldcam: crate::foldcam::FoldCam::new(wake.clone()),
             pen_moved: None,
+            pen_latencies: Vec::new(),
             privacy: crate::privacy::Privacy::new(wake.clone()),
             follow: crate::follow::Follow::new(wake.clone()),
             tour: crate::tour::Tour::new(),

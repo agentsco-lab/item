@@ -291,6 +291,17 @@ impl Ribbon {
         tracing::info!("ribbon: to page {} of {} ({:?} | {:?})", self.view, self.pages.len(), self.on(0), self.on(1));
     }
 
+    /// The row run to its end: the pen's sheet on the right panel (for
+    /// tests: the pen's bench, tools/pen-bench.sh).
+    pub fn to_end(&mut self) {
+        let now = hybris_hwc::now_ns();
+        let pos = self.pos();
+        let from: Vec<(Page, f64)> = self.pages.iter().enumerate().map(|(i, p)| (p.clone(), (i as f64 - pos) * PAGE)).collect();
+        self.view = self.max_view();
+        self.run = Some(Run { from, start_ns: now, duration_ns: RUN_MAX_NS as u64, v0: 0.0, scroll: true });
+        self.unsettled = true;
+    }
+
     pub fn cancel(&mut self) {
         if let Some(slot) = self.drag.as_ref().map(|d| d.slot) {
             self.up(slot);

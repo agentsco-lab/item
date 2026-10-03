@@ -21,6 +21,12 @@
 //! decided as the pen comes near and kept until it leaves. If this stops,
 //! the grab goes with it and the original node reaches the compositor again.
 //!
+//! A bench (`bench SECONDS` to the same socket): the pen draws a Lissajous
+//! figure over the right panel for that long, 250 samples a second at an
+//! even pressure, through the same 'sfduo pen' device - the same way to the
+//! screen as the real pen's from here on, the same strokes every time - for
+//! item's pen->screen to be compared between builds.
+//!
 //!   pen-split [--for SECONDS]
 
 use std::collections::BTreeMap;
@@ -79,7 +85,14 @@ struct Splitter {
     /// The pen as a tablet: in proximity (with which tool), touching.
     prox: Option<Key>,
     touching: bool,
+    /// The bench: when it began and ends, the next sample's time, the
+    /// panel's range (x from, x to, y max) and the pressure's maximum.
+    bench: Option<(Instant, Instant, Instant)>,
+    range: (i32, i32, i32, i32),
 }
+
+/// The bench's samples: every this long (us) - the digitizer's ~250 a second.
+const BENCH_EVERY_US: u64 = 4000;
 
 fn abs(code: Abs, value: i32) -> InputEvent {
     InputEvent::new(EventType::ABSOLUTE.0, code.0, value)
@@ -272,7 +285,37 @@ impl Splitter {
     }
 }
 
-fn make_devices(src: &Device) -> io::Result<(VirtualDevice, VirtualDevice, i32)> {
+impl Splitter {
+    /// The bench's next sample, if it is due; its end, when it is over.
+    fn bench_tick(&mut self, now: Instant) -> io::Result<()> {
+        let Some((start, end, next)) = self.bench else { return Ok(()) };
+        if now < next {
+            return Ok(());
+        }
+        let (x0, x1, ymax, pmax) = self.range;
+        if now >= end {
+            self.bench = None;
+            log("bench: done");
+            return self.pen.emit(&[abs(Abs::ABS_PRESSURE, 0), key(Key::BTN_TOUCH, false), key(Key::BTN_TOOL_PEN, false)]);
+        }
+        let t = (now - start).as_secs_f64();
+        // A Lissajous figure in the panel's middle 70 %: ~250 mm/s at its
+        // fastest, as a quick hand.
+        let (cx, cy) = ((x0 + x1) as f64 / 2.0, ymax as f64 / 2.0);
+        let (rx, ry) = ((x1 - x0) as f64 * 0.35, ymax as f64 * 0.35);
+        let x = cx + rx * (t * 2.1).sin();
+        let y = cy + ry * (t * 2.9 + 0.7).sin();
+        let mut out = vec![abs(Abs::ABS_X, x as i32), abs(Abs::ABS_Y, y as i32), abs(Abs::ABS_PRESSURE, pmax * 6 / 10)];
+        if next == start {
+            out.insert(0, key(Key::BTN_TOOL_PEN, true));
+            out.push(key(Key::BTN_TOUCH, true));
+        }
+        self.bench = Some((start, end, next + Duration::from_micros(BENCH_EVERY_US)));
+        self.pen.emit(&out)
+    }
+}
+
+fn make_devices(src: &Device) -> io::Result<(VirtualDevice, VirtualDevice, i32, i32, i32)> {
     let absinfo: BTreeMap<u16, AbsInfo> = src.get_absinfo()?.map(|(c, a)| (c.0, a)).collect();
     let need = |c: Abs| absinfo.get(&c.0).copied().ok_or_else(|| io::Error::other(format!("no {c:?}")));
     let (ax, ay) = (need(Abs::ABS_MT_POSITION_X)?, need(Abs::ABS_MT_POSITION_Y)?);
@@ -301,7 +344,7 @@ fn make_devices(src: &Device) -> io::Result<(VirtualDevice, VirtualDevice, i32)>
         .with_absolute_axis(&UinputAbsSetup::new(Abs::ABS_Y, info(ay, Some(res_y))))?
         .with_absolute_axis(&UinputAbsSetup::new(Abs::ABS_PRESSURE, AbsInfo::new(0, 0, pmax, 0, 0, 0)))?
         .build()?;
-    Ok((touch, pen, ax.maximum()))
+    Ok((touch, pen, ax.maximum(), ay.maximum(), pmax))
 }
 
 fn main() {
@@ -323,7 +366,7 @@ fn run() -> i32 {
         log(&format!("no {SOURCE_NAME} node - nothing to split"));
         return 1;
     };
-    let (touch, pen, max_x) = match make_devices(&src) {
+    let (touch, pen, max_x, max_y, pmax) = match make_devices(&src) {
         Ok(d) => d,
         Err(e) => {
             log(&format!("the devices: {e}"));
@@ -366,6 +409,8 @@ fn run() -> i32 {
         fingers_down: 0,
         prox: None,
         touching: false,
+        bench: None,
+        range: ((max_x as f64 * SHEET_FROM) as i32, max_x, max_y, pmax),
     };
     let code = loop {
         if until.is_some_and(|u| Instant::now() >= u) {
@@ -374,14 +419,25 @@ fn run() -> i32 {
         }
         let mut fds = [libc::pollfd { fd: src.as_raw_fd(), events: libc::POLLIN, revents: 0 }, libc::pollfd { fd: sheet.as_raw_fd(), events: libc::POLLIN, revents: 0 }];
         // SAFETY: two valid pollfds, their fds owned for the call.
-        let n = unsafe { libc::poll(fds.as_mut_ptr(), 2, 1000) };
+        let wait = if s.bench.is_some() { 1 } else { 1000 };
+        let n = unsafe { libc::poll(fds.as_mut_ptr(), 2, wait) };
         if n < 0 {
             continue;
         }
+        if let Err(e) = s.bench_tick(Instant::now()) {
+            log(&format!("bench: {e}"));
+        }
         if fds[1].revents & libc::POLLIN != 0 {
-            let mut buf = [0u8; 16];
+            let mut buf = [0u8; 32];
             while let Ok(k) = sheet.recv(&mut buf) {
-                s.sheet_out = buf[..k].iter().copied().filter(|b| !b.is_ascii_whitespace()).eq(*b"1");
+                let said = String::from_utf8_lossy(&buf[..k]).trim().to_owned();
+                if let Some(secs) = said.strip_prefix("bench ").and_then(|v| v.parse::<f64>().ok()) {
+                    let now = Instant::now();
+                    s.bench = Some((now, now + Duration::from_secs_f64(secs), now));
+                    log(&format!("bench: {secs} s"));
+                } else {
+                    s.sheet_out = said == "1";
+                }
             }
         }
         if fds[0].revents & (libc::POLLERR | libc::POLLHUP) != 0 {

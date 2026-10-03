@@ -244,6 +244,14 @@ impl State {
                 if !down && self.pen_drawing {
                     self.pen_drawing = false;
                     self.pen.pen_up();
+                    // The stroke's pen->screen, in percentiles (the bench,
+                    // pen-split's, compares builds by them).
+                    let mut l = std::mem::take(&mut self.pen_latencies);
+                    if l.len() >= 5 {
+                        l.sort_by(|a, b| a.total_cmp(b));
+                        let at = |q: f64| l[((l.len() - 1) as f64 * q).round() as usize];
+                        tracing::info!("pen: pen->screen over {} frames: median {:.1}, p95 {:.1}, max {:.1} ms", l.len(), at(0.5), at(0.95), at(1.0));
+                    }
                     self.needs_redraw = true;
                     return;
                 }
@@ -260,11 +268,11 @@ impl State {
                     let pos = event.position_transformed(LAYOUT.into());
                     let eraser = TabletToolEvent::<LibinputInputBackend>::tool(&event).tool_type == TabletToolType::Eraser;
                     self.pen.pen_motion(pos, TabletToolEvent::<LibinputInputBackend>::pressure(&event), eraser, event.time());
-                    // The first move not yet on screen: its kernel time and
-                    // when it reached here, for the report's pen->screen.
-                    if self.pen_moved.is_none() {
-                        self.pen_moved = Some((event.time(), hybris_hwc::now_ns()));
-                    }
+                    // The newest move before the frame: its kernel time and
+                    // when it reached here, for the report's pen->screen - the
+                    // line's end, which the eye follows (the oldest move in a
+                    // frame waited for it most of a frame more).
+                    self.pen_moved = Some((event.time(), hybris_hwc::now_ns()));
                     self.boost.kick(hybris_hwc::now_ns());
                     self.needs_redraw = true;
                     return;
