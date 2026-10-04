@@ -160,6 +160,9 @@ pub struct Picker {
     pub vignette: f32,
     /// The clock's font chosen.
     pub font: usize,
+    /// The clock's panel as it opened: the dock goes away while it is open,
+    /// and the clock stands where the dock was.
+    pub clock_panel: Option<usize>,
 }
 
 /// What a touch in the picker chose.
@@ -283,6 +286,7 @@ impl Picker {
             brightness: 0.95,
             vignette: 0.4,
             font: 0,
+            clock_panel: None,
         }
     }
 

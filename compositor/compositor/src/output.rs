@@ -478,7 +478,9 @@ impl Screen {
         let wall_for_drops = self.wall.as_ref().map(|t| (t, (wall_width() as f64, crate::layout::LAYOUT.1 as f64), crate::state::WALL_LEFT + shift_now));
         elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running, wall_for_drops).into_iter().map(FrameElement::from));
         let clock_panel = state.ribbon.clock_panel().or(state.dock.home_panel());
-        // Choosing the wallpaper: the clock stays, to be moved and styled.
+        // Choosing the wallpaper: the clock stays where the dock was (the dock
+        // goes away meanwhile), to be moved and styled.
+        let clock_panel = if state.picker.visible(frame_ns) { state.picker.clock_panel.or(clock_panel) } else { clock_panel };
         let carried = state.ribbon.clock_panel().is_some();
         // Going along with the dock from one panel to the other.
         // Not while the ribbon moves: the clock goes with its desk then, or stays.
