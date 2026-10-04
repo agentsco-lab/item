@@ -184,7 +184,10 @@ pub struct Screen {
     wall_at: (smithay::backend::renderer::element::Id, f32),
     /// The vignette's shader, and its elements at a strength.
     vignette_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
-    vignette_at: Option<(f32, Vec<smithay::backend::renderer::gles::element::PixelShaderElement>)>,
+    vignette_at: Option<(String, Vec<smithay::backend::renderer::gles::element::PixelShaderElement>)>,
+    /// The picker's preview pictures by part (walls.rs): their name, the
+    /// texture, px per px of the picture.
+    previews: std::collections::HashMap<crate::walls::Side, (String, smithay::backend::renderer::gles::GlesTexture)>,
     _hwc: HwcOutput,
 }
 
@@ -241,7 +244,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, previews: Default::default(), _hwc: hwc }
     }
 
     /// Draws what changed in the space and hands the frame to hwcomposer.
@@ -486,6 +489,8 @@ impl Screen {
         // Not while the ribbon moves: the clock goes with its desk then, or stays.
         let middle = if carried || state.ribbon.scrolling(frame_ns).is_some() { None } else { state.dock.home_x(frame_ns).filter(|(_, going)| *going).map(|(x, _)| x) };
         let clock = state.clock.elements(&mut self.renderer, clock_panel, frame_ns, carried, middle, state.picker.clock_moved(), state.picker.brightness_live());
+        // The editing's clock card stands by the clock where it is now.
+        state.picker.set_clock_rect(state.clock.last_rect.get());
         // Shifted with the ribbon only when it carries the clock with its desk.
         match clock_panel.filter(|_| carried).and_then(|k| state.ribbon.carried(k, frame_ns)) {
             Some(dx) => elements.extend(carry(clock, dx)),
@@ -577,11 +582,15 @@ impl Screen {
             let (z, d) = if live { state.walls.preview(z, d) } else { (z, d) };
             (state.walls.part(), z, d)
         });
-        let wall = self.wallpaper(shift, frame_ns, preview);
-        // With a picture on each panel, each darkening toward its edges.
+        // Live, from the picture itself where its preview is on the GPU: the
+        // parts out of the made wallpaper's sight are there too.
+        let source = state.picker.preview().filter(|p| p.2).and_then(|(z, d, _)| state.walls.preview_window(z, d)).and_then(|(side, name, win)| self.previews.get(&side).filter(|p| p.0 == name).map(|p| (win, p.1.clone())));
+        let wall = self.wallpaper(shift, frame_ns, preview, source);
+        // With a picture on each panel, each darkening toward its edges, the
+        // one by the hinge more as the phone folds like a book.
         if state.walls.each {
-            let strength = state.picker.vignette_live().unwrap_or(state.walls.vignette);
-            elements.extend(self.vignette(strength));
+            let v = state.picker.vignette_live().unwrap_or(state.walls.vignette);
+            elements.extend(self.vignette(v, state.posture.book()));
         }
         elements.extend(wall.into_iter().map(FrameElement::Snapshot));
         let elements_ns = hybris_hwc::now_ns() - t0;
@@ -855,6 +864,16 @@ impl Screen {
         self.wall_at = (smithay::backend::renderer::element::Id::new(), self.wall_at.1);
     }
 
+    /// A picture for the picker's preview to the GPU (walls.rs).
+    pub fn add_preview(&mut self, p: crate::walls::PreviewSource) {
+        use smithay::backend::renderer::ImportMem;
+        let (side, name, rgba, w, h, _) = p;
+        if let Ok(t) = self.renderer.import_memory(&rgba, Fourcc::Abgr8888, (w as i32, h as i32).into(), false) {
+            tracing::info!("wallpaper: {name}'s preview ({w}x{h}) to the GPU");
+            self.previews.insert(side, (name, t));
+        }
+    }
+
     /// Whether a wallpaper is still fading in.
     /// Whether the fold's glass wants frames: the wave lives while the
     /// phone is held part-way; the right panel develops or fades.
@@ -901,7 +920,7 @@ impl Screen {
     /// new one fades in. `preview`: the picker's zoom and move of a part
     /// (walls.rs) while the fingers are on it - the texture's window for that
     /// part made smaller and moved, as the wallpaper made from it will look.
-    fn wallpaper(&mut self, shift: f32, frame_ns: u64, preview: Option<(crate::walls::Side, f64, (f64, f64))>) -> Vec<smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>> {
+    fn wallpaper(&mut self, shift: f32, frame_ns: u64, preview: Option<(crate::walls::Side, f64, (f64, f64))>, source: Option<((f64, f64, f64, f64), smithay::backend::renderer::gles::GlesTexture)>) -> Vec<smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>> {
         use crate::walls::Side;
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         use smithay::utils::{Logical, Rectangle};
@@ -940,6 +959,31 @@ impl Screen {
         };
         let mut out = Vec::new();
         let Some(texture) = self.wall.clone() else { return out };
+        // The part previewed straight from its picture: its piece of the
+        // window, at the picture's own px (buffer scale 1).
+        if let (Some((side, _, _)), Some(((wx, wy, ww, wh), pic))) = (preview, source.clone()) {
+            let (rx, ry, rw, rh) = crate::walls::region(side);
+            let mut rest = Vec::new();
+            for p in &pieces {
+                let in_part = match side {
+                    Side::Both => true,
+                    Side::Left => p.0 < seam,
+                    Side::Right => p.0 >= seam,
+                };
+                if !in_part {
+                    rest.push(p.clone());
+                    continue;
+                }
+                let (cx, cy, cw, ch) = (left + p.0, 0.0, p.1, h as f64);
+                let src = Rectangle::<f64, Logical>::new((wx + (cx - rx) / rw * ww, wy + (cy - ry) / rh * wh).into(), (cw / rw * ww, ch / rh * wh).into());
+                let size: smithay::utils::Size<i32, Logical> = ((p.1.round() as i32).max(1), h).into();
+                out.push(TextureRenderElement::from_static_texture(smithay::backend::renderer::element::Id::new(), context.clone(), ((p.0 * SCALE as f64).round(), 0.0), pic.clone(), 1, Transform::Normal, None, Some(src), Some(size), None, smithay::backend::renderer::element::Kind::Unspecified));
+            }
+            for p in &rest {
+                out.push(element(smithay::backend::renderer::element::Id::new(), texture.clone(), None, p));
+            }
+            return out;
+        }
         // While previewing every piece changes each frame.
         let id = |base: &smithay::backend::renderer::element::Id, i: usize| if previewing || i > 0 { smithay::backend::renderer::element::Id::new() } else { base.clone() };
         match self.wall_old.clone() {
@@ -970,15 +1014,19 @@ impl Screen {
         out
     }
 
-    /// The vignette over each panel at `strength` (vignette.frag); made again
-    /// only when the strength changes.
-    fn vignette(&mut self, strength: f32) -> Vec<FrameElement> {
+    /// The vignette over each panel (vignette.frag), the hinge's shadow by
+    /// `book`; made again only when something in it changes.
+    fn vignette(&mut self, v: crate::walls::Vignette, book: f64) -> Vec<FrameElement> {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
-        if strength < 0.005 {
+        let book = (book * 100.0).round() / 100.0;
+        if v.strength < 0.005 && book < 0.005 {
             return Vec::new();
         }
         if self.vignette_program.is_none() {
-            match self.renderer.compile_custom_pixel_shader(include_str!("vignette.frag"), &[UniformName::new("strength", UniformType::_1f)]) {
+            let names = ["strength", "reach", "soft", "glow", "book", "inner"].map(|n| UniformName::new(n, UniformType::_1f));
+            let mut names = names.to_vec();
+            names.push(UniformName::new("colour", UniformType::_3f));
+            match self.renderer.compile_custom_pixel_shader(include_str!("vignette.frag"), &names) {
                 Ok(p) => self.vignette_program = Some(p),
                 Err(e) => {
                     tracing::warn!("vignette: {e}");
@@ -986,15 +1034,35 @@ impl Screen {
                 }
             }
         }
-        if self.vignette_at.as_ref().map(|v| v.0) != Some(strength) {
+        let accent = crate::accent::get_f();
+        let key = format!("{v:?} {book} {}", crate::accent::version());
+        if self.vignette_at.as_ref().map(|x| &x.0) != Some(&key) {
             let program = self.vignette_program.clone().unwrap();
             let els = crate::layout::panels()
                 .into_iter()
-                .map(|p| smithay::backend::renderer::gles::element::PixelShaderElement::new(program.clone(), p, None, 1.0, vec![Uniform::new("strength", strength)], smithay::backend::renderer::element::Kind::Unspecified))
+                .enumerate()
+                .map(|(i, p)| {
+                    smithay::backend::renderer::gles::element::PixelShaderElement::new(
+                        program.clone(),
+                        p,
+                        None,
+                        1.0,
+                        vec![
+                            Uniform::new("strength", v.strength),
+                            Uniform::new("reach", v.size),
+                            Uniform::new("soft", v.soft),
+                            Uniform::new("glow", if v.glow { 1.0f32 } else { 0.0 }),
+                            Uniform::new("book", book as f32),
+                            Uniform::new("inner", if i == 0 { 1.0f32 } else { -1.0 }),
+                            Uniform::new("colour", (accent[0], accent[1], accent[2])),
+                        ],
+                        smithay::backend::renderer::element::Kind::Unspecified,
+                    )
+                })
                 .collect();
-            self.vignette_at = Some((strength, els));
+            self.vignette_at = Some((key, els));
         }
-        self.vignette_at.as_ref().map(|v| v.1.clone()).unwrap_or_default().into_iter().map(FrameElement::Pixel).collect()
+        self.vignette_at.as_ref().map(|x| x.1.clone()).unwrap_or_default().into_iter().map(FrameElement::Pixel).collect()
     }
 
     /// Each panel's outer edges soft, going into the bezel's dark

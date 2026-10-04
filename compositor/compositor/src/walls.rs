@@ -40,7 +40,7 @@ pub const MAX_ZOOM: f64 = 2.0;
 pub type Picture = (String, Vec<u8>, u32, u32, bool);
 
 /// Which part of the wallpaper.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Side {
     Both,
     Left,
@@ -80,6 +80,32 @@ impl View {
         View { name: name.to_owned(), zoom: 1.0, cx: 0.5, cy: 0.5 }
     }
 }
+
+/// The vignette with a picture on each panel (output.rs, vignette.frag).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Vignette {
+    /// How dark the edges get, 0 to 1.
+    pub strength: f32,
+    /// How far in from the edges it reaches, 0 to 1.
+    pub size: f32,
+    /// A soft gradient (1) or a firmer edge (0).
+    pub soft: f32,
+    /// A glow in the accent instead of the dark.
+    pub glow: bool,
+}
+
+impl Default for Vignette {
+    fn default() -> Vignette {
+        Vignette { strength: 0.55, size: 0.5, soft: 0.6, glow: false }
+    }
+}
+
+/// A picture for the picker's preview (output.rs): the part, its name, its
+/// RGBA, its size, and its px per px of the picture.
+pub type PreviewSource = (Side, String, Vec<u8>, u32, u32, f64);
+
+/// The most pixels a preview's picture keeps.
+const PREVIEW_PX: f64 = 8.0e6;
 
 /// Whether a picture is on each panel: then the wallpaper keeps still
 /// (state.rs's parallax).
@@ -138,9 +164,12 @@ pub struct Walls {
     /// The small pictures, once read (the picker asks for them).
     pub thumbs: Vec<Option<MemoryRenderBuffer>>,
     thumbs_asked: bool,
-    /// With one on each panel, how strongly each darkens toward its edges
-    /// (output.rs, vignette.frag): 0 to 1.
-    pub vignette: f32,
+    /// With one on each panel, each darkening toward its edges.
+    pub vignette: Vignette,
+    /// Pictures for the picker's preview, waiting for the GPU.
+    previews: Arc<Mutex<Vec<PreviewSource>>>,
+    /// Each part's preview picture's px per px of the picture, as made.
+    preview_scale: Arc<Mutex<HashMap<(usize, String), f64>>>,
     /// The wallpaper made last, so a make is not asked for twice.
     made: Option<(bool, [View; 3])>,
     wake: Ping,
@@ -364,7 +393,9 @@ impl Walls {
             thumbs_loaded: Default::default(),
             thumbs: Vec::new(),
             thumbs_asked: false,
-            vignette: 0.4,
+            vignette: Vignette::default(),
+            previews: Default::default(),
+            preview_scale: Default::default(),
             made: None,
             wake,
         };
@@ -385,7 +416,11 @@ impl Walls {
             match w.as_slice() {
                 [name] if known(name) => self.views = [View::of(name), View::of(name), View::of(name)],
                 ["mode", m] => self.each = *m == "each",
-                ["vignette", v] => self.vignette = v.parse::<f32>().unwrap_or(0.4).clamp(0.0, 1.0),
+                ["vignette", rest @ ..] => {
+                    let num = |k: usize, d: f32| rest.get(k).and_then(|v| v.parse::<f32>().ok()).unwrap_or(d).clamp(0.0, 1.0);
+                    let d = Vignette::default();
+                    self.vignette = Vignette { strength: num(0, d.strength), size: num(1, d.size), soft: num(2, d.soft), glow: rest.get(3) == Some(&"glow") };
+                }
                 [side, name, rest @ ..] if known(name) => {
                     let i = match *side {
                         "both" => 0,
@@ -410,7 +445,8 @@ impl Walls {
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        let mut text = format!("mode {}\nvignette {:.2}\n", if self.each { "each" } else { "both" }, self.vignette);
+        let g = &self.vignette;
+        let mut text = format!("mode {}\nvignette {:.2} {:.2} {:.2} {}\n", if self.each { "each" } else { "both" }, g.strength, g.size, g.soft, if g.glow { "glow" } else { "dark" });
         for side in [Side::Both, Side::Left, Side::Right] {
             let v = &self.views[side.index()];
             text.push_str(&format!("{} {} {:.3} {:.4} {:.4}\n", side.word(), v.name, v.zoom, v.cx, v.cy));
@@ -474,10 +510,29 @@ impl Walls {
         self.make(true, false);
     }
 
-    /// The vignette's strength, kept.
-    pub fn set_vignette(&mut self, v: f32) {
-        self.vignette = v.clamp(0.0, 1.0);
+    /// The vignette, kept.
+    pub fn set_vignette(&mut self, v: Vignette) {
+        self.vignette = v;
         self.keep();
+    }
+
+    /// Pictures for the picker's preview made since the last ask.
+    pub fn take_previews(&self) -> Vec<PreviewSource> {
+        std::mem::take(&mut *self.previews.lock().unwrap())
+    }
+
+    /// The window of the preview's picture the zoom `z` and move `d` show on
+    /// the part being chosen for (px of that picture), as the made
+    /// wallpaper will be: the part and its picture's name with it.
+    pub fn preview_window(&self, z: f64, d: (f64, f64)) -> Option<(Side, String, (f64, f64, f64, f64))> {
+        let part = self.part();
+        let (_, nv, _, _) = self.led_to(z, d)?;
+        let &(sw, sh) = self.sizes.lock().unwrap().get(&nv.name)?;
+        let f = *self.preview_scale.lock().unwrap().get(&(part.index(), nv.name.clone()))?;
+        let (_, _, rw, rh) = region(part);
+        let s = crate::layout::SCALE as f64;
+        let ((x, y, w, h), _) = window(sw, sh, rw * s, rh * s, &nv);
+        Some((part, nv.name, (x * f, y * f, w * f, h * f)))
     }
 
     /// The panel being chosen for, with one on each.
@@ -570,6 +625,7 @@ impl Walls {
         };
         let label = self.describe();
         let (slot, frosted, wake, sizes, cache) = (self.loaded.clone(), self.frosted.clone(), self.wake.clone(), self.sizes.clone(), self.cache.clone());
+        let (previews, preview_scale) = (self.previews.clone(), self.preview_scale.clone());
         std::thread::spawn(move || {
             let t = std::time::Instant::now();
             if parts.len() == 1 && parts[0].1.name == AURORA {
@@ -604,6 +660,22 @@ impl Walls {
                 };
                 let (src, sw, sh) = (&source.0, source.1, source.2);
                 sizes.lock().unwrap().insert(view.name.clone(), (sw, sh));
+                // The picker's preview picture for this part: sharp to the
+                // most zoom, not over PREVIEW_PX; made when the picture is new.
+                let key = (side.index(), view.name.clone());
+                if !preview_scale.lock().unwrap().contains_key(&key) {
+                    let (_, _, rw, rh) = region(*side);
+                    let cover = (rw * s / sw as f64).max(rh * s / sh as f64);
+                    let f = (cover * MAX_ZOOM).min(1.0).min((PREVIEW_PX / (sw as f64 * sh as f64)).sqrt());
+                    let (pw, ph) = (((sw as f64 * f).round() as u32).max(1), ((sh as f64 * f).round() as u32).max(1));
+                    let mut small = vec![0u8; (pw * ph * 4) as usize];
+                    resample(src, sw, sh, (0.0, 0.0, sw as f64, sh as f64), &mut small, pw, 0, 0, pw, ph);
+                    let f = pw as f64 / sw as f64;
+                    let mut ps = preview_scale.lock().unwrap();
+                    ps.retain(|(i, _), _| *i != side.index());
+                    ps.insert(key, f);
+                    previews.lock().unwrap().push((*side, view.name.clone(), small, pw, ph, f));
+                }
                 let (rx, ry, rw, rh) = region(*side);
                 let (px, py, pw, ph) = ((rx * s).round() as u32, (ry * s).round() as u32, (rw * s).round() as u32, (rh * s).round() as u32);
                 let pw = pw.min(cw - px);

@@ -506,6 +506,7 @@ impl Data {
                 let panel = crate::layout::panel_at(at).unwrap_or(0);
                 self.state.walls.set_target(if panel == 0 { crate::walls::Side::Left } else { crate::walls::Side::Right });
                 self.state.picker.each_mark = self.state.walls.each.then_some(panel);
+                self.state.picker.opened_on = panel;
                 self.state.picker.set_room(self.state.walls.zoom_room());
                 self.state.picker.clock_panel = self.state.dock.home_panel().or(Some(1));
                 let look = crate::clock::style().0;
@@ -1159,6 +1160,9 @@ fn main() {
             data.state.lock.poll();
             data.take_logind_asks();
             // A wallpaper decoded, to the GPU; the picker's small pictures.
+            for p in data.state.walls.take_previews() {
+                data.screen.add_preview(p);
+            }
             if let Some(picture) = data.state.walls.take_loaded() {
                 data.screen.set_wallpaper(picture);
                 // What the picker showed is now the wallpaper itself.
