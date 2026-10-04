@@ -100,7 +100,10 @@ set -e
 # package keeps elsewhere.
 if [ "$1" = install ] || [ "$1" = upgrade ]; then
     if [ -f /usr/share/item/installed ]; then
-        rm -f /usr/share/item/installed /etc/systemd/system/sfduo-pen-split.service.d/50-item-rust.conf
+        # The composer drop-in was item's own file there: without it here,
+        # dpkg would ask about a changed conffile (and fail with no terminal).
+        rm -f /usr/share/item/installed /etc/systemd/system/sfduo-pen-split.service.d/50-item-rust.conf \
+            /etc/systemd/system/android-service@hwcomposer.service.d/20-phosh.conf
         rmdir /etc/systemd/system/sfduo-pen-split.service.d 2>/dev/null || true
     fi
 fi
