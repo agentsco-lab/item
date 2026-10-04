@@ -195,6 +195,13 @@ fn kept() -> PathBuf {
     home().join(".config/item/wallpaper")
 }
 
+/// The wallpaper as last made, and what it was made from: read at the start
+/// in a moment, while the pictures themselves take seconds to decode.
+fn made_cache() -> (PathBuf, PathBuf) {
+    let dir = home().join(".cache/item");
+    (dir.join("wallpaper-made.jpg"), dir.join("wallpaper-made.key"))
+}
+
 /// A small picture's corners, px of it.
 const THUMB_RADIUS: f64 = 26.0;
 
@@ -711,6 +718,7 @@ impl Walls {
             vec![(Side::Both, self.views[0].clone(), self.path(&self.views[0].name))]
         };
         let label = self.describe();
+        let key = format!("{} {}", self.each, parts.iter().map(|(s, v, _)| format!("{}:{}:{:.4}:{:.4}:{:.4}", s.index(), v.name, v.zoom, v.cx, v.cy)).collect::<Vec<_>>().join(" "));
         let (slot, frosted, wake, sizes, cache) = (self.loaded.clone(), self.frosted.clone(), self.wake.clone(), self.sizes.clone(), self.cache.clone());
         let (previews, preview_scale) = (self.previews.clone(), self.preview_scale.clone());
         std::thread::spawn(move || {
@@ -725,6 +733,16 @@ impl Walls {
             let s = crate::layout::SCALE as f64;
             let (cw, ch) = canvas();
             let (cw, ch) = ((cw * s).round() as u32, (ch * s).round() as u32);
+            let (cache_jpg, cache_key) = made_cache();
+            // At the start, the one made last time if it is this one: on the
+            // screen at once, the pictures decoded after it.
+            if first && std::fs::read_to_string(&cache_key).is_ok_and(|k| k == key) {
+                if let Some((rgba, w, h)) = decode(&cache_jpg).filter(|(_, w, h)| (*w, *h) == (cw, ch)) {
+                    tracing::info!("walls: {label} from the last made, in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+                    *slot.lock().unwrap() = Some((label.clone(), rgba, w, h, false));
+                    wake.ping();
+                }
+            }
             let mut rgba = vec![0u8; cw as usize * ch as usize * 4];
             for (side, view, path) in &parts {
                 let source = {
@@ -776,8 +794,25 @@ impl Walls {
             tracing::info!("walls: {label} made in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
             crate::accent::set_wall(crate::accent::from_picture(&rgba, cw, ch));
             *frosted.lock().unwrap() = Some(Some(frost(&rgba, cw, ch)));
+            // Kept for the next start (once it is on, so as not to keep it
+            // waiting).
+            let made = rgba.clone();
             *slot.lock().unwrap() = Some((label, rgba, cw, ch, fade));
             wake.ping();
+            if std::fs::read_to_string(&cache_key).is_ok_and(|k| k == key) {
+                return;
+            }
+            let _ = std::fs::create_dir_all(cache_jpg.parent().unwrap());
+            let tmp = cache_jpg.with_extension("tmp");
+            let _ = std::fs::remove_file(&cache_key);
+            match jpeg_encoder::Encoder::new_file(&tmp, 92).map(|e| e.encode(&made, cw as u16, ch as u16, jpeg_encoder::ColorType::Rgba)) {
+                Ok(Ok(())) if generation.load(Ordering::SeqCst) == mine => {
+                    let _ = std::fs::rename(&tmp, &cache_jpg);
+                    let _ = std::fs::write(&cache_key, &key);
+                }
+                Ok(Err(e)) => tracing::warn!("walls: keeping the made one: {e}"),
+                _ => {}
+            }
         });
     }
 
