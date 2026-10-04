@@ -611,6 +611,10 @@ impl Data {
         if self.state.setup.active {
             let n = self.state.setup.fingers;
             self.state.lock.set_fingers(n);
+            // The reader too: it counted the fingers when item started, and a
+            // finger enrolled in the setup left it at none - it never listened
+            // on the lock screen until a restart (found on a fresh install).
+            self.state.fingerprint.fingers = n;
         }
         // The keyring's prompts: the PIN that unlocked answers those waiting.
         if let Some(pin) = self.state.lock.take_verified_pin() {
