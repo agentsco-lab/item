@@ -372,6 +372,10 @@ impl Screen {
         elements.extend(lock.into_iter().map(FrameElement::from));
         if let Some((ldx, rdx)) = doors {
             elements.extend(self.lock_drops(state, frame_ns, rdx));
+            // The vignette with a picture on each panel, moving with its door.
+            if state.walls.each {
+                elements.extend(self.vignette(state.walls.vignette, state.posture.book(), (ldx, rdx)));
+            }
             elements.extend(self.lock_wall(ldx, rdx));
         }
         // The system's dialog, under the lock screen, over everything else.
@@ -590,7 +594,7 @@ impl Screen {
         // one by the hinge more as the phone folds like a book.
         if state.walls.each {
             let v = state.picker.vignette_live().unwrap_or(state.walls.vignette);
-            elements.extend(self.vignette(v, state.posture.book()));
+            elements.extend(self.vignette(v, state.posture.book(), (0.0, 0.0)));
         }
         elements.extend(wall.into_iter().map(FrameElement::Snapshot));
         let elements_ns = hybris_hwc::now_ns() - t0;
@@ -1016,7 +1020,8 @@ impl Screen {
 
     /// The vignette over each panel (vignette.frag), the hinge's shadow by
     /// `book`; made again only when something in it changes.
-    fn vignette(&mut self, v: crate::walls::Vignette, book: f64) -> Vec<FrameElement> {
+    /// `doors`: each panel's moved by (the lock screen's halves going).
+    fn vignette(&mut self, v: crate::walls::Vignette, book: f64, doors: (f64, f64)) -> Vec<FrameElement> {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         let book = (book * 100.0).round() / 100.0;
         if v.strength < 0.005 && book < 0.005 {
@@ -1035,13 +1040,14 @@ impl Screen {
             }
         }
         let accent = crate::accent::get_f();
-        let key = format!("{v:?} {book} {}", crate::accent::version());
+        let key = format!("{v:?} {book} {} {:.1} {:.1}", crate::accent::version(), doors.0, doors.1);
         if self.vignette_at.as_ref().map(|x| &x.0) != Some(&key) {
             let program = self.vignette_program.clone().unwrap();
             let els = crate::layout::panels()
                 .into_iter()
                 .enumerate()
-                .map(|(i, p)| {
+                .map(|(i, mut p)| {
+                    p.loc.x += (if i == 0 { doors.0 } else { doors.1 }).round() as i32;
                     smithay::backend::renderer::gles::element::PixelShaderElement::new(
                         program.clone(),
                         p,
