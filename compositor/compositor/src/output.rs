@@ -708,8 +708,8 @@ impl Screen {
             let cr = cpu_ns();
             let shot = Self::take_shot(&mut self.renderer, &mut self.shot, &mut self.frames_left, self.frames_drawn, size, &target, damaged);
             self.mirror_now = false;
-            let mirrored = if self.mirror.due(hybris_hwc::now_ns()) { Self::take_mirror(&mut self.renderer, &mut self.mirror_tex, &target, size) } else { None };
             drop(target);
+            let mirrored = if self.mirror.due(hybris_hwc::now_ns()) { Self::take_mirror(&mut self.renderer, &mut self.mirror_tex, &canvas.buffer, size) } else { None };
             let whole = smithay::utils::Rectangle::from_size((size.w, size.h).into());
             match (night, &self.night_program) {
                 // Night light: the canvas drawn to the screen warmed.
@@ -810,18 +810,26 @@ impl Screen {
     }
 
     /// The frame shrunk for the mirror by the GPU and copied out (read after
-    /// the swap): its mapping and size.
-    fn take_mirror(renderer: &mut GlesRenderer, tex: &mut Option<smithay::backend::renderer::gles::GlesTexture>, target: &smithay::backend::renderer::gles::GlesTarget<'_>, size: smithay::utils::Size<i32, smithay::utils::Physical>) -> Option<(smithay::backend::renderer::gles::GlesMapping, i32, i32)> {
-        use smithay::backend::renderer::{Bind, Blit, ExportMem, Offscreen};
+    /// the swap): its mapping and size. The canvas drawn into the small
+    /// buffer as a texture: a scaled glBlitFramebuffer between the two
+    /// crashed in Adreno's driver when the mirror started and stopped often
+    /// (2026-10-05, reproduced: SIGSEGV in libGLESv2_adreno.so after ~140
+    /// starts; Cradle's window did that with each change of focus).
+    fn take_mirror(renderer: &mut GlesRenderer, tex: &mut Option<smithay::backend::renderer::gles::GlesTexture>, source: &smithay::backend::renderer::gles::GlesTexture, size: smithay::utils::Size<i32, smithay::utils::Physical>) -> Option<(smithay::backend::renderer::gles::GlesMapping, i32, i32)> {
+        use smithay::backend::renderer::{Bind, ExportMem, Frame, Offscreen, Renderer};
         let (w, h) = (size.w / crate::mirror::SHRINK, size.h / crate::mirror::SHRINK);
         if tex.is_none() {
             *tex = renderer.create_buffer(Fourcc::Abgr8888, (w, h).into()).map_err(|e| tracing::warn!("mirror: {e}")).ok();
         }
         let small = tex.as_mut()?;
         let mut to = renderer.bind(small).ok()?;
-        let whole = smithay::utils::Rectangle::from_size((size.w, size.h).into());
         let rect = smithay::utils::Rectangle::from_size((w, h).into());
-        renderer.blit(target, &mut to, whole, rect, smithay::backend::renderer::TextureFilter::Linear).map_err(|e| tracing::warn!("mirror: {e}")).ok()?;
+        {
+            let mut frame = renderer.render(&mut to, (w, h).into(), Transform::Normal).map_err(|e| tracing::warn!("mirror: {e}")).ok()?;
+            let src = smithay::utils::Rectangle::<f64, smithay::utils::Buffer>::from_size((size.w as f64, size.h as f64).into());
+            frame.render_texture_from_to(source, src, rect, &[rect], &[rect], Transform::Normal, 1.0, None, &[]).map_err(|e| tracing::warn!("mirror: {e}")).ok()?;
+            let _ = frame.finish().map_err(|e| tracing::warn!("mirror: {e}")).ok()?;
+        }
         let mapping = renderer.copy_framebuffer(&to, smithay::utils::Rectangle::from_size((w, h).into()), Fourcc::Abgr8888).map_err(|e| tracing::warn!("mirror: {e}")).ok()?;
         Some((mapping, w, h))
     }
