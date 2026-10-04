@@ -3,8 +3,10 @@
 //! you act.
 //!
 //! - **The PIN.** Droidian's images come with 1234, found by trying it with
-//!   PAM at the start: then a new PIN is asked for twice and set, else the
-//!   one there is asked for once. pam_unix's "obscure" turns down a PIN of
+//!   PAM at the start: then a new PIN of four digits is asked for twice and
+//!   set, else the one there is asked for once. There is no OK: a PIN is
+//!   taken at its length (the one there's as last unlocked with, OK while
+//!   that is unknown). pam_unix's "obscure" turns down a PIN of
 //!   fewer than eight digits when the user changes it, so the new one is set
 //!   as root: `sudo -S chpasswd`, sudo taking the PIN there is as the user's
 //!   password. The login keyring's password follows it through
@@ -58,6 +60,8 @@ use crate::text::{Font, Label};
 
 const DEFAULT_PIN: &str = "1234";
 const MIN_PIN: usize = 4;
+/// A new PIN's length: typed to it, it is taken (no OK key).
+const NEW_PIN_LEN: usize = 4;
 /// Words: the old ones going, the new ones coming one after another, the
 /// right panel after the left.
 const WORDS_OUT_NS: u64 = 180_000_000;
@@ -456,6 +460,13 @@ impl Setup {
         tracing::info!("setup: {step:?}");
         let was = self.step;
         self.step = step;
+        // No OK: a new PIN is taken at its length, the one there at the
+        // length it was last unlocked with (with OK while that is unknown).
+        self.pad.auto_len = match step {
+            Step::PinNew | Step::PinAgain => Some(NEW_PIN_LEN),
+            Step::PinCurrent => crate::lock::pin_len(),
+            _ => None,
+        };
         // The circle moves from where it is to the step's place, longer the
         // further it goes.
         let now = hybris_hwc::now_ns();
@@ -491,7 +502,7 @@ impl Setup {
                 }
                 let at = self.right_at();
                 self.pad.show_at(at);
-                self.pad.say("Enter a new PIN");
+                self.pad.say("Enter a new 4-digit PIN");
             }
             Step::PinAgain => {
                 self.pad.show();
