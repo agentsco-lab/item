@@ -430,8 +430,11 @@ impl State {
                         // nothing to make: the preview goes, the wallpaper as it was.
                         let (kz, kd) = self.walls.preview(z, d);
                         self.picker.hold_preview(kz, kd);
+                        // From the picture itself, as the fingers saw it.
+                        self.walls.held = self.walls.preview_window(z, d);
                         if !self.walls.adjust(z, d) {
                             self.picker.preview_done();
+                            self.walls.held = None;
                         }
                     }
                     Some(crate::picker::Picked::Accent(choice)) => {

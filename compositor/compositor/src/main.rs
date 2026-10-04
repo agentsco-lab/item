@@ -1167,6 +1167,7 @@ fn main() {
                 data.screen.set_wallpaper(picture);
                 // What the picker showed is now the wallpaper itself.
                 data.state.picker.preview_done();
+                data.state.walls.held = None;
                 data.state.picker.set_room(data.state.walls.zoom_room());
                 data.state.needs_redraw = true;
             }

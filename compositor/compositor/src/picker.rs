@@ -227,6 +227,9 @@ pub struct Picker {
     card_since: u64,
     /// The frame being drawn: the card's opening is timed by it.
     frame: std::cell::Cell<u64>,
+    /// The card's rows as shown, going from one count to another (a
+    /// picture that zooms or not): from, to, since.
+    rows_shown: std::cell::Cell<(f64, f64, u64)>,
     /// Its title, and Show or Hide by it.
     card_title: std::cell::RefCell<(String, Label)>,
     arrows: [Label; 2],
@@ -302,6 +305,7 @@ impl Picker {
             card_open: false,
             card_since: 0,
             frame: std::cell::Cell::new(0),
+            rows_shown: std::cell::Cell::new((f64::NAN, f64::NAN, 0)),
             card_title: std::cell::RefCell::new((String::new(), Label::new(14.0, [1.0, 1.0, 1.0, 0.9]))),
             arrows: [label(13.0, 0.6, "Hide"), label(13.0, 0.6, "Show")],
             clock_rect: Default::default(),
@@ -356,12 +360,32 @@ impl Picker {
         if self.panel_knobs().is_empty() {
             return None;
         }
-        Some(CARD_PAD + HEADER + 4.0 + (self.card_rows() * ROW_H + CARD_PAD) * self.card_k())
+        Some(CARD_PAD + HEADER + 4.0 + (self.rows_now() * ROW_H + CARD_PAD) * self.card_k())
+    }
+
+    /// The card's rows as shown: a change of their count eased in.
+    fn rows_now(&self) -> f64 {
+        let (to, now) = (self.card_rows(), self.frame.get());
+        let (from, was, since) = self.rows_shown.get();
+        let at = |from: f64, was: f64, since: u64| {
+            let t = (now.saturating_sub(since) as f64 / FOLD_NS).clamp(0.0, 1.0);
+            from + (was - from) * t * t * (3.0 - 2.0 * t)
+        };
+        if was.is_nan() || self.card_k() == 0.0 {
+            self.rows_shown.set((to, to, now));
+            return to;
+        }
+        if was != to {
+            let here = at(from, was, since);
+            self.rows_shown.set((here, to, now));
+            return here;
+        }
+        at(from, was, since)
     }
 
     /// The panel's card's height open.
     fn card_full_h(&self) -> f64 {
-        CARD_PAD + HEADER + 4.0 + self.card_rows() * ROW_H + CARD_PAD
+        CARD_PAD + HEADER + 4.0 + self.card_rows().max(self.rows_now().ceil()) * ROW_H + CARD_PAD
     }
 
     /// Its title: what the card holds.
@@ -631,6 +655,7 @@ impl Picker {
         self.clock_card = false;
         self.card_open = false;
         self.card_since = 0;
+        self.rows_shown.set((f64::NAN, f64::NAN, 0));
         // The one on in the middle of the strip, as far as it goes.
         let width = layout::LAYOUT.0 as f64;
         let at = SIDE + 20.0 + current as f64 * (THUMB_W + GAP) + THUMB_W / 2.0;
@@ -894,7 +919,7 @@ impl Picker {
             }
         }
         self.frame.set(frame_ns);
-        let folding = frame_ns < self.card_since + FOLD_NS as u64;
+        let folding = frame_ns < self.card_since.max(self.rows_shown.get().2) + FOLD_NS as u64;
         sliding || folding || self.run.is_some() || self.hold.is_some() || self.shape.is_some() || self.clock_hold.is_some() || self.sliding.is_some()
     }
 

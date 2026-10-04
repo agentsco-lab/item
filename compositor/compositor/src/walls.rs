@@ -172,6 +172,13 @@ pub struct Walls {
     preview_scale: Arc<Mutex<HashMap<(usize, String), f64>>>,
     /// The wallpaper made last, so a make is not asked for twice.
     made: Option<(bool, [View; 3])>,
+    /// Which make is the last asked for: one before it, finishing late,
+    /// is dropped.
+    generation: Arc<std::sync::atomic::AtomicU64>,
+    /// The window of the preview's picture a gesture let go of showed (px
+    /// of that picture), held on screen until the wallpaper made from it is
+    /// on (preview_window).
+    pub held: Option<(Side, String, (f64, f64, f64, f64))>,
     wake: Ping,
 }
 
@@ -397,6 +404,8 @@ impl Walls {
             previews: Default::default(),
             preview_scale: Default::default(),
             made: None,
+            generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            held: None,
             wake,
         };
         walls.thumbs = vec![None; walls.names.len()];
@@ -617,6 +626,8 @@ impl Walls {
             return;
         }
         self.made = Some(what);
+        let generation = self.generation.clone();
+        let mine = generation.fetch_add(1, Ordering::SeqCst) + 1;
         EACH.store(self.each, Ordering::Relaxed);
         let parts: Vec<(Side, View, PathBuf)> = if self.each {
             [Side::Left, Side::Right].iter().map(|s| (*s, self.views[s.index()].clone(), self.path(&self.views[s.index()].name))).collect()
@@ -681,6 +692,10 @@ impl Walls {
                 let pw = pw.min(cw - px);
                 let (win, _) = window(sw, sh, pw as f64, ph as f64, view);
                 resample(src, sw, sh, win, &mut rgba, cw, px, py, pw, ph.min(ch - py));
+            }
+            if generation.load(Ordering::SeqCst) != mine {
+                tracing::info!("walls: {label} made too late, dropped");
+                return;
             }
             tracing::info!("walls: {label} made in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
             crate::accent::set_wall(crate::accent::from_picture(&rgba, cw, ch));

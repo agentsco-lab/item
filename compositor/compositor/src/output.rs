@@ -588,7 +588,14 @@ impl Screen {
         });
         // Live, from the picture itself where its preview is on the GPU: the
         // parts out of the made wallpaper's sight are there too.
-        let source = state.picker.preview().filter(|p| p.2).and_then(|(z, d, _)| state.walls.preview_window(z, d)).and_then(|(side, name, win)| self.previews.get(&side).filter(|p| p.0 == name).map(|p| (win, p.1.clone())));
+        // Let go of, until the wallpaper made from it is on: the window it
+        // showed, from the picture too.
+        let source = match state.picker.preview() {
+            Some((z, d, true)) => state.walls.preview_window(z, d),
+            Some((_, _, false)) => state.walls.held.clone(),
+            None => None,
+        }
+        .and_then(|(side, name, win)| self.previews.get(&side).filter(|p| p.0 == name).map(|p| (win, p.1.clone())));
         let wall = self.wallpaper(shift, frame_ns, preview, source);
         // With a picture on each panel, each darkening toward its edges, the
         // one by the hinge more as the phone folds like a book.
