@@ -330,8 +330,11 @@ fn decode(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((pixels, w as u32, h as u32))
 }
 
-/// The picture on until one is chosen (and under the first setup).
-const DEFAULT: &str = "009.jpg";
+/// The wallpaper before one is chosen (a clean install, the first setup):
+/// black for now, until a default picture comes with item's pictures.
+const DEFAULT: &str = BLACK;
+/// No picture: the screen black.
+const BLACK: &str = "black";
 
 /// The small pictures' size, px.
 const THUMB_PX: (u32, u32) = (360, 202);
@@ -426,7 +429,7 @@ impl Walls {
         files.sort();
         let mut names = vec![AURORA.to_owned()];
         names.extend(files);
-        let fallback = if names.iter().any(|n| n == DEFAULT) { DEFAULT } else { AURORA };
+        let fallback = if DEFAULT == BLACK || names.iter().any(|n| n == DEFAULT) { DEFAULT } else { BLACK };
         let mut walls = Walls {
             dirs,
             names,
@@ -743,7 +746,8 @@ impl Walls {
                     wake.ping();
                 }
             }
-            let mut rgba = vec![0u8; cw as usize * ch as usize * 4];
+            // Black where no picture goes (BLACK, or one that cannot be read).
+            let mut rgba: Vec<u8> = [0u8, 0, 0, 255].repeat(cw as usize * ch as usize);
             for (side, view, path) in &parts {
                 let source = {
                     let hit = cache.lock().unwrap().iter().find(|(n, _)| *n == view.name).map(|(_, s)| s.clone());
