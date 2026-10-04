@@ -445,7 +445,17 @@ impl Walls {
             wake,
         };
         walls.thumbs = vec![None; walls.names.len()];
-        walls.tall = walls.names.iter().filter(|n| jpeg_size(&walls.path(n)).is_some_and(|(w, h)| h > w)).cloned().collect();
+        // Every picture's size from its header: tall or wide, and how far it
+        // may zoom known before it is first decoded.
+        {
+            let mut sizes = walls.sizes.lock().unwrap();
+            for n in &walls.names {
+                if let Some(size) = jpeg_size(&walls.path(n)) {
+                    sizes.insert(n.clone(), size);
+                }
+            }
+        }
+        walls.tall = walls.sizes.lock().unwrap().iter().filter(|(_, (w, h))| h > w).map(|(n, _)| n.clone()).collect();
         walls.read_kept();
         walls.sync_current();
         tracing::info!("walls: {} pictures; {}", walls.names.len() - 1, walls.describe());

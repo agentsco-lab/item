@@ -239,6 +239,11 @@ pub struct Picker {
     /// The card's rows as shown, going from one count to another (a
     /// picture that zooms or not): from, to, since.
     rows_shown: std::cell::Cell<(f64, f64, u64)>,
+    /// The panel's card there or not, 0 to 1 as shown (from, to, since),
+    /// and its height when last there: the strip over it never jumps when
+    /// it comes or goes.
+    lift_shown: std::cell::Cell<(f64, f64, u64)>,
+    card_last_h: std::cell::Cell<f64>,
     /// Its title, and Show or Hide by it.
     card_title: std::cell::RefCell<(String, Label)>,
     arrows: [Label; 2],
@@ -257,6 +262,26 @@ pub struct Picker {
     /// The clock's panel as it opened: the dock goes away meanwhile, and
     /// the clock stands where the dock was.
     pub clock_panel: Option<usize>,
+}
+
+/// A value going to `to` eased over FOLD_NS from where it was shown (`cell`:
+/// from, to, since), at `now`; the first one taken as it is.
+fn eased(cell: &std::cell::Cell<(f64, f64, u64)>, to: f64, now: u64) -> f64 {
+    let (from, was, since) = cell.get();
+    let at = |from: f64, was: f64, since: u64| {
+        let t = (now.saturating_sub(since) as f64 / FOLD_NS).clamp(0.0, 1.0);
+        from + (was - from) * t * t * (3.0 - 2.0 * t)
+    };
+    if was.is_nan() {
+        cell.set((to, to, now));
+        return to;
+    }
+    if (was - to).abs() > 0.01 {
+        let here = at(from, was, since);
+        cell.set((here, to, now));
+        return here;
+    }
+    at(from, was, since)
 }
 
 fn label(size: f32, alpha: f32, text: &str) -> Label {
@@ -317,6 +342,8 @@ impl Picker {
             info: None,
             info_since: u64::MAX,
             rows_shown: std::cell::Cell::new((f64::NAN, f64::NAN, 0)),
+            lift_shown: std::cell::Cell::new((f64::NAN, f64::NAN, 0)),
+            card_last_h: std::cell::Cell::new(0.0),
             card_title: std::cell::RefCell::new((String::new(), Label::new(14.0, [1.0, 1.0, 1.0, 0.9]))),
             arrows: [label(13.0, 0.6, "Hide"), label(13.0, 0.6, "Show")],
             clock_rect: Default::default(),
@@ -349,8 +376,17 @@ impl Picker {
     /// The strip's rect, logical px, open: over the panel's card, if any.
     fn strip(&self) -> Rectangle<f64, Logical> {
         let (w, h) = (layout::LAYOUT.0 as f64, layout::LAYOUT.1 as f64);
-        let card = self.panel_card_h().map(|c| c + 14.0).unwrap_or(0.0);
+        let card = self.card_there() * (self.card_last_h.get() + 14.0);
         Rectangle::new((SIDE, h - STRIP_BOTTOM - STRIP_H - card).into(), (w - 2.0 * SIDE, STRIP_H).into())
+    }
+
+    /// The panel's card there, 0 to 1: coming or going eased.
+    fn card_there(&self) -> f64 {
+        let h = self.panel_card_h();
+        if let Some(h) = h {
+            self.card_last_h.set(h);
+        }
+        eased(&self.lift_shown, if h.is_some() { 1.0 } else { 0.0 }, self.frame.get())
     }
 
     /// How far the panel's card is open, 0 folded to its title to 1, eased.
@@ -667,6 +703,7 @@ impl Picker {
         self.card_open = false;
         self.card_since = 0;
         self.rows_shown.set((f64::NAN, f64::NAN, 0));
+        self.lift_shown.set((f64::NAN, f64::NAN, 0));
         self.recenter(current, count);
         self.info_since = u64::MAX;
         tracing::info!("picker: open");
@@ -956,7 +993,7 @@ impl Picker {
             }
         }
         self.frame.set(frame_ns);
-        let folding = frame_ns < self.card_since.max(self.rows_shown.get().2) + FOLD_NS as u64;
+        let folding = frame_ns < self.card_since.max(self.rows_shown.get().2).max(self.lift_shown.get().2) + FOLD_NS as u64;
         sliding || folding || self.run.is_some() || self.hold.is_some() || self.shape.is_some() || self.clock_hold.is_some() || self.sliding.is_some()
     }
 
@@ -1016,7 +1053,8 @@ impl Picker {
         }
         // How much of a row at `y` (its middle) the panel's card holds.
         let card_bottom = self.panel_card().map(|c| c.loc.y + c.size.h - CARD_PAD * ck);
-        let held = |y: f64| card_bottom.map_or(1.0, |b| (((b - y) / (ROW_H * 0.5) - 1.0).clamp(0.0, 1.0)) as f32);
+        let there = self.card_there() as f32;
+        let held = |y: f64| there * card_bottom.map_or(1.0, |b| (((b - y) / (ROW_H * 0.5) - 1.0).clamp(0.0, 1.0)) as f32);
         for kk in sliders {
             let Some(t) = self.track_rect(kk) else { continue };
             fade.set(if kk == Knob::Brightness { 1.0 } else { held(t.loc.y + TRACK_H / 2.0) });
@@ -1048,6 +1086,7 @@ impl Picker {
         // The panel's card: its title and arrow; open, the vignette's title
         // and Dark, Glow.
         if let Some(card) = self.panel_card() {
+            fade.set(there);
             {
                 let mut t = self.card_title.borrow_mut();
                 if t.0 != self.card_words() {
@@ -1070,7 +1109,7 @@ impl Picker {
                 put(&mut out, &self.tint_lit, lit.loc.x, lit.loc.y, lift);
                 put(&mut out, &self.tint_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, lift);
                 put(&mut out, &self.vignette_word.buffer, card.loc.x + CARD_PAD, r0.loc.y + (r0.size.h - self.vignette_word.extent.h as f64) / 2.0, lift);
-                fade.set(1.0);
+                fade.set(there);
             }
             // Its background: the open one, its top as far as the card goes
             // and its rounded foot under it.
@@ -1083,6 +1122,7 @@ impl Picker {
             crop.set(Some(Rectangle::new((0.0, full - foot).into(), (w, foot).into())));
             put(&mut out, &bg, card.loc.x, card.loc.y + card.size.h - foot, lift);
             crop.set(None);
+            fade.set(1.0);
         }
         // The picture's credits, top left on the left panel, over a soft
         // glass, coming in once the picture is on.
