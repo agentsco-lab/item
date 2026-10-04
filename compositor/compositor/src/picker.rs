@@ -54,6 +54,10 @@ const STRIP_BOTTOM: f64 = 16.0;
 const SIDE: f64 = 28.0;
 /// Opening and closing.
 const SLIDE_NS: f64 = 320e6;
+/// The picture's credits, top left on the left panel: how long they take to
+/// come in, and their margin.
+const INFO_NS: f64 = 500e6;
+const INFO_AT: (f64, f64) = (28.0, 36.0);
 /// A touch that moves this far scrolls.
 const TAP: f64 = 10.0;
 /// The run after a let go: how fast it slows (per ms).
@@ -227,6 +231,11 @@ pub struct Picker {
     card_since: u64,
     /// The frame being drawn: the card's opening is timed by it.
     frame: std::cell::Cell<u64>,
+    /// The credits of the picture on (who took it, where, with what), as
+    /// lines, and from when they come in (u64::MAX: not yet, the picture is
+    /// still being made).
+    info: Option<(String, Vec<Label>)>,
+    info_since: u64,
     /// The card's rows as shown, going from one count to another (a
     /// picture that zooms or not): from, to, since.
     rows_shown: std::cell::Cell<(f64, f64, u64)>,
@@ -305,6 +314,8 @@ impl Picker {
             card_open: false,
             card_since: 0,
             frame: std::cell::Cell::new(0),
+            info: None,
+            info_since: u64::MAX,
             rows_shown: std::cell::Cell::new((f64::NAN, f64::NAN, 0)),
             card_title: std::cell::RefCell::new((String::new(), Label::new(14.0, [1.0, 1.0, 1.0, 0.9]))),
             arrows: [label(13.0, 0.6, "Hide"), label(13.0, 0.6, "Show")],
@@ -657,7 +668,28 @@ impl Picker {
         self.card_since = 0;
         self.rows_shown.set((f64::NAN, f64::NAN, 0));
         self.recenter(current, count);
+        self.info_since = u64::MAX;
         tracing::info!("picker: open");
+    }
+
+    /// The credits of the picture `name`, coming in from `at_ns`; a new
+    /// picture's made anew.
+    pub fn set_info(&mut self, name: &str, lines: &[String], at_ns: u64) {
+        let same = self.info.as_ref().is_some_and(|(n, _)| n == name);
+        // The same picture moved or zoomed: they stay as they are.
+        if same && self.info_since != u64::MAX {
+            return;
+        }
+        if !same {
+            let labels = lines.iter().enumerate().map(|(i, l)| if i == 0 { label(17.0, 0.95, l) } else { label(13.0, 0.75, l) }).collect();
+            self.info = Some((name.to_owned(), labels));
+        }
+        self.info_since = at_ns;
+    }
+
+    /// A new picture chosen: its credits wait until it is on.
+    pub fn info_wait(&mut self) {
+        self.info_since = u64::MAX;
     }
 
     /// The one on in the middle of the strip, as far as it goes.
@@ -915,7 +947,7 @@ impl Picker {
 
     /// After a frame: whether it still moves.
     pub fn settle(&mut self, frame_ns: u64, count: usize) -> bool {
-        let sliding = frame_ns < self.since + SLIDE_NS as u64;
+        let sliding = frame_ns < self.since + SLIDE_NS as u64 || (self.info_since != u64::MAX && frame_ns < self.info_since.saturating_add(INFO_NS as u64));
         if let Some((v, at, _)) = self.run {
             let t = frame_ns.saturating_sub(at) as f64 / 1e6;
             if (v * (-FRICTION * t).exp()).abs() < 0.01 {
@@ -940,6 +972,7 @@ impl Picker {
         }
         let b = match kind {
             0 => crate::grid::rounded(w, h, 22.0, [8, 10, 14, 168]),
+            2 => crate::grid::rounded(w, h, 16.0, [8, 10, 14, 110]),
             _ => crate::grid::rounded(w, h, h / 2.0, [255, 255, 255, 60]),
         };
         cache.push((key, b.clone()));
@@ -1050,6 +1083,27 @@ impl Picker {
             crop.set(Some(Rectangle::new((0.0, full - foot).into(), (w, foot).into())));
             put(&mut out, &bg, card.loc.x, card.loc.y + card.size.h - foot, lift);
             crop.set(None);
+        }
+        // The picture's credits, top left on the left panel, over a soft
+        // glass, coming in once the picture is on.
+        if let Some((_, lines)) = self.info.as_ref().filter(|(_, l)| !l.is_empty() && self.info_since != u64::MAX) {
+            let t = (frame_ns.saturating_sub(self.info_since) as f64 / INFO_NS).clamp(0.0, 1.0);
+            let e = (t * t * (3.0 - 2.0 * t)) as f32;
+            if e > 0.0 {
+                fade.set(e);
+                let (x, mut y) = (layout::panels()[0].loc.x as f64 + INFO_AT.0, INFO_AT.1 - (1.0 - e as f64) * 8.0);
+                let (pad, gap) = (14.0, 4.0);
+                let w = lines.iter().map(|l| l.extent.w as f64).fold(0.0, f64::max) + 2.0 * pad;
+                let h = lines.iter().map(|l| l.extent.h as f64).sum::<f64>() + gap * (lines.len() - 1) as f64 + 2.0 * pad - 8.0;
+                let top = y;
+                y += pad - 4.0;
+                for l in lines {
+                    put(&mut out, &l.buffer, x + pad, y, 0.0);
+                    y += l.extent.h as f64 + gap;
+                }
+                put(&mut out, &self.sized(w.round(), h.round(), 2), x, top, 0.0);
+                fade.set(1.0);
+            }
         }
         let strip = self.strip();
         let scroll = self.scroll_at(frame_ns, thumbs.len());

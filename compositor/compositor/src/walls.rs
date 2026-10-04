@@ -525,6 +525,15 @@ impl Walls {
         }
     }
 
+    /// The credits of the picture `name`: the lines of the text beside it
+    /// (NAME.txt for NAME.jpg), who took it first.
+    pub fn info(&self, name: &str) -> Vec<String> {
+        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+        std::fs::read_to_string(self.path(&format!("{stem}.txt")))
+            .map(|t| t.lines().map(str::trim).filter(|l| !l.is_empty()).take(5).map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
     /// Where the one on is in the strip, if it is there.
     pub fn shown_current(&self) -> Option<usize> {
         self.shown.iter().position(|&i| self.names[i] == self.current)

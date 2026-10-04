@@ -383,6 +383,9 @@ impl State {
                 match self.picker.up(*slot, count) {
                     Some(crate::picker::Picked::Wallpaper(i)) => {
                         let name = self.walls.names[self.walls.shown[i]].clone();
+                        if name != self.walls.current {
+                            self.picker.info_wait();
+                        }
                         self.walls.choose(&name);
                         self.picker.each_mark = self.walls.each.then_some(usize::from(self.walls.target == crate::walls::Side::Right));
                         self.picker.set_room(self.walls.zoom_room());
@@ -397,6 +400,8 @@ impl State {
                     Some(crate::picker::Picked::Panel(p)) => {
                         self.walls.set_target(if p == 0 { crate::walls::Side::Left } else { crate::walls::Side::Right });
                         self.picker.each_mark = Some(p);
+                        let info = self.walls.info(&self.walls.current);
+                        self.picker.set_info(&self.walls.current.clone(), &info, hybris_hwc::now_ns());
                         self.picker.set_room(self.walls.zoom_room());
                     }
                     Some(crate::picker::Picked::Font(i)) => {

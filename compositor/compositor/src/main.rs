@@ -514,6 +514,8 @@ impl Data {
                 let current = self.state.walls.shown_current().unwrap_or(0);
                 let count = self.state.walls.shown.len();
                 self.state.picker.open(slot, current, count);
+                let info = self.state.walls.info(&self.state.walls.current);
+                self.state.picker.set_info(&self.state.walls.current.clone(), &info, now + 250_000_000);
                 self.state.walls.ask_thumbs();
                 crate::fingerprint::buzz("button-pressed");
                 self.state.boost.kick(now);
@@ -1168,6 +1170,12 @@ fn main() {
                 // What the picker showed is now the wallpaper itself.
                 data.state.picker.preview_done();
                 data.state.walls.held = None;
+                // The picture on: its credits come in after it.
+                if data.state.picker.is_open() {
+                    let current = data.state.walls.current.clone();
+                    let info = data.state.walls.info(&current);
+                    data.state.picker.set_info(&current, &info, hybris_hwc::now_ns() + 300_000_000);
+                }
                 data.state.picker.set_room(data.state.walls.zoom_room());
                 data.state.needs_redraw = true;
             }
