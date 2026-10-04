@@ -12,7 +12,7 @@
 //! Everything else is edited where it is, as on a phone's lock screen:
 //! - **The clock**: a finger moves it on its panel; a tap on it brings a card
 //!   by it with its fonts (each its own "12:34") and its brightness.
-//! - **The panel's card**, at the top of the panel being chosen for (with a
+//! - **The panel's card**, just over the strip on the panel being chosen for (with a
 //!   picture on each panel; else the one the editing opened on): the zoom,
 //!   if the picture's pixels allow any (walls.rs), and with a picture on
 //!   each panel the vignette - dark or a glow in the accent, its strength,
@@ -372,8 +372,10 @@ impl Picker {
             return None;
         }
         let rows = knobs.len() as f64 + f64::from(u8::from(self.each_mark.is_some()));
+        // Just over the strip: the top of the panel is the clock's.
         let p = layout::panels()[self.card_panel()].to_f64();
-        Some(Rectangle::new((p.loc.x + (p.size.w - PANEL_CARD_W) / 2.0, 22.0).into(), (PANEL_CARD_W, CARD_PAD * 2.0 + rows * ROW_H).into()))
+        let h = CARD_PAD * 2.0 + rows * ROW_H;
+        Some(Rectangle::new((p.loc.x + (p.size.w - PANEL_CARD_W) / 2.0, Self::strip().loc.y - 14.0 - h).into(), (PANEL_CARD_W, h).into()))
     }
 
     /// A slider's track on its card, logical px.
@@ -851,7 +853,7 @@ impl Picker {
     }
 
     /// The editing at `frame_ns`: the strip (the pictures by index, the one
-    /// on ringed) rising from the bottom, and the cards coming down.
+    /// on ringed) rising from the bottom, the cards with it.
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64, thumbs: &[Option<MemoryRenderBuffer>], current: usize) -> Vec<ShellElement> {
         let mut out = Vec::new();
         let k = self.shown(frame_ns);
@@ -859,7 +861,7 @@ impl Picker {
             return out;
         }
         let drop = (1.0 - k) * (STRIP_H + STRIP_BOTTOM + 10.0);
-        let lift = -(1.0 - k) * 40.0;
+        let lift = (1.0 - k) * 60.0;
         let alpha = k as f32;
         let s = SCALE as f64;
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, dy: f64| {
