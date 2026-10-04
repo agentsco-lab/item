@@ -501,7 +501,12 @@ impl Data {
         }
         // A finger held still on a desk: the wallpaper's choosing.
         if !self.state.picker.is_open() && !self.state.lock.holds_screen() && !self.state.setup.holds_screen() {
-            if let Some(slot) = self.state.grid.long_press(now) {
+            if let Some((slot, at)) = self.state.grid.long_press(now) {
+                // With one on each panel, the panel held is the one chosen for.
+                let panel = crate::layout::panel_at(at).unwrap_or(0);
+                self.state.walls.set_target(if panel == 0 { crate::walls::Side::Left } else { crate::walls::Side::Right });
+                self.state.picker.each_mark = self.state.walls.each.then_some(panel);
+                self.state.picker.set_room(self.state.walls.zoom_room());
                 let current = self.state.walls.names.iter().position(|n| *n == self.state.walls.current).unwrap_or(0);
                 let count = self.state.walls.names.len();
                 self.state.picker.open(slot, current, count);
@@ -1153,6 +1158,10 @@ fn main() {
             // A wallpaper decoded, to the GPU; the picker's small pictures.
             if let Some(picture) = data.state.walls.take_loaded() {
                 data.screen.set_wallpaper(picture);
+                // What the picker showed is now the wallpaper itself.
+                data.state.picker.preview_done();
+                data.state.picker.set_room(data.state.walls.zoom_room());
+                data.state.needs_redraw = true;
             }
             if let Some(frost) = data.state.walls.take_frost() {
                 data.state.system.set_frost(frost);

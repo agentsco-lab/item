@@ -7,6 +7,14 @@
 //! finger and runs on when let go; a tap on a picture puts it on (it fades
 //! in over the one before); the one on has a light ring. A tap above the
 //! strip closes it, the strip going down and the dock coming back.
+//!
+//! Beside the title, "Both panels" and "Each panel": with a picture on each,
+//! the one chosen for is the panel the picker was opened on, marked "This
+//! panel"; a tap above the strip on the other panel chooses for that one
+//! instead. Above the strip two fingers zoom the picture in (as far as its
+//! pixels allow, walls.rs) and one moves it: the wallpaper follows at once
+//! on the GPU (`preview`), and when the fingers let go it is made again at
+//! full quality and kept.
 
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
@@ -38,6 +46,49 @@ const TAP: f64 = 10.0;
 /// The run after a let go: how fast it slows (per ms).
 const FRICTION: f64 = 0.0035;
 
+/// Fingers above the strip: moving or zooming the picture.
+struct Shape {
+    /// (slot, where it came down, where it is).
+    fingers: Vec<(TouchSlot, Point<f64, Logical>, Point<f64, Logical>)>,
+    /// The two fingers' distance and middle when the second came down; the
+    /// zoom and move from before that.
+    pinch_from: Option<(f64, Point<f64, Logical>)>,
+    zoom: f64,
+    moved: (f64, f64),
+    /// Whether it went beyond a tap.
+    changed: bool,
+}
+
+impl Shape {
+    fn middle(&self) -> Point<f64, Logical> {
+        let n = self.fingers.len().max(1) as f64;
+        let (x, y) = self.fingers.iter().fold((0.0, 0.0), |a, f| (a.0 + f.2.x, a.1 + f.2.y));
+        (x / n, y / n).into()
+    }
+
+    fn spread(&self) -> f64 {
+        match self.fingers.as_slice() {
+            [a, b, ..] => ((a.2.x - b.2.x).powi(2) + (a.2.y - b.2.y).powi(2)).sqrt(),
+            _ => 0.0,
+        }
+    }
+
+    /// The zoom and the move so far, `room` how far the zoom may go out and in.
+    fn now(&self, room: (f64, f64)) -> (f64, (f64, f64)) {
+        match (self.pinch_from, self.fingers.len()) {
+            (Some((d0, m0)), 2..) if d0 > 1.0 => {
+                let m = self.middle();
+                ((self.zoom * self.spread() / d0).clamp(room.0, room.1), (self.moved.0 + m.x - m0.x, self.moved.1 + m.y - m0.y))
+            }
+            (_, 1) => {
+                let f = &self.fingers[0];
+                (self.zoom, (self.moved.0 + f.2.x - f.1.x, self.moved.1 + f.2.y - f.1.y))
+            }
+            _ => (self.zoom, self.moved),
+        }
+    }
+}
+
 struct Hold {
     slot: TouchSlot,
     start: Point<f64, Logical>,
@@ -66,14 +117,39 @@ pub struct Picker {
     wall_swatch: std::cell::RefCell<(u64, MemoryRenderBuffer)>,
     hole: MemoryRenderBuffer,
     swatch_ring: MemoryRenderBuffer,
+    /// "Both panels" and "Each panel", the one on lit; "This panel".
+    modes: [Label; 2],
+    mode_glass: MemoryRenderBuffer,
+    mode_lit: MemoryRenderBuffer,
+    this_panel: Label,
+    this_glass: MemoryRenderBuffer,
+    shape: Option<Shape>,
+    /// The zoom and move shown until the wallpaper made from them is on:
+    /// (zoom, move in logical px).
+    preview: Option<(f64, (f64, f64))>,
+    /// How far the picture may zoom out and in from where it is (walls.rs).
+    room: (f64, f64),
+    /// With one on each panel, the one chosen for: 0 left, 1 right.
+    pub each_mark: Option<usize>,
 }
 
-/// What a tap in the strip chose.
+/// What a touch in the picker chose.
 pub enum Picked {
     Wallpaper(usize),
     /// None: the accent from the wallpaper; Some(i): the palette's.
     Accent(Option<usize>),
+    /// One picture on each panel (true) or one on both.
+    Each(bool),
+    /// The panel chosen for, with one on each: 0 left, 1 right.
+    Panel(usize),
+    /// The picture zoomed by the first and moved by the second (logical px).
+    View(f64, (f64, f64)),
 }
+
+/// The mode switch: its size and place on the strip.
+const MODE_W: f64 = 128.0;
+const MODE_H: f64 = 30.0;
+const MODE_TOP: f64 = 12.0;
 
 impl Picker {
     pub fn new() -> Picker {
@@ -96,7 +172,57 @@ impl Picker {
             wall_swatch: std::cell::RefCell::new((0, crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()))),
             hole: crate::grid::rounded(SWATCH - 12.0, SWATCH - 12.0, (SWATCH - 12.0) / 2.0, [14, 16, 20, 255]),
             swatch_ring: crate::grid::rounded(SWATCH + 8.0, SWATCH + 8.0, (SWATCH + 8.0) / 2.0, [235, 235, 235, 235]),
+            modes: {
+                let font = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
+                ["Both panels", "Each panel"].map(|t| {
+                    let mut l = Label::new(13.0, [1.0, 1.0, 1.0, 0.85]);
+                    if let Some(f) = &font {
+                        l.set(f, t);
+                    }
+                    l
+                })
+            },
+            mode_glass: crate::grid::rounded(2.0 * MODE_W + 8.0, MODE_H + 8.0, (MODE_H + 8.0) / 2.0, [255, 255, 255, 26]),
+            mode_lit: crate::grid::rounded(MODE_W, MODE_H, MODE_H / 2.0, [255, 255, 255, 64]),
+            this_panel: {
+                let mut l = Label::new(14.0, [1.0, 1.0, 1.0, 0.9]);
+                if let Some(f) = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]) {
+                    l.set(&f, "This panel");
+                }
+                l
+            },
+            this_glass: crate::grid::rounded(120.0, 34.0, 17.0, [8, 10, 14, 150]),
+            shape: None,
+            preview: None,
+            room: (1.0, 1.0),
+            each_mark: None,
         }
+    }
+
+    /// The mode switch's halves, logical px, open: 0 "Both panels", 1 "Each".
+    fn mode(i: usize) -> Rectangle<f64, Logical> {
+        let s = Self::strip();
+        let x0 = s.loc.x + s.size.w - 22.0 - 2.0 * MODE_W - 4.0;
+        Rectangle::new((x0 + 4.0 + i as f64 * MODE_W, s.loc.y + MODE_TOP + 4.0).into(), (MODE_W, MODE_H).into())
+    }
+
+    /// The zoom and move to show the wallpaper at (output.rs), while the
+    /// fingers are on it or till the wallpaper made from them is on.
+    pub fn preview(&self) -> Option<(f64, (f64, f64))> {
+        match &self.shape {
+            Some(sh) if sh.changed => Some(sh.now(self.room)),
+            _ => self.preview,
+        }
+    }
+
+    /// The wallpaper made from the last preview is on.
+    pub fn preview_done(&mut self) {
+        self.preview = None;
+    }
+
+    /// How far the picture now chosen for may zoom out and in (walls.rs).
+    pub fn set_room(&mut self, room: (f64, f64)) {
+        self.room = (room.0.min(1.0), room.1.max(1.0));
     }
 
     /// Swatch `i`'s rect (0 the wallpaper's), logical px, open.
@@ -140,6 +266,7 @@ impl Picker {
             self.open = false;
             self.since = hybris_hwc::now_ns();
             self.hold = None;
+            self.shape = None;
             tracing::info!("picker: closed");
         }
     }
@@ -183,6 +310,24 @@ impl Picker {
         if !self.open {
             return false;
         }
+        // Above the strip, or a second finger there: moving or zooming the
+        // picture.
+        if pos.y < Self::strip().loc.y || self.shape.as_ref().is_some_and(|s| !s.fingers.is_empty()) {
+            let shape = self.shape.get_or_insert(Shape { fingers: Vec::new(), pinch_from: None, zoom: 1.0, moved: (0.0, 0.0), changed: false });
+            if shape.fingers.len() < 2 {
+                // What the finger before did is kept; the pair starts afresh.
+                let (z, m) = shape.now(self.room);
+                shape.zoom = z;
+                shape.moved = m;
+                shape.fingers.iter_mut().for_each(|f| f.1 = f.2);
+                shape.fingers.push((slot, pos, pos));
+                if shape.fingers.len() == 2 {
+                    shape.pinch_from = Some((shape.spread(), shape.middle()));
+                    shape.changed = true;
+                }
+            }
+            return true;
+        }
         let now = hybris_hwc::now_ns();
         self.scroll = self.scroll_at(now, count);
         self.run = None;
@@ -191,10 +336,19 @@ impl Picker {
     }
 
     pub fn holds(&self, slot: TouchSlot) -> bool {
-        self.hold.as_ref().is_some_and(|h| h.slot == slot) || self.opener == Some(slot)
+        self.hold.as_ref().is_some_and(|h| h.slot == slot) || self.opener == Some(slot) || self.shape.as_ref().is_some_and(|s| s.fingers.iter().any(|f| f.0 == slot))
     }
 
     pub fn motion(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, time_us: u64) {
+        if let Some(shape) = self.shape.as_mut() {
+            if let Some(f) = shape.fingers.iter_mut().find(|f| f.0 == slot) {
+                f.2 = pos;
+                if (pos.x - f.1.x).abs() > TAP || (pos.y - f.1.y).abs() > TAP {
+                    shape.changed = true;
+                }
+                return;
+            }
+        }
         let Some(h) = self.hold.as_mut().filter(|h| h.slot == slot) else { return };
         let dt = time_us.saturating_sub(h.last.0) as f64 / 1000.0;
         if dt > 0.0 {
@@ -211,6 +365,35 @@ impl Picker {
             self.opener = None;
             return None;
         }
+        if let Some(shape) = self.shape.as_mut() {
+            if let Some(i) = shape.fingers.iter().position(|f| f.0 == slot) {
+                let (z, m) = shape.now(self.room);
+                let f = shape.fingers.remove(i);
+                if !shape.fingers.is_empty() {
+                    // One left: it goes on moving from here.
+                    shape.zoom = z;
+                    shape.moved = m;
+                    shape.pinch_from = None;
+                    shape.fingers.iter_mut().for_each(|f| f.1 = f.2);
+                    return None;
+                }
+                let changed = shape.changed;
+                self.shape = None;
+                if changed {
+                    self.preview = Some((z, m));
+                    return Some(Picked::View(z, m));
+                }
+                // A tap above the strip: the other panel chosen for, with one
+                // on each and the tap there; else closed.
+                if let Some(p) = crate::layout::panel_at(f.1) {
+                    if self.each_mark.is_some_and(|t| t != p) {
+                        return Some(Picked::Panel(p));
+                    }
+                }
+                self.close();
+                return None;
+            }
+        }
         let h = self.hold.take_if(|h| h.slot == slot)?;
         let now = hybris_hwc::now_ns();
         let scroll = (h.from - (h.last.1 - h.start.x)).clamp(0.0, Self::max_scroll(count));
@@ -221,9 +404,8 @@ impl Picker {
             }
             return None;
         }
-        if h.start.y < Self::strip().loc.y {
-            self.close();
-            return None;
+        if let Some(i) = (0..2).find(|&i| Self::mode(i).contains(h.start)) {
+            return Some(Picked::Each(i == 1));
         }
         // A swatch: a little more room round it than it shows.
         if let Some(i) = (0..=crate::accent::PALETTE.len()).find(|&i| {
@@ -245,7 +427,7 @@ impl Picker {
                 self.run = None;
             }
         }
-        sliding || self.run.is_some() || self.hold.is_some()
+        sliding || self.run.is_some() || self.hold.is_some() || self.shape.is_some()
     }
 
     /// The strip at `frame_ns`: the pictures (`thumbs`, by index), the one
@@ -302,7 +484,26 @@ impl Picker {
             }
         }
         put(&mut out, &self.title.buffer, strip.loc.x + 22.0, strip.loc.y + 16.0);
+        // The mode switch: the half on lit, its words centred in each.
+        let lit = usize::from(self.each_mark.is_some());
+        for (i, label) in self.modes.iter().enumerate() {
+            let r = Self::mode(i);
+            let (lw, lh) = (label.extent.w as f64, label.extent.h as f64);
+            put(&mut out, &label.buffer, r.loc.x + (r.size.w - lw) / 2.0, r.loc.y + (r.size.h - lh) / 2.0);
+        }
+        let lr = Self::mode(lit);
+        put(&mut out, &self.mode_lit, lr.loc.x, lr.loc.y);
+        let r0 = Self::mode(0);
+        put(&mut out, &self.mode_glass, r0.loc.x - 4.0, r0.loc.y - 4.0);
         put(&mut out, &self.glass, strip.loc.x, strip.loc.y);
+        // "This panel" at the top of the one chosen for.
+        if let Some(p) = self.each_mark {
+            let panel = crate::layout::panels()[p].to_f64();
+            let (lw, lh) = (self.this_panel.extent.w as f64, self.this_panel.extent.h as f64);
+            let (gx, gy) = (panel.loc.x + (panel.size.w - 120.0) / 2.0, 24.0);
+            put(&mut out, &self.this_panel.buffer, gx + (120.0 - lw) / 2.0, gy + (34.0 - lh) / 2.0 - drop);
+            put(&mut out, &self.this_glass, gx, gy - drop);
+        }
         out
     }
 }

@@ -383,7 +383,25 @@ impl State {
                 match self.picker.up(*slot, count) {
                     Some(crate::picker::Picked::Wallpaper(i)) => {
                         let name = self.walls.names[i].clone();
-                        self.walls.choose(&name, true);
+                        self.walls.choose(&name);
+                        self.picker.each_mark = self.walls.each.then_some(usize::from(self.walls.target == crate::walls::Side::Right));
+                        self.picker.set_room(self.walls.zoom_room());
+                    }
+                    Some(crate::picker::Picked::Each(each)) => {
+                        self.walls.set_each(each);
+                        self.picker.each_mark = self.walls.each.then_some(usize::from(self.walls.target == crate::walls::Side::Right));
+                        self.picker.set_room(self.walls.zoom_room());
+                    }
+                    Some(crate::picker::Picked::Panel(p)) => {
+                        self.walls.set_target(if p == 0 { crate::walls::Side::Left } else { crate::walls::Side::Right });
+                        self.picker.each_mark = Some(p);
+                        self.picker.set_room(self.walls.zoom_room());
+                    }
+                    Some(crate::picker::Picked::View(z, d)) => {
+                        // Nothing to make: the preview goes, the wallpaper as it was.
+                        if !self.walls.adjust(z, d) {
+                            self.picker.preview_done();
+                        }
                     }
                     Some(crate::picker::Picked::Accent(choice)) => {
                         crate::accent::choose(choice);

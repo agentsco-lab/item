@@ -887,6 +887,10 @@ impl ClientData for ClientState {
 /// The wallpaper's shift for the ribbon at `position` (pages): it moves a
 /// little with the row, behind it (wallpaper.glsl).
 pub fn wallpaper_shift(position: f64) -> f64 {
+    // A picture on each panel keeps still: the seam stays in the hinge.
+    if crate::walls::each_on() {
+        return 0.0;
+    }
     ((position - 1.0) * crate::ribbon::PAGE * 0.12).clamp(-WALL_LEFT, WALL_RIGHT)
 }
 

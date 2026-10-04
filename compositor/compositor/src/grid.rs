@@ -196,11 +196,11 @@ impl Grid {
 
     /// A finger held still on a desk (not on the grid) for LONG_PRESS_NS:
     /// it is no longer the grid's, and its slot is returned.
-    pub fn long_press(&mut self, now_ns: u64) -> Option<TouchSlot> {
+    pub fn long_press(&mut self, now_ns: u64) -> Option<(TouchSlot, Point<f64, Logical>)> {
         let p = self.pending.as_ref().filter(|p| !p.on_grid && now_ns >= p.at + LONG_PRESS_NS)?;
-        let slot = p.slot;
+        let (slot, start) = (p.slot, p.start);
         self.pending = None;
-        Some(slot)
+        Some((slot, start))
     }
 
     /// A finger held still on an app in the grid for LONG_PRESS_NS: the

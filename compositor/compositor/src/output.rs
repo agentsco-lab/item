@@ -569,7 +569,8 @@ impl Screen {
         }
         // The wallpaper, under everything; it moves a little with the ribbon.
         let shift = crate::state::wallpaper_shift(state.ribbon.position(frame_ns)) as f32;
-        let wall = self.wallpaper(shift, frame_ns);
+        let preview = state.picker.preview().map(|(z, d)| (state.walls.part(), z, d));
+        let wall = self.wallpaper(shift, frame_ns, preview);
         elements.extend(wall.into_iter().map(FrameElement::Snapshot));
         let elements_ns = hybris_hwc::now_ns() - t0;
         let primed = self.frames_drawn >= BUFFERS as u64 && self.reprime == 0;
@@ -823,7 +824,7 @@ impl Screen {
     /// before; Aurora (no rows) drawn by wall.frag.
     pub fn set_wallpaper(&mut self, picture: crate::walls::Picture) {
         use smithay::backend::renderer::ImportMem;
-        let (name, rgba, w, h) = picture;
+        let (name, rgba, w, h, fade) = picture;
         let t = hybris_hwc::now_ns();
         let texture = if rgba.is_empty() {
             self.aurora()
@@ -832,8 +833,12 @@ impl Screen {
         };
         let Some(texture) = texture else { return };
         tracing::info!("wallpaper: {name} to the GPU in {:.1} ms", (hybris_hwc::now_ns() - t) as f64 / 1e6);
+        // The same picture zoomed or moved takes the old one's place at once:
+        // the picker showed it so already.
         if let Some(old) = self.wall.replace(texture) {
-            self.wall_old = Some((old, hybris_hwc::now_ns(), smithay::backend::renderer::element::Id::new()));
+            if fade {
+                self.wall_old = Some((old, hybris_hwc::now_ns(), smithay::backend::renderer::element::Id::new()));
+            }
         }
         self.wall_at = (smithay::backend::renderer::element::Id::new(), self.wall_at.1);
     }
@@ -881,36 +886,74 @@ impl Screen {
 
     /// The wallpaper at `shift`: its texture seen through a window the
     /// screen's size, moved by the shift; the one before under it while the
-    /// new one fades in.
-    fn wallpaper(&mut self, shift: f32, frame_ns: u64) -> Vec<smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>> {
+    /// new one fades in. `preview`: the picker's zoom and move of a part
+    /// (walls.rs) while the fingers are on it - the texture's window for that
+    /// part made smaller and moved, as the wallpaper made from it will look.
+    fn wallpaper(&mut self, shift: f32, frame_ns: u64, preview: Option<(crate::walls::Side, f64, (f64, f64))>) -> Vec<smithay::backend::renderer::element::texture::TextureRenderElement<smithay::backend::renderer::gles::GlesTexture>> {
+        use crate::walls::Side;
         use smithay::backend::renderer::element::texture::TextureRenderElement;
+        use smithay::utils::{Logical, Rectangle};
         let (w, h) = crate::layout::LAYOUT;
         // Moved: a new id, so the frame takes it all again.
         if self.wall_at.1 != shift {
             self.wall_at = (smithay::backend::renderer::element::Id::new(), shift);
         }
-        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new(((crate::state::WALL_LEFT as f32 + shift) as f64, 0.0).into(), (w as f64, h as f64).into());
+        let left = crate::state::WALL_LEFT + shift as f64;
+        // The screen in pieces: (its x and width on the screen, the texture's
+        // window for it), logical px.
+        let whole = |x0: f64, width: f64| (x0, width, Rectangle::<f64, Logical>::new((left + x0, 0.0).into(), (width, h as f64).into()));
+        let zoomed = |side: Side, x0: f64, width: f64, z: f64, d: (f64, f64)| {
+            let (rx, ry, rw, rh) = crate::walls::region(side);
+            let (cx, cy) = (rx + rw / 2.0, ry + rh / 2.0);
+            let (vx, vy) = (left + x0, 0.0);
+            let src = Rectangle::<f64, Logical>::new((cx + (vx - cx) / z - d.0 / z, cy + (vy - cy) / z - d.1 / z).into(), (width / z, h as f64 / z).into());
+            (x0, width, src)
+        };
+        let seam = crate::walls::region(Side::Right).0 - crate::state::WALL_LEFT;
+        let pieces: Vec<(f64, f64, Rectangle<f64, Logical>)> = match preview {
+            None => vec![whole(0.0, w as f64)],
+            Some((Side::Both, z, d)) => vec![zoomed(Side::Both, 0.0, w as f64, z, d)],
+            Some((side, z, d)) => {
+                let l = if side == Side::Left { zoomed(Side::Left, 0.0, seam, z, d) } else { whole(0.0, seam) };
+                let r = if side == Side::Right { zoomed(Side::Right, seam, w as f64 - seam, z, d) } else { whole(seam, w as f64 - seam) };
+                vec![l, r]
+            }
+        };
         let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((wall_width() * SCALE, h * SCALE).into());
         let context = self.renderer.context_id();
-        let element = |id: smithay::backend::renderer::element::Id, texture: smithay::backend::renderer::gles::GlesTexture, alpha: Option<f32>| {
-            TextureRenderElement::from_static_texture(id, context.clone(), (0.0, 0.0), texture, SCALE, Transform::Normal, alpha, Some(src), Some((w, h).into()), alpha.is_none().then(|| vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified)
+        let previewing = preview.is_some();
+        let element = |id: smithay::backend::renderer::element::Id, texture: smithay::backend::renderer::gles::GlesTexture, alpha: Option<f32>, piece: &(f64, f64, Rectangle<f64, Logical>)| {
+            let size: smithay::utils::Size<i32, Logical> = ((piece.1.round() as i32).max(1), h).into();
+            TextureRenderElement::from_static_texture(id, context.clone(), ((piece.0 * SCALE as f64).round(), 0.0), texture, SCALE, Transform::Normal, alpha, Some(piece.2), Some(size), (alpha.is_none() && !previewing).then(|| vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified)
         };
         let mut out = Vec::new();
         let Some(texture) = self.wall.clone() else { return out };
+        // While previewing every piece changes each frame.
+        let id = |base: &smithay::backend::renderer::element::Id, i: usize| if previewing || i > 0 { smithay::backend::renderer::element::Id::new() } else { base.clone() };
         match self.wall_old.clone() {
             Some((old, at, old_id)) if frame_ns < at + WALL_FADE_NS => {
                 let k = (frame_ns.saturating_sub(at) as f32 / WALL_FADE_NS as f32).clamp(0.0, 1.0);
                 let k = k * k * (3.0 - 2.0 * k);
                 // The new one, a new id each frame of the fade.
-                out.push(element(smithay::backend::renderer::element::Id::new(), texture, Some(k.max(0.001))));
-                out.push(element(old_id, old, None));
+                for p in &pieces {
+                    out.push(element(smithay::backend::renderer::element::Id::new(), texture.clone(), Some(k.max(0.001)), p));
+                }
+                for (i, p) in pieces.iter().enumerate() {
+                    out.push(element(id(&old_id, i), old.clone(), None, p));
+                }
             }
             Some(_) => {
                 self.wall_old = None;
                 self.wall_at.0 = smithay::backend::renderer::element::Id::new();
-                out.push(element(self.wall_at.0.clone(), texture, None));
+                for (i, p) in pieces.iter().enumerate() {
+                    out.push(element(id(&self.wall_at.0, i), texture.clone(), None, p));
+                }
             }
-            None => out.push(element(self.wall_at.0.clone(), texture, None)),
+            None => {
+                for (i, p) in pieces.iter().enumerate() {
+                    out.push(element(id(&self.wall_at.0, i), texture.clone(), None, p));
+                }
+            }
         }
         out
     }
