@@ -12,7 +12,7 @@
 //! Everything else is edited where it is, as on a phone's lock screen:
 //! - **The clock**: a finger moves it on its panel; a tap on it brings a card
 //!   by it with its fonts (each its own "12:34") and its brightness.
-//! - **The panel's card**, just over the strip on the panel being chosen for (with a
+//! - **The panel's card**, under the strip on the panel being chosen for (with a
 //!   picture on each panel; else the one the editing opened on): the zoom,
 //!   if the picture's pixels allow any (walls.rs), and with a picture on
 //!   each panel the vignette - dark or a glow in the accent, its strength,
@@ -299,27 +299,39 @@ impl Picker {
     // ---- where things are ----------------------------------------------
 
     /// Swatch `i`'s rect (0 the wallpaper's), logical px, open.
-    fn swatch(i: usize) -> Rectangle<f64, Logical> {
-        let s = Self::strip();
+    fn swatch(&self, i: usize) -> Rectangle<f64, Logical> {
+        let s = self.strip();
         Rectangle::new((s.loc.x + 22.0 + i as f64 * (SWATCH + SWATCH_GAP), s.loc.y + SWATCHES_Y).into(), (SWATCH, SWATCH).into())
     }
 
     /// The mode switch's halves, logical px, open: 0 "Both panels", 1 "Each".
-    fn mode(i: usize) -> Rectangle<f64, Logical> {
-        let s = Self::strip();
+    fn mode(&self, i: usize) -> Rectangle<f64, Logical> {
+        let s = self.strip();
         let x0 = s.loc.x + s.size.w - 22.0 - 2.0 * MODE_W - 4.0;
         Rectangle::new((x0 + 4.0 + i as f64 * MODE_W, s.loc.y + MODE_TOP + 4.0).into(), (MODE_W, MODE_H).into())
     }
 
     /// The strip's rect, logical px, open.
-    fn strip() -> Rectangle<f64, Logical> {
+    /// The strip's rect, logical px, open: over the panel's card, if any.
+    fn strip(&self) -> Rectangle<f64, Logical> {
         let (w, h) = (layout::LAYOUT.0 as f64, layout::LAYOUT.1 as f64);
-        Rectangle::new((SIDE, h - STRIP_BOTTOM - STRIP_H).into(), (w - 2.0 * SIDE, STRIP_H).into())
+        let card = self.panel_card_h().map(|c| c + 14.0).unwrap_or(0.0);
+        Rectangle::new((SIDE, h - STRIP_BOTTOM - STRIP_H - card).into(), (w - 2.0 * SIDE, STRIP_H).into())
+    }
+
+    /// The panel's card's height, if it has anything.
+    fn panel_card_h(&self) -> Option<f64> {
+        let knobs = self.panel_knobs();
+        if knobs.is_empty() {
+            return None;
+        }
+        let rows = knobs.len() as f64 + f64::from(u8::from(self.each_mark.is_some()));
+        Some(CARD_PAD * 2.0 + rows * ROW_H)
     }
 
     /// Picture `i`'s rect at the scroll `scroll`, logical px, open.
-    fn thumb(i: usize, scroll: f64) -> Rectangle<f64, Logical> {
-        let s = Self::strip();
+    fn thumb(&self, i: usize, scroll: f64) -> Rectangle<f64, Logical> {
+        let s = self.strip();
         let x = SIDE + 20.0 + i as f64 * (THUMB_W + GAP) - scroll;
         Rectangle::new((x, s.loc.y + 50.0).into(), (THUMB_W, THUMB_H).into())
     }
@@ -367,15 +379,10 @@ impl Picker {
 
     /// The panel's card, logical px, if it has anything.
     fn panel_card(&self) -> Option<Rectangle<f64, Logical>> {
-        let knobs = self.panel_knobs();
-        if knobs.is_empty() {
-            return None;
-        }
-        let rows = knobs.len() as f64 + f64::from(u8::from(self.each_mark.is_some()));
-        // Just over the strip: the top of the panel is the clock's.
+        let h = self.panel_card_h()?;
+        // Under the strip, at the panel's foot: the top is the clock's.
         let p = layout::panels()[self.card_panel()].to_f64();
-        let h = CARD_PAD * 2.0 + rows * ROW_H;
-        Some(Rectangle::new((p.loc.x + (p.size.w - PANEL_CARD_W) / 2.0, Self::strip().loc.y - 14.0 - h).into(), (PANEL_CARD_W, h).into()))
+        Some(Rectangle::new((p.loc.x + (p.size.w - PANEL_CARD_W) / 2.0, layout::LAYOUT.1 as f64 - STRIP_BOTTOM - h).into(), (PANEL_CARD_W, h).into()))
     }
 
     /// A slider's track on its card, logical px.
@@ -416,7 +423,7 @@ impl Picker {
         let p = layout::panel_at(c.loc).or_else(|| layout::panel_at((c.loc.x + c.size.w - 1.0, c.loc.y).into())).map(|i| layout::panels()[i].to_f64()).unwrap_or(whole);
         let x = (c.loc.x + c.size.w - w).clamp(p.loc.x + 12.0, (p.loc.x + p.size.w - w - 12.0).max(p.loc.x + 12.0));
         let below = c.loc.y + c.size.h + 14.0;
-        let y = if below + h < Self::strip().loc.y - 10.0 { below } else { (c.loc.y - h - 14.0).max(12.0) };
+        let y = if below + h < self.strip().loc.y - 10.0 { below } else { (c.loc.y - h - 14.0).max(12.0) };
         Some(Rectangle::new((x, y).into(), (w, h).into()))
     }
 
@@ -655,7 +662,7 @@ impl Picker {
         }
         // Above the strip, or a second finger there: moving or zooming the
         // picture.
-        if pos.y < Self::strip().loc.y || self.shape.as_ref().is_some_and(|s| !s.fingers.is_empty()) {
+        if pos.y < self.strip().loc.y || self.shape.as_ref().is_some_and(|s| !s.fingers.is_empty()) {
             let room = self.room;
             let shape = self.shape.get_or_insert(Shape { fingers: Vec::new(), pinch_from: None, zoom: 1.0, moved: (0.0, 0.0), changed: false });
             if shape.fingers.len() < 2 {
@@ -808,17 +815,17 @@ impl Picker {
             }
             return None;
         }
-        if let Some(i) = (0..2).find(|&i| Self::mode(i).contains(h.start)) {
+        if let Some(i) = (0..2).find(|&i| self.mode(i).contains(h.start)) {
             return Some(Picked::Each(i == 1));
         }
         // A swatch: a little more room round it than it shows.
         if let Some(i) = (0..=crate::accent::PALETTE.len()).find(|&i| {
-            let r = Self::swatch(i);
+            let r = self.swatch(i);
             Rectangle::<f64, Logical>::new((r.loc.x - 6.0, r.loc.y - 6.0).into(), (r.size.w + 12.0, r.size.h + 12.0).into()).contains(h.start)
         }) {
             return Some(Picked::Accent(i.checked_sub(1)));
         }
-        (0..count).find(|&i| Self::thumb(i, scroll).contains(h.start)).map(Picked::Wallpaper)
+        (0..count).find(|&i| self.thumb(i, scroll).contains(h.start)).map(Picked::Wallpaper)
     }
 
     /// After a frame: whether it still moves.
@@ -861,7 +868,7 @@ impl Picker {
             return out;
         }
         let drop = (1.0 - k) * (STRIP_H + STRIP_BOTTOM + 10.0);
-        let lift = (1.0 - k) * 60.0;
+        let lift = drop;
         let alpha = k as f32;
         let s = SCALE as f64;
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, dy: f64| {
@@ -913,11 +920,11 @@ impl Picker {
             }
             put(&mut out, &self.sized(card.size.w, card.size.h, 0), card.loc.x, card.loc.y, lift);
         }
-        let strip = Self::strip();
+        let strip = self.strip();
         let scroll = self.scroll_at(frame_ns, thumbs.len());
         let width = layout::LAYOUT.0 as f64;
         for (i, t) in thumbs.iter().enumerate() {
-            let r = Self::thumb(i, scroll);
+            let r = self.thumb(i, scroll);
             if r.loc.x + r.size.w < 0.0 || r.loc.x > width {
                 continue;
             }
@@ -939,7 +946,7 @@ impl Picker {
             w.1.clone()
         };
         for i in 0..=self.swatches.len() {
-            let r = Self::swatch(i);
+            let r = self.swatch(i);
             if i == 0 {
                 put(&mut out, &self.hole, r.loc.x + 6.0, r.loc.y + 6.0, drop);
                 put(&mut out, &wall, r.loc.x, r.loc.y, drop);
@@ -952,12 +959,12 @@ impl Picker {
         }
         // The mode switch: the half on lit, its words centred in each.
         for (i, l) in self.modes.iter().enumerate() {
-            let (x, y) = centred(l, Self::mode(i));
+            let (x, y) = centred(l, self.mode(i));
             put(&mut out, &l.buffer, x, y, drop);
         }
-        let lr = Self::mode(usize::from(self.each_mark.is_some()));
+        let lr = self.mode(usize::from(self.each_mark.is_some()));
         put(&mut out, &self.mode_lit, lr.loc.x, lr.loc.y, drop);
-        let r0 = Self::mode(0);
+        let r0 = self.mode(0);
         put(&mut out, &self.mode_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, drop);
         put(&mut out, &self.glass, strip.loc.x, strip.loc.y, drop);
         out
