@@ -656,11 +656,16 @@ impl Picker {
         self.card_open = false;
         self.card_since = 0;
         self.rows_shown.set((f64::NAN, f64::NAN, 0));
-        // The one on in the middle of the strip, as far as it goes.
+        self.recenter(current, count);
+        tracing::info!("picker: open");
+    }
+
+    /// The one on in the middle of the strip, as far as it goes.
+    pub fn recenter(&mut self, current: usize, count: usize) {
         let width = layout::LAYOUT.0 as f64;
         let at = SIDE + 20.0 + current as f64 * (THUMB_W + GAP) + THUMB_W / 2.0;
         self.scroll = (at - width / 2.0).clamp(0.0, Self::max_scroll(count));
-        tracing::info!("picker: open");
+        self.run = None;
     }
 
     pub fn close(&mut self) {

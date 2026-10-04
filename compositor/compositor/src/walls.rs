@@ -163,6 +163,11 @@ pub struct Walls {
     thumbs_loaded: Arc<Mutex<Option<Vec<(usize, Vec<u8>, u32, u32)>>>>,
     /// The small pictures, once read (the picker asks for them).
     pub thumbs: Vec<Option<MemoryRenderBuffer>>,
+    /// The pictures taller than wide: for one on each panel; the wide ones
+    /// for one on both.
+    tall: std::collections::HashSet<String>,
+    /// The pictures the strip shows for the mode (indices into `names`).
+    pub shown: Vec<usize>,
     thumbs_asked: bool,
     /// With one on each panel, each darkening toward its edges.
     pub vignette: Vignette,
@@ -272,6 +277,35 @@ fn frost(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
 }
 
 /// A JPEG file, decoded to RGBA.
+/// A JPEG's size from its frame header, without decoding it.
+fn jpeg_size(path: &std::path::Path) -> Option<(u32, u32)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+    let mut b = [0u8; 2];
+    f.read_exact(&mut b).ok()?;
+    if b != [0xFF, 0xD8] {
+        return None;
+    }
+    loop {
+        f.read_exact(&mut b).ok()?;
+        if b[0] != 0xFF {
+            return None;
+        }
+        let marker = b[1];
+        if marker == 0xFF || (0xD0..=0xD7).contains(&marker) || marker == 0x01 {
+            continue;
+        }
+        f.read_exact(&mut b).ok()?;
+        let len = u16::from_be_bytes(b) as i64;
+        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
+            let mut h = [0u8; 5];
+            f.read_exact(&mut h).ok()?;
+            return Some((u16::from_be_bytes([h[3], h[4]]) as u32, u16::from_be_bytes([h[1], h[2]]) as u32));
+        }
+        f.seek(SeekFrom::Current(len - 2)).ok()?;
+    }
+}
+
 fn decode(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
@@ -399,6 +433,8 @@ impl Walls {
             frosted: Default::default(),
             thumbs_loaded: Default::default(),
             thumbs: Vec::new(),
+            tall: Default::default(),
+            shown: Vec::new(),
             thumbs_asked: false,
             vignette: Vignette::default(),
             previews: Default::default(),
@@ -409,7 +445,9 @@ impl Walls {
             wake,
         };
         walls.thumbs = vec![None; walls.names.len()];
+        walls.tall = walls.names.iter().filter(|n| jpeg_size(&walls.path(n)).is_some_and(|(w, h)| h > w)).cloned().collect();
         walls.read_kept();
+        walls.sync_current();
         tracing::info!("walls: {} pictures; {}", walls.names.len() - 1, walls.describe());
         walls.make(false, true);
         walls
@@ -478,6 +516,23 @@ impl Walls {
 
     fn sync_current(&mut self) {
         self.current = self.views[self.part().index()].name.clone();
+        // The strip: the tall pictures with one on each panel, the wide ones
+        // (and Aurora) with one on both; all, if none fits.
+        let each = self.each;
+        self.shown = (0..self.names.len()).filter(|&i| if self.names[i] == AURORA { !each } else { self.tall.contains(&self.names[i]) == each }).collect();
+        if self.shown.is_empty() {
+            self.shown = (0..self.names.len()).collect();
+        }
+    }
+
+    /// Where the one on is in the strip, if it is there.
+    pub fn shown_current(&self) -> Option<usize> {
+        self.shown.iter().position(|&i| self.names[i] == self.current)
+    }
+
+    /// The strip's small pictures, in its order.
+    pub fn shown_thumbs(&self) -> Vec<Option<MemoryRenderBuffer>> {
+        self.shown.iter().map(|&i| self.thumbs.get(i).cloned().flatten()).collect()
     }
 
     fn path(&self, name: &str) -> PathBuf {

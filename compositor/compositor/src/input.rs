@@ -367,7 +367,7 @@ impl State {
             return;
         }
         // Choosing the wallpaper: every touch is the picker's.
-        let count = self.walls.names.len();
+        let count = self.walls.shown.len();
         match &contact {
             Contact::Down(slot, pos, t) if self.picker.is_open() => {
                 self.picker.down(*slot, *pos, *t, count, self.clock.last_rect.get());
@@ -382,7 +382,7 @@ impl State {
             Contact::Up(slot, _) if self.picker.holds(*slot) => {
                 match self.picker.up(*slot, count) {
                     Some(crate::picker::Picked::Wallpaper(i)) => {
-                        let name = self.walls.names[i].clone();
+                        let name = self.walls.names[self.walls.shown[i]].clone();
                         self.walls.choose(&name);
                         self.picker.each_mark = self.walls.each.then_some(usize::from(self.walls.target == crate::walls::Side::Right));
                         self.picker.set_room(self.walls.zoom_room());
@@ -391,6 +391,8 @@ impl State {
                         self.walls.set_each(each);
                         self.picker.each_mark = self.walls.each.then_some(usize::from(self.walls.target == crate::walls::Side::Right));
                         self.picker.set_room(self.walls.zoom_room());
+                        // The strip now shows the mode's pictures.
+                        self.picker.recenter(self.walls.shown_current().unwrap_or(0), self.walls.shown.len());
                     }
                     Some(crate::picker::Picked::Panel(p)) => {
                         self.walls.set_target(if p == 0 { crate::walls::Side::Left } else { crate::walls::Side::Right });

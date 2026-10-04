@@ -511,8 +511,8 @@ impl Data {
                 self.state.picker.clock_panel = self.state.dock.home_panel().or(Some(1));
                 let look = crate::clock::style().0;
                 (self.state.picker.brightness, self.state.picker.font, self.state.picker.vignette) = (look.alpha, look.font, self.state.walls.vignette);
-                let current = self.state.walls.names.iter().position(|n| *n == self.state.walls.current).unwrap_or(0);
-                let count = self.state.walls.names.len();
+                let current = self.state.walls.shown_current().unwrap_or(0);
+                let count = self.state.walls.shown.len();
                 self.state.picker.open(slot, current, count);
                 self.state.walls.ask_thumbs();
                 crate::fingerprint::buzz("button-pressed");
@@ -872,7 +872,7 @@ impl Data {
         if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.alert.settle(self.pacing.target_ns) || self.state.layers.sliding() || self.state.tour.settle() {
             self.state.needs_redraw = true;
         }
-        let count = self.state.walls.names.len();
+        let count = self.state.walls.shown.len();
         if self.state.picker.settle(self.pacing.target_ns, count) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
