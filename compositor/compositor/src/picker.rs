@@ -24,7 +24,9 @@
 //!   picture on each); a tap elsewhere closes the clock's card if it is up,
 //!   else the editing - the strip going down and the dock coming back.
 //!
-//! A slider is seen as it moves and kept when it is let go.
+//! The panel's card is folded to its title ("Zoom & vignette") until a tap
+//! on it opens it, the strip going up to make room; a tap on its title
+//! folds it again. A slider is seen as it moves and kept when it is let go.
 
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
@@ -73,6 +75,10 @@ const CHIP_H: f64 = 54.0;
 const CHIP_GAP: f64 = 10.0;
 const PANEL_CARD_W: f64 = 520.0;
 const TINT_W: f64 = 84.0;
+/// The panel's card's title row (always shown; a tap opens or folds the
+/// rest), and how long it takes to open or fold.
+const HEADER: f64 = 40.0;
+const FOLD_NS: f64 = 280e6;
 const TINT_H: f64 = 28.0;
 
 /// Fingers above the strip: moving or zooming the picture.
@@ -216,6 +222,12 @@ pub struct Picker {
     pub opened_on: usize,
     /// The clock's card is up.
     clock_card: bool,
+    /// The panel's card open (else folded to its title), since when.
+    card_open: bool,
+    card_since: u64,
+    /// Its title, and Show or Hide by it.
+    card_title: std::cell::RefCell<(String, Label)>,
+    arrows: [Label; 2],
     /// Where the clock was last drawn (clock.rs), logical px.
     clock_rect: std::cell::Cell<Option<Rectangle<f64, Logical>>>,
     /// A slider held: which, its slot, its value now.
@@ -285,6 +297,10 @@ impl Picker {
             each_mark: None,
             opened_on: 1,
             clock_card: false,
+            card_open: false,
+            card_since: 0,
+            card_title: std::cell::RefCell::new((String::new(), Label::new(14.0, [1.0, 1.0, 1.0, 0.9]))),
+            arrows: [label(13.0, 0.6, "Hide"), label(13.0, 0.6, "Show")],
             clock_rect: Default::default(),
             sliding: None,
             clock_hold: None,
@@ -319,14 +335,35 @@ impl Picker {
         Rectangle::new((SIDE, h - STRIP_BOTTOM - STRIP_H - card).into(), (w - 2.0 * SIDE, STRIP_H).into())
     }
 
-    /// The panel's card's height, if it has anything.
+    /// How far the panel's card is open, 0 folded to its title to 1, eased.
+    fn card_k(&self) -> f64 {
+        let t = (hybris_hwc::now_ns().saturating_sub(self.card_since) as f64 / FOLD_NS).clamp(0.0, 1.0);
+        let e = t * t * (3.0 - 2.0 * t);
+        if self.card_open { e } else { 1.0 - e }
+    }
+
+    /// The panel's card's rows below its title: the sliders, and the
+    /// vignette's Dark, Glow.
+    fn card_rows(&self) -> f64 {
+        self.panel_knobs().len() as f64 + f64::from(u8::from(self.each_mark.is_some()))
+    }
+
+    /// The panel's card's height as open as it is, if it has anything.
     fn panel_card_h(&self) -> Option<f64> {
-        let knobs = self.panel_knobs();
-        if knobs.is_empty() {
+        if self.panel_knobs().is_empty() {
             return None;
         }
-        let rows = knobs.len() as f64 + f64::from(u8::from(self.each_mark.is_some()));
-        Some(CARD_PAD * 2.0 + rows * ROW_H)
+        let rows = self.card_rows() * self.card_k();
+        Some(CARD_PAD + HEADER + rows * ROW_H + if rows > 0.0 { CARD_PAD * self.card_k() } else { 0.0 } + 4.0)
+    }
+
+    /// Its title: what the card holds.
+    fn card_words(&self) -> &'static str {
+        match (self.zooms(), self.each_mark.is_some()) {
+            (true, true) => "Zoom & vignette",
+            (false, true) => "Vignette",
+            _ => "Zoom",
+        }
     }
 
     /// Picture `i`'s rect at the scroll `scroll`, logical px, open.
@@ -392,7 +429,7 @@ impl Picker {
             (card, card.loc.y + CARD_PAD + CHIP_H + 10.0 + ROW_H / 2.0)
         } else {
             let card = self.panel_card()?;
-            (card, card.loc.y + CARD_PAD + self.row_of(k)? * ROW_H + ROW_H / 2.0)
+            (card, card.loc.y + CARD_PAD + HEADER + self.row_of(k)? * ROW_H + ROW_H / 2.0)
         };
         let x = card.loc.x + CARD_PAD + LABEL_W;
         let w = card.size.w - 2.0 * CARD_PAD - LABEL_W - KNOB / 2.0;
@@ -404,7 +441,7 @@ impl Picker {
         self.each_mark?;
         let card = self.panel_card()?;
         let row = f64::from(u8::from(self.zooms()));
-        let y = card.loc.y + CARD_PAD + row * ROW_H + (ROW_H - TINT_H) / 2.0;
+        let y = card.loc.y + CARD_PAD + HEADER + row * ROW_H + (ROW_H - TINT_H) / 2.0;
         let x0 = card.loc.x + card.size.w - CARD_PAD - 2.0 * TINT_W - 4.0;
         Some(Rectangle::new((x0 + 4.0 + i as f64 * TINT_W, y).into(), (TINT_W, TINT_H).into()))
     }
@@ -585,6 +622,8 @@ impl Picker {
         self.hold = None;
         self.run = None;
         self.clock_card = false;
+        self.card_open = false;
+        self.card_since = 0;
         // The one on in the middle of the strip, as far as it goes.
         let width = layout::LAYOUT.0 as f64;
         let at = SIDE + 20.0 + current as f64 * (THUMB_W + GAP) + THUMB_W / 2.0;
@@ -633,8 +672,9 @@ impl Picker {
         }
         let near = |r: Rectangle<f64, Logical>, m: f64| Rectangle::<f64, Logical>::new((r.loc.x - m, r.loc.y - m).into(), (r.size.w + 2.0 * m, r.size.h + 2.0 * m).into()).contains(pos);
         if self.shape.as_ref().is_none_or(|s| s.fingers.is_empty()) {
-            // A slider on a card: anywhere near its track.
-            let mut knobs = self.panel_knobs();
+            // A slider on a card: anywhere near its track (the panel's card
+            // open).
+            let mut knobs = if self.card_k() > 0.95 { self.panel_knobs() } else { Vec::new() };
             if self.clock_card {
                 knobs.push(Knob::Brightness);
             }
@@ -800,7 +840,15 @@ impl Picker {
             }
             return None;
         }
-        if self.panel_card().is_some_and(|r| r.contains(h.start)) {
+        if let Some(card) = self.panel_card().filter(|r| r.contains(h.start)) {
+            // Its title: open, or folded again.
+            if h.start.y < card.loc.y + CARD_PAD + HEADER || !self.card_open {
+                let k = self.card_k();
+                self.card_open = !self.card_open;
+                // From where it is, if it was still moving.
+                self.card_since = hybris_hwc::now_ns().saturating_sub(((1.0 - k) * FOLD_NS) as u64);
+                return None;
+            }
             if let Some(i) = (0..2).find(|&i| self.tint_rect(i).is_some_and(|r| r.contains(h.start))) {
                 self.vignette.glow = i == 1;
                 return Some(Picked::Vignette(self.vignette));
@@ -838,7 +886,8 @@ impl Picker {
                 self.run = None;
             }
         }
-        sliding || self.run.is_some() || self.hold.is_some() || self.shape.is_some() || self.clock_hold.is_some() || self.sliding.is_some()
+        let folding = frame_ns < self.card_since + FOLD_NS as u64;
+        sliding || folding || self.run.is_some() || self.hold.is_some() || self.shape.is_some() || self.clock_hold.is_some() || self.sliding.is_some()
     }
 
     // ---- drawing -------------------------------------------------------
@@ -882,7 +931,10 @@ impl Picker {
         if self.clock_card {
             sliders.push(Knob::Brightness);
         }
-        sliders.extend(self.panel_knobs());
+        let ck = self.card_k();
+        if ck > 0.6 {
+            sliders.extend(self.panel_knobs());
+        }
         for kk in sliders {
             let Some(t) = self.track_rect(kk) else { continue };
             if let Some(x) = self.value_x(kk, self.value(kk)) {
@@ -906,9 +958,22 @@ impl Picker {
             }
             put(&mut out, &self.sized(card.size.w, card.size.h, 0), card.loc.x, card.loc.y, lift);
         }
-        // The panel's card: the vignette's title and Dark, Glow.
+        // The panel's card: its title and arrow; open, the vignette's title
+        // and Dark, Glow.
         if let Some(card) = self.panel_card() {
-            if let (Some(r0), Some(r1)) = (self.tint_rect(0), self.tint_rect(1)) {
+            {
+                let mut t = self.card_title.borrow_mut();
+                if t.0 != self.card_words() {
+                    let mut l = label(14.0, 0.9, self.card_words());
+                    std::mem::swap(&mut t.1, &mut l);
+                    t.0 = self.card_words().to_owned();
+                }
+                let y = card.loc.y + CARD_PAD + (HEADER - t.1.extent.h as f64) / 2.0 - 6.0;
+                put(&mut out, &t.1.buffer, card.loc.x + CARD_PAD, y, lift);
+                let a = &self.arrows[usize::from(!self.card_open)];
+                put(&mut out, &a.buffer, card.loc.x + card.size.w - CARD_PAD - a.extent.w as f64, y + 2.0, lift);
+            }
+            if let (Some(r0), Some(r1), true) = (self.tint_rect(0), self.tint_rect(1), ck > 0.6) {
                 for (i, l) in self.tints.iter().enumerate() {
                     let (x, y) = centred(l, if i == 0 { r0 } else { r1 });
                     put(&mut out, &l.buffer, x, y, lift);
