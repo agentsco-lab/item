@@ -32,7 +32,7 @@ use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::layout::{self, SCALE};
 use crate::shade::ShellElement;
@@ -225,6 +225,8 @@ pub struct Picker {
     /// The panel's card open (else folded to its title), since when.
     card_open: bool,
     card_since: u64,
+    /// The frame being drawn: the card's opening is timed by it.
+    frame: std::cell::Cell<u64>,
     /// Its title, and Show or Hide by it.
     card_title: std::cell::RefCell<(String, Label)>,
     arrows: [Label; 2],
@@ -299,6 +301,7 @@ impl Picker {
             clock_card: false,
             card_open: false,
             card_since: 0,
+            frame: std::cell::Cell::new(0),
             card_title: std::cell::RefCell::new((String::new(), Label::new(14.0, [1.0, 1.0, 1.0, 0.9]))),
             arrows: [label(13.0, 0.6, "Hide"), label(13.0, 0.6, "Show")],
             clock_rect: Default::default(),
@@ -337,7 +340,7 @@ impl Picker {
 
     /// How far the panel's card is open, 0 folded to its title to 1, eased.
     fn card_k(&self) -> f64 {
-        let t = (hybris_hwc::now_ns().saturating_sub(self.card_since) as f64 / FOLD_NS).clamp(0.0, 1.0);
+        let t = (self.frame.get().saturating_sub(self.card_since) as f64 / FOLD_NS).clamp(0.0, 1.0);
         let e = t * t * (3.0 - 2.0 * t);
         if self.card_open { e } else { 1.0 - e }
     }
@@ -353,8 +356,12 @@ impl Picker {
         if self.panel_knobs().is_empty() {
             return None;
         }
-        let rows = self.card_rows() * self.card_k();
-        Some(CARD_PAD + HEADER + rows * ROW_H + if rows > 0.0 { CARD_PAD * self.card_k() } else { 0.0 } + 4.0)
+        Some(CARD_PAD + HEADER + 4.0 + (self.card_rows() * ROW_H + CARD_PAD) * self.card_k())
+    }
+
+    /// The panel's card's height open.
+    fn card_full_h(&self) -> f64 {
+        CARD_PAD + HEADER + 4.0 + self.card_rows() * ROW_H + CARD_PAD
     }
 
     /// Its title: what the card holds.
@@ -846,7 +853,7 @@ impl Picker {
                 let k = self.card_k();
                 self.card_open = !self.card_open;
                 // From where it is, if it was still moving.
-                self.card_since = hybris_hwc::now_ns().saturating_sub(((1.0 - k) * FOLD_NS) as u64);
+                self.card_since = self.frame.get().saturating_sub(((1.0 - k) * FOLD_NS) as u64);
                 return None;
             }
             if let Some(i) = (0..2).find(|&i| self.tint_rect(i).is_some_and(|r| r.contains(h.start))) {
@@ -886,6 +893,7 @@ impl Picker {
                 self.run = None;
             }
         }
+        self.frame.set(frame_ns);
         let folding = frame_ns < self.card_since + FOLD_NS as u64;
         sliding || folding || self.run.is_some() || self.hold.is_some() || self.shape.is_some() || self.clock_hold.is_some() || self.sliding.is_some()
     }
@@ -916,12 +924,20 @@ impl Picker {
         if k <= 0.0 {
             return out;
         }
+        self.frame.set(frame_ns);
         let drop = (1.0 - k) * (STRIP_H + STRIP_BOTTOM + 10.0);
         let lift = drop;
         let alpha = k as f32;
         let s = SCALE as f64;
+        // A row fading in as the panel's card opens over it, and a piece of
+        // a buffer (the card's background, drawn once open, shown as tall
+        // as the card is).
+        let fade = std::cell::Cell::new(1.0f32);
+        let crop = std::cell::Cell::new(None::<Rectangle<f64, Logical>>);
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, dy: f64| {
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * s).round(), ((y + dy) * s).round()), b, Some(alpha), None, None, Kind::Unspecified) {
+            let src = crop.get();
+            let size = src.map(|r| Size::from((r.size.w.round() as i32, r.size.h.round() as i32)));
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, ((x * s).round(), ((y + dy) * s).round()), b, Some(alpha * fade.get()), src, size, Kind::Unspecified) {
                 out.push(ShellElement::Text(e));
             }
         };
@@ -932,11 +948,18 @@ impl Picker {
             sliders.push(Knob::Brightness);
         }
         let ck = self.card_k();
-        if ck > 0.6 {
+        if ck > 0.0 {
             sliders.extend(self.panel_knobs());
         }
+        // How much of a row at `y` (its middle) the panel's card holds.
+        let card_bottom = self.panel_card().map(|c| c.loc.y + c.size.h - CARD_PAD * ck);
+        let held = |y: f64| card_bottom.map_or(1.0, |b| (((b - y) / (ROW_H * 0.5) - 1.0).clamp(0.0, 1.0)) as f32);
         for kk in sliders {
             let Some(t) = self.track_rect(kk) else { continue };
+            fade.set(if kk == Knob::Brightness { 1.0 } else { held(t.loc.y + TRACK_H / 2.0) });
+            if fade.get() <= 0.0 {
+                continue;
+            }
             if let Some(x) = self.value_x(kk, self.value(kk)) {
                 put(&mut out, &self.knob, x - KNOB / 2.0, t.loc.y + TRACK_H / 2.0 - KNOB / 2.0, lift);
             }
@@ -958,6 +981,7 @@ impl Picker {
             }
             put(&mut out, &self.sized(card.size.w, card.size.h, 0), card.loc.x, card.loc.y, lift);
         }
+        fade.set(1.0);
         // The panel's card: its title and arrow; open, the vignette's title
         // and Dark, Glow.
         if let Some(card) = self.panel_card() {
@@ -973,7 +997,8 @@ impl Picker {
                 let a = &self.arrows[usize::from(!self.card_open)];
                 put(&mut out, &a.buffer, card.loc.x + card.size.w - CARD_PAD - a.extent.w as f64, y + 2.0, lift);
             }
-            if let (Some(r0), Some(r1), true) = (self.tint_rect(0), self.tint_rect(1), ck > 0.6) {
+            if let (Some(r0), Some(r1), true) = (self.tint_rect(0), self.tint_rect(1), ck > 0.0) {
+                fade.set(held(r0.loc.y + r0.size.h / 2.0));
                 for (i, l) in self.tints.iter().enumerate() {
                     let (x, y) = centred(l, if i == 0 { r0 } else { r1 });
                     put(&mut out, &l.buffer, x, y, lift);
@@ -982,8 +1007,19 @@ impl Picker {
                 put(&mut out, &self.tint_lit, lit.loc.x, lit.loc.y, lift);
                 put(&mut out, &self.tint_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, lift);
                 put(&mut out, &self.vignette_word.buffer, card.loc.x + CARD_PAD, r0.loc.y + (r0.size.h - self.vignette_word.extent.h as f64) / 2.0, lift);
+                fade.set(1.0);
             }
-            put(&mut out, &self.sized(card.size.w, card.size.h, 0), card.loc.x, card.loc.y, lift);
+            // Its background: the open one, its top as far as the card goes
+            // and its rounded foot under it.
+            let full = self.card_full_h();
+            let bg = self.sized(card.size.w, full, 0);
+            let foot = 24.0f64.min(card.size.h / 2.0);
+            let w = card.size.w;
+            crop.set(Some(Rectangle::new((0.0, 0.0).into(), (w, card.size.h - foot).into())));
+            put(&mut out, &bg, card.loc.x, card.loc.y, lift);
+            crop.set(Some(Rectangle::new((0.0, full - foot).into(), (w, foot).into())));
+            put(&mut out, &bg, card.loc.x, card.loc.y + card.size.h - foot, lift);
+            crop.set(None);
         }
         let strip = self.strip();
         let scroll = self.scroll_at(frame_ns, thumbs.len());
