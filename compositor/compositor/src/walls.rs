@@ -205,8 +205,8 @@ fn round_corners(rgba: &mut [u8], w: u32, h: u32, r: f64) {
     for y in 0..h {
         for x in 0..w {
             let (fx, fy) = (x as f64 + 0.5, y as f64 + 0.5);
-            let cx = fx.clamp(r, w as f64 - r);
-            let cy = fy.clamp(r, h as f64 - r);
+            let cx = fx.clamp(r.min(w as f64 / 2.0), (w as f64 - r).max(w as f64 / 2.0));
+            let cy = fy.clamp(r.min(h as f64 / 2.0), (h as f64 - r).max(h as f64 / 2.0));
             let d = ((fx - cx).powi(2) + (fy - cy).powi(2)).sqrt();
             let a = (r + 0.5 - d).clamp(0.0, 1.0);
             if a < 1.0 {
@@ -400,8 +400,8 @@ fn window(sw: u32, sh: u32, rw: f64, rh: f64, view: &View) -> ((f64, f64, f64, f
     let max = (1.0 / cover).clamp(1.0, MAX_ZOOM);
     let zoom = view.zoom.clamp(1.0, max);
     let (ww, wh) = (rw / (cover * zoom), rh / (cover * zoom));
-    let x = (view.cx * sw - ww / 2.0).clamp(0.0, sw - ww);
-    let y = (view.cy * sh - wh / 2.0).clamp(0.0, sh - wh);
+    let x = (view.cx * sw - ww / 2.0).clamp(0.0, (sw - ww).max(0.0));
+    let y = (view.cy * sh - wh / 2.0).clamp(0.0, (sh - wh).max(0.0));
     ((x, y, ww, wh), max)
 }
 
