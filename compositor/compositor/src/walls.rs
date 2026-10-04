@@ -160,7 +160,7 @@ pub struct Walls {
     loaded: Arc<Mutex<Option<Picture>>>,
     /// The wallpaper frosted (`frost`): Some(None) for Aurora, which has none.
     frosted: Arc<Mutex<Option<Option<(Vec<u8>, u32, u32)>>>>,
-    thumbs_loaded: Arc<Mutex<Option<Vec<(usize, Vec<u8>, u32, u32)>>>>,
+    thumbs_loaded: Arc<Mutex<Vec<(usize, Vec<u8>, u32, u32)>>>,
     /// The small pictures, once read (the picker asks for them).
     pub thumbs: Vec<Option<MemoryRenderBuffer>>,
     /// The pictures taller than wide: for one on each panel; the wide ones
@@ -450,6 +450,8 @@ impl Walls {
         walls.sync_current();
         tracing::info!("walls: {} pictures; {}", walls.names.len() - 1, walls.describe());
         walls.make(false, true);
+        // The strip's small pictures ready before it is first opened.
+        walls.ask_thumbs();
         walls
     }
 
@@ -788,37 +790,48 @@ impl Walls {
         self.thumbs_asked = true;
         let names = self.names.clone();
         let paths: Vec<(PathBuf, PathBuf)> = names.iter().map(|n| (self.path(&format!("thumb-{n}")), self.path(n))).collect();
+        // The strip's first: those it shows now.
+        let mut order = self.shown.clone();
+        order.extend((0..names.len()).filter(|i| !self.shown.contains(i)));
+        let made_dir = home().join(".local/share/item/walls");
         let (slot, wake) = (self.thumbs_loaded.clone(), self.wake.clone());
         std::thread::spawn(move || {
-            let out: Vec<_> = paths
-                .iter()
-                .enumerate()
-                .filter_map(|(i, (thumb, picture))| {
-                    let small = decode(thumb).or_else(|| {
-                        if names[i] == AURORA {
-                            return None;
+            // Each as it is read, on the strip at once; one made from its
+            // picture is kept beside the pictures for the next time.
+            for i in order {
+                let (thumb, picture) = &paths[i];
+                let small = decode(thumb).or_else(|| {
+                    if names[i] == AURORA {
+                        return None;
+                    }
+                    let (src, sw, sh) = decode(picture)?;
+                    let (w, h) = THUMB_PX;
+                    let mut out = vec![0u8; (w * h * 4) as usize];
+                    let (win, _) = window(sw, sh, w as f64, h as f64, &View::of(""));
+                    resample(&src, sw, sh, win, &mut out, w, 0, 0, w, h);
+                    let _ = std::fs::create_dir_all(&made_dir);
+                    if let Ok(e) = jpeg_encoder::Encoder::new_file(made_dir.join(format!("thumb-{}", names[i])), 90) {
+                        if let Err(e) = e.encode(&out, w as u16, h as u16, jpeg_encoder::ColorType::Rgba) {
+                            tracing::warn!("walls: thumb of {}: {e}", names[i]);
                         }
-                        let (src, sw, sh) = decode(picture)?;
-                        let (w, h) = THUMB_PX;
-                        let mut out = vec![0u8; (w * h * 4) as usize];
-                        let (win, _) = window(sw, sh, w as f64, h as f64, &View::of(""));
-                        resample(&src, sw, sh, win, &mut out, w, 0, 0, w, h);
-                        Some((out, w, h))
-                    });
-                    small.map(|(mut p, w, h)| {
-                        round_corners(&mut p, w, h, THUMB_RADIUS);
-                        (i, p, w, h)
-                    })
-                })
-                .collect();
-            *slot.lock().unwrap() = Some(out);
-            wake.ping();
+                    }
+                    Some((out, w, h))
+                });
+                if let Some((mut p, w, h)) = small {
+                    round_corners(&mut p, w, h, THUMB_RADIUS);
+                    slot.lock().unwrap().push((i, p, w, h));
+                    wake.ping();
+                }
+            }
         });
     }
 
     /// The small pictures, made buffers once read; whether any came.
     pub fn take_thumbs(&mut self) -> bool {
-        let Some(list) = self.thumbs_loaded.lock().unwrap().take() else { return false };
+        let list = std::mem::take(&mut *self.thumbs_loaded.lock().unwrap());
+        if list.is_empty() {
+            return false;
+        }
         for (i, rgba, w, h) in list {
             self.thumbs[i] = Some(MemoryRenderBuffer::from_slice(&rgba, Fourcc::Abgr8888, (w as i32, h as i32), 2, Transform::Normal, None));
         }
