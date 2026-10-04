@@ -19,7 +19,9 @@ CARGO=${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}
 R=target/$TARGET/release
 
 BASE=$(sed -n 's/^version = "\(.*\)"/\1/p' compositor/Cargo.toml | head -1)
-VERSION="$BASE~git$(git log -1 --format=%cd.%h --date=format:%Y%m%d)"
+# The commit's time to the second first: a later build always sorts
+# higher (the bare date and hash did not: 84d12ac "lower" than 88d8dd9).
+VERSION="$BASE~git$(git log -1 --format=%cd.%h --date=format:%Y%m%d%H%M%S)"
 [ -z "$(git status --porcelain -- compositor crates session tools)" ] || VERSION="$VERSION.dirty"
 USER_NAME=droidian
 UID_N=32011
