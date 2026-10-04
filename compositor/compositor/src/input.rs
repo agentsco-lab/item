@@ -370,7 +370,7 @@ impl State {
         let count = self.walls.names.len();
         match &contact {
             Contact::Down(slot, pos, t) if self.picker.is_open() => {
-                self.picker.down(*slot, *pos, *t, count);
+                self.picker.down(*slot, *pos, *t, count, self.clock.last_rect.get());
                 self.needs_redraw = true;
                 return;
             }
@@ -397,8 +397,39 @@ impl State {
                         self.picker.each_mark = Some(p);
                         self.picker.set_room(self.walls.zoom_room());
                     }
+                    Some(crate::picker::Picked::Font(i)) => {
+                        let mut st = crate::clock::style().0;
+                        st.font = i;
+                        crate::clock::set_style(st);
+                        self.clock.refresh();
+                    }
+                    Some(crate::picker::Picked::Brightness(a)) => {
+                        let mut st = crate::clock::style().0;
+                        st.alpha = a;
+                        crate::clock::set_style(st);
+                        self.clock.refresh();
+                    }
+                    Some(crate::picker::Picked::ClockMoved(d)) => {
+                        // Where it now stands, as parts of its panel: its right
+                        // edge and top, kept inside the panel.
+                        if let Some(r) = self.clock.last_rect.get() {
+                            let panels = crate::layout::panels();
+                            let p = crate::layout::panel_at(r.loc).or_else(|| crate::layout::panel_at((r.loc.x + r.size.w, r.loc.y).into())).unwrap_or(1);
+                            let pr = panels[p].to_f64();
+                            let right = (r.loc.x + r.size.w + d.0).clamp(pr.loc.x + r.size.w + 8.0, pr.loc.x + pr.size.w - 8.0);
+                            let top = (r.loc.y + d.1).clamp(8.0, pr.size.h - r.size.h - 8.0);
+                            let mut st = crate::clock::style().0;
+                            st.at = Some(((right - pr.loc.x) / pr.size.w, top / pr.size.h));
+                            crate::clock::set_style(st);
+                        }
+                        self.picker.clock_done();
+                    }
+                    Some(crate::picker::Picked::Vignette(v)) => self.walls.set_vignette(v),
                     Some(crate::picker::Picked::View(z, d)) => {
-                        // Nothing to make: the preview goes, the wallpaper as it was.
+                        // Shown as kept until the wallpaper made from it is on;
+                        // nothing to make: the preview goes, the wallpaper as it was.
+                        let (kz, kd) = self.walls.preview(z, d);
+                        self.picker.hold_preview(kz, kd);
                         if !self.walls.adjust(z, d) {
                             self.picker.preview_done();
                         }

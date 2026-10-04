@@ -507,6 +507,8 @@ impl Data {
                 self.state.walls.set_target(if panel == 0 { crate::walls::Side::Left } else { crate::walls::Side::Right });
                 self.state.picker.each_mark = self.state.walls.each.then_some(panel);
                 self.state.picker.set_room(self.state.walls.zoom_room());
+                let look = crate::clock::style().0;
+                (self.state.picker.brightness, self.state.picker.font, self.state.picker.vignette) = (look.alpha, look.font, self.state.walls.vignette);
                 let current = self.state.walls.names.iter().position(|n| *n == self.state.walls.current).unwrap_or(0);
                 let count = self.state.walls.names.len();
                 self.state.picker.open(slot, current, count);

@@ -8,13 +8,20 @@
 //! in over the one before); the one on has a light ring. A tap above the
 //! strip closes it, the strip going down and the dock coming back.
 //!
-//! Beside the title, "Both panels" and "Each panel": with a picture on each,
+//! Beside the tabs, "Both panels" and "Each panel": with a picture on each,
 //! the one chosen for is the panel the picker was opened on, marked "This
 //! panel"; a tap above the strip on the other panel chooses for that one
 //! instead. Above the strip two fingers zoom the picture in (as far as its
 //! pixels allow, walls.rs) and one moves it: the wallpaper follows at once
 //! on the GPU (`preview`), and when the fingers let go it is made again at
 //! full quality and kept.
+//!
+//! "Wallpaper" and "Clock" are tabs: on the clock's, its fonts (each its own
+//! "12:34") and its brightness. The clock stays on the desktop while the
+//! picker is open, and a finger takes it and moves it on its panel. With a
+//! picture on each panel the wallpaper's tab has the vignette's slider: each
+//! panel darkening toward its edges (output.rs, vignette.frag). A slider is
+//! seen as it moves and kept when it is let go.
 
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
@@ -110,7 +117,6 @@ pub struct Picker {
     opener: Option<TouchSlot>,
     glass: MemoryRenderBuffer,
     ring: MemoryRenderBuffer,
-    title: Label,
     /// The fixed swatches; the wallpaper's, drawn again with it (and its
     /// hole); the light ring round the one chosen.
     swatches: Vec<MemoryRenderBuffer>,
@@ -131,6 +137,29 @@ pub struct Picker {
     room: (f64, f64),
     /// With one on each panel, the one chosen for: 0 left, 1 right.
     pub each_mark: Option<usize>,
+    /// 0 the wallpaper's tab, 1 the clock's.
+    tab: usize,
+    tabs: [Label; 2],
+    tab_lit: MemoryRenderBuffer,
+    /// The clock's fonts, each "12:34" in it; the chosen one's ring.
+    font_samples: Vec<Label>,
+    font_card: MemoryRenderBuffer,
+    font_ring: MemoryRenderBuffer,
+    /// The sliders' words, track, fill, knob.
+    knob_words: [Label; 2],
+    track: MemoryRenderBuffer,
+    knob: MemoryRenderBuffer,
+    /// A slider held: which, its slot, its value now.
+    sliding: Option<(Knob, TouchSlot, f32)>,
+    /// The clock held: its slot, where it came down, where it is.
+    clock_hold: Option<(TouchSlot, Point<f64, Logical>, Point<f64, Logical>)>,
+    /// The clock moved, shown till the clock draws itself there.
+    clock_kept: Option<(f64, f64)>,
+    /// The values the sliders start from (the clock's look, the walls').
+    pub brightness: f32,
+    pub vignette: f32,
+    /// The clock's font chosen.
+    pub font: usize,
 }
 
 /// What a touch in the picker chose.
@@ -144,7 +173,28 @@ pub enum Picked {
     Panel(usize),
     /// The picture zoomed by the first and moved by the second (logical px).
     View(f64, (f64, f64)),
+    /// The clock: one of clock::FONTS; its brightness; moved (logical px).
+    Font(usize),
+    Brightness(f32),
+    ClockMoved((f64, f64)),
+    /// The vignette's strength, with a picture on each panel.
+    Vignette(f32),
 }
+
+/// A slider: what it sets.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Knob {
+    Brightness,
+    Vignette,
+}
+
+/// The sliders' and the clock's tab's sizes.
+const SLIDER_W: f64 = 260.0;
+const SLIDER_H: f64 = 6.0;
+const KNOB: f64 = 26.0;
+const FONT_W: f64 = 150.0;
+const FONT_H: f64 = 84.0;
+const TAB_W: f64 = 112.0;
 
 /// The mode switch: its size and place on the strip.
 const MODE_W: f64 = 128.0;
@@ -154,10 +204,6 @@ const MODE_TOP: f64 = 12.0;
 impl Picker {
     pub fn new() -> Picker {
         let width = layout::LAYOUT.0 as f64 - 2.0 * SIDE;
-        let mut title = Label::new(15.0, [1.0, 1.0, 1.0, 0.75]);
-        if let Some(f) = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]) {
-            title.set(&f, "Wallpaper");
-        }
         Picker {
             open: false,
             since: 0,
@@ -167,7 +213,6 @@ impl Picker {
             opener: None,
             glass: crate::grid::rounded(width, STRIP_H, 26.0, [8, 10, 14, 150]),
             ring: crate::grid::rounded(THUMB_W + 8.0, THUMB_H + 8.0, 17.0, [235, 235, 235, 235]),
-            title,
             swatches: crate::accent::PALETTE.iter().map(|c| crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, *c)).collect(),
             wall_swatch: std::cell::RefCell::new((0, crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()))),
             hole: crate::grid::rounded(SWATCH - 12.0, SWATCH - 12.0, (SWATCH - 12.0) / 2.0, [14, 16, 20, 255]),
@@ -196,6 +241,48 @@ impl Picker {
             preview: None,
             room: (1.0, 1.0),
             each_mark: None,
+            tab: 0,
+            tabs: {
+                let font = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
+                ["Wallpaper", "Clock"].map(|t| {
+                    let mut l = Label::new(15.0, [1.0, 1.0, 1.0, 0.85]);
+                    if let Some(f) = &font {
+                        l.set(f, t);
+                    }
+                    l
+                })
+            },
+            tab_lit: crate::grid::rounded(TAB_W, MODE_H, MODE_H / 2.0, [255, 255, 255, 64]),
+            font_samples: crate::clock::FONTS
+                .iter()
+                .map(|(_, time, _)| {
+                    let mut l = Label::new(30.0, [1.0, 1.0, 1.0, 0.92]);
+                    if let Some(f) = Font::load(&[time]) {
+                        l.set(&f, "12:34");
+                    }
+                    l
+                })
+                .collect(),
+            font_card: crate::grid::rounded(FONT_W, FONT_H, 18.0, [255, 255, 255, 22]),
+            font_ring: crate::grid::rounded(FONT_W + 8.0, FONT_H + 8.0, 22.0, [235, 235, 235, 235]),
+            knob_words: {
+                let font = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
+                ["Brightness", "Vignette"].map(|t| {
+                    let mut l = Label::new(13.0, [1.0, 1.0, 1.0, 0.75]);
+                    if let Some(f) = &font {
+                        l.set(f, t);
+                    }
+                    l
+                })
+            },
+            track: crate::grid::rounded(SLIDER_W, SLIDER_H, SLIDER_H / 2.0, [255, 255, 255, 60]),
+            knob: crate::grid::rounded(KNOB, KNOB, KNOB / 2.0, [240, 240, 240, 245]),
+            sliding: None,
+            clock_hold: None,
+            clock_kept: None,
+            brightness: 0.95,
+            vignette: 0.4,
+            font: 0,
         }
     }
 
@@ -206,13 +293,111 @@ impl Picker {
         Rectangle::new((x0 + 4.0 + i as f64 * MODE_W, s.loc.y + MODE_TOP + 4.0).into(), (MODE_W, MODE_H).into())
     }
 
+    /// The tabs' rects, logical px, open.
+    fn tab_rect(i: usize) -> Rectangle<f64, Logical> {
+        let s = Self::strip();
+        Rectangle::new((s.loc.x + 18.0 + i as f64 * (TAB_W + 4.0), s.loc.y + MODE_TOP + 4.0).into(), (TAB_W, MODE_H).into())
+    }
+
+    /// Font `i`'s card, logical px, open.
+    fn font_rect(i: usize) -> Rectangle<f64, Logical> {
+        let s = Self::strip();
+        Rectangle::new((s.loc.x + 22.0 + i as f64 * (FONT_W + GAP), s.loc.y + 56.0).into(), (FONT_W, FONT_H).into())
+    }
+
+    /// A slider's track, logical px, open: the brightness's on the clock's
+    /// tab, the vignette's on the wallpaper's, at the right of the swatches'
+    /// row.
+    fn slider_rect(_k: Knob) -> Rectangle<f64, Logical> {
+        let s = Self::strip();
+        Rectangle::new((s.loc.x + s.size.w - 30.0 - SLIDER_W, s.loc.y + SWATCHES_Y + SWATCH / 2.0 - SLIDER_H / 2.0).into(), (SLIDER_W, SLIDER_H).into())
+    }
+
+    /// The slider shown now, if any.
+    fn shown_slider(&self) -> Option<Knob> {
+        match self.tab {
+            1 => Some(Knob::Brightness),
+            _ => self.each_mark.is_some().then_some(Knob::Vignette),
+        }
+    }
+
+    fn slider_value(&self, k: Knob) -> f32 {
+        match self.sliding {
+            Some((kk, _, v)) if kk == k => v,
+            _ => match k {
+                Knob::Brightness => self.brightness,
+                Knob::Vignette => self.vignette,
+            },
+        }
+    }
+
+    /// A slider's value under `x`: brightness 25-100 %, the vignette 0-1.
+    fn value_at(k: Knob, x: f64) -> f32 {
+        let r = Self::slider_rect(k);
+        let t = ((x - r.loc.x) / r.size.w).clamp(0.0, 1.0) as f32;
+        match k {
+            Knob::Brightness => 0.25 + 0.75 * t,
+            Knob::Vignette => t,
+        }
+    }
+
+    fn value_pos(k: Knob, v: f32) -> f64 {
+        let r = Self::slider_rect(k);
+        let t = match k {
+            Knob::Brightness => (v - 0.25) / 0.75,
+            Knob::Vignette => v,
+        };
+        r.loc.x + r.size.w * t.clamp(0.0, 1.0) as f64
+    }
+
+    /// The brightness as the slider has it, while it is held.
+    pub fn brightness_live(&self) -> Option<f32> {
+        match self.sliding {
+            Some((Knob::Brightness, _, v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The vignette as the slider has it, while it is held.
+    pub fn vignette_live(&self) -> Option<f32> {
+        match self.sliding {
+            Some((Knob::Vignette, _, v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// The clock moved by the finger on it (logical px), or as kept till it
+    /// stands there itself.
+    pub fn clock_moved(&self) -> (f64, f64) {
+        match self.clock_hold {
+            Some((_, a, b)) => (b.x - a.x, b.y - a.y),
+            None => self.clock_kept.unwrap_or((0.0, 0.0)),
+        }
+    }
+
+    /// The clock stands where it was moved to.
+    pub fn clock_done(&mut self) {
+        self.clock_kept = None;
+    }
+
     /// The zoom and move to show the wallpaper at (output.rs), while the
     /// fingers are on it or till the wallpaper made from them is on.
-    pub fn preview(&self) -> Option<(f64, (f64, f64))> {
+    /// `live`: the fingers' own, to be kept inside the picture (walls.rs);
+    /// else as kept when they let go, shown as it is.
+    pub fn preview(&self) -> Option<(f64, (f64, f64), bool)> {
         match &self.shape {
-            Some(sh) if sh.changed => Some(sh.now(self.room)),
-            _ => self.preview,
+            Some(sh) if sh.changed => {
+                let (z, d) = sh.now(self.room);
+                Some((z, d, true))
+            }
+            _ => self.preview.map(|(z, d)| (z, d, false)),
         }
+    }
+
+    /// The zoom and move kept as the wallpaper will be made from them: shown
+    /// until it is on.
+    pub fn hold_preview(&mut self, z: f64, d: (f64, f64)) {
+        self.preview = Some((z, d));
     }
 
     /// The wallpaper made from the last preview is on.
@@ -267,6 +452,9 @@ impl Picker {
             self.since = hybris_hwc::now_ns();
             self.hold = None;
             self.shape = None;
+            self.clock_hold = None;
+            self.sliding = None;
+            self.tab = 0;
             tracing::info!("picker: closed");
         }
     }
@@ -306,9 +494,27 @@ impl Picker {
     }
 
     /// Every touch is its own while it is open. Returns whether it took it.
-    pub fn down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, time_us: u64, count: usize) -> bool {
+    pub fn down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, time_us: u64, count: usize, clock: Option<Rectangle<f64, Logical>>) -> bool {
         if !self.open {
             return false;
+        }
+        // The clock, a little more room round it than it shows.
+        if self.shape.is_none() {
+            if let Some(c) = clock {
+                if Rectangle::<f64, Logical>::new((c.loc.x - 16.0, c.loc.y - 16.0).into(), (c.size.w + 32.0, c.size.h + 32.0).into()).contains(pos) {
+                    self.clock_hold = Some((slot, pos, pos));
+                    self.clock_kept = None;
+                    return true;
+                }
+            }
+        }
+        // A slider: anywhere on its row near the track.
+        if let Some(k) = self.shown_slider() {
+            let r = Self::slider_rect(k);
+            if Rectangle::<f64, Logical>::new((r.loc.x - KNOB, r.loc.y - KNOB).into(), (r.size.w + 2.0 * KNOB, r.size.h + 2.0 * KNOB).into()).contains(pos) {
+                self.sliding = Some((k, slot, Self::value_at(k, pos.x)));
+                return true;
+            }
         }
         // Above the strip, or a second finger there: moving or zooming the
         // picture.
@@ -336,10 +542,22 @@ impl Picker {
     }
 
     pub fn holds(&self, slot: TouchSlot) -> bool {
-        self.hold.as_ref().is_some_and(|h| h.slot == slot) || self.opener == Some(slot) || self.shape.as_ref().is_some_and(|s| s.fingers.iter().any(|f| f.0 == slot))
+        self.hold.as_ref().is_some_and(|h| h.slot == slot)
+            || self.opener == Some(slot)
+            || self.shape.as_ref().is_some_and(|s| s.fingers.iter().any(|f| f.0 == slot))
+            || self.clock_hold.is_some_and(|c| c.0 == slot)
+            || self.sliding.is_some_and(|s| s.1 == slot)
     }
 
     pub fn motion(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, time_us: u64) {
+        if let Some(c) = self.clock_hold.as_mut().filter(|c| c.0 == slot) {
+            c.2 = pos;
+            return;
+        }
+        if let Some(sl) = self.sliding.as_mut().filter(|s| s.1 == slot) {
+            sl.2 = Self::value_at(sl.0, pos.x);
+            return;
+        }
         if let Some(shape) = self.shape.as_mut() {
             if let Some(f) = shape.fingers.iter_mut().find(|f| f.0 == slot) {
                 f.2 = pos;
@@ -364,6 +582,28 @@ impl Picker {
         if self.opener == Some(slot) {
             self.opener = None;
             return None;
+        }
+        if let Some((_, a, b)) = self.clock_hold.take_if(|c| c.0 == slot) {
+            let d = (b.x - a.x, b.y - a.y);
+            if d.0.abs() < TAP && d.1.abs() < TAP {
+                // A tap on the clock: its tab.
+                self.tab = 1;
+                return None;
+            }
+            self.clock_kept = Some(d);
+            return Some(Picked::ClockMoved(d));
+        }
+        if let Some((k, _, v)) = self.sliding.take_if(|s| s.1 == slot) {
+            return Some(match k {
+                Knob::Brightness => {
+                    self.brightness = v;
+                    Picked::Brightness(v)
+                }
+                Knob::Vignette => {
+                    self.vignette = v;
+                    Picked::Vignette(v)
+                }
+            });
         }
         if let Some(shape) = self.shape.as_mut() {
             if let Some(i) = shape.fingers.iter().position(|f| f.0 == slot) {
@@ -404,6 +644,17 @@ impl Picker {
             }
             return None;
         }
+        if let Some(i) = (0..2).find(|&i| Self::tab_rect(i).contains(h.start)) {
+            self.tab = i;
+            return None;
+        }
+        if self.tab == 1 {
+            if let Some(i) = (0..self.font_samples.len()).find(|&i| Self::font_rect(i).contains(h.start)) {
+                self.font = i;
+                return Some(Picked::Font(i));
+            }
+            return None;
+        }
         if let Some(i) = (0..2).find(|&i| Self::mode(i).contains(h.start)) {
             return Some(Picked::Each(i == 1));
         }
@@ -427,7 +678,7 @@ impl Picker {
                 self.run = None;
             }
         }
-        sliding || self.run.is_some() || self.hold.is_some() || self.shape.is_some()
+        sliding || self.run.is_some() || self.hold.is_some() || self.shape.is_some() || self.clock_hold.is_some() || self.sliding.is_some()
     }
 
     /// The strip at `frame_ns`: the pictures (`thumbs`, by index), the one
@@ -449,6 +700,35 @@ impl Picker {
         let strip = Self::strip();
         let scroll = self.scroll_at(frame_ns, thumbs.len());
         let width = layout::LAYOUT.0 as f64;
+        // The slider shown, its knob, its words.
+        if let Some(k) = self.shown_slider() {
+            let r = Self::slider_rect(k);
+            let x = Self::value_pos(k, self.slider_value(k));
+            put(&mut out, &self.knob, x - KNOB / 2.0, r.loc.y + SLIDER_H / 2.0 - KNOB / 2.0);
+            put(&mut out, &self.track, r.loc.x, r.loc.y);
+            let words = &self.knob_words[usize::from(k == Knob::Vignette)];
+            put(&mut out, &words.buffer, r.loc.x - 14.0 - words.extent.w as f64, r.loc.y + SLIDER_H / 2.0 - words.extent.h as f64 / 2.0);
+        }
+        // The tabs, the one on lit.
+        for (i, label) in self.tabs.iter().enumerate() {
+            let r = Self::tab_rect(i);
+            put(&mut out, &label.buffer, r.loc.x + (r.size.w - label.extent.w as f64) / 2.0, r.loc.y + (r.size.h - label.extent.h as f64) / 2.0);
+        }
+        let tr = Self::tab_rect(self.tab);
+        put(&mut out, &self.tab_lit, tr.loc.x, tr.loc.y);
+        if self.tab == 1 {
+            // The clock's fonts.
+            for (i, label) in self.font_samples.iter().enumerate() {
+                let r = Self::font_rect(i);
+                put(&mut out, &label.buffer, r.loc.x + (r.size.w - label.extent.w as f64) / 2.0, r.loc.y + (r.size.h - label.extent.h as f64) / 2.0);
+                if i == self.font {
+                    put(&mut out, &self.font_ring, r.loc.x - 4.0, r.loc.y - 4.0);
+                }
+                put(&mut out, &self.font_card, r.loc.x, r.loc.y);
+            }
+            put(&mut out, &self.glass, strip.loc.x, strip.loc.y);
+            return out;
+        }
         for (i, t) in thumbs.iter().enumerate() {
             let r = Self::thumb(i, scroll);
             if r.loc.x + r.size.w < 0.0 || r.loc.x > width {
@@ -483,7 +763,6 @@ impl Picker {
                 put(&mut out, &self.swatch_ring, r.loc.x - 4.0, r.loc.y - 4.0);
             }
         }
-        put(&mut out, &self.title.buffer, strip.loc.x + 22.0, strip.loc.y + 16.0);
         // The mode switch: the half on lit, its words centred in each.
         let lit = usize::from(self.each_mark.is_some());
         for (i, label) in self.modes.iter().enumerate() {

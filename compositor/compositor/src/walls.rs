@@ -138,6 +138,9 @@ pub struct Walls {
     /// The small pictures, once read (the picker asks for them).
     pub thumbs: Vec<Option<MemoryRenderBuffer>>,
     thumbs_asked: bool,
+    /// With one on each panel, how strongly each darkens toward its edges
+    /// (output.rs, vignette.frag): 0 to 1.
+    pub vignette: f32,
     /// The wallpaper made last, so a make is not asked for twice.
     made: Option<(bool, [View; 3])>,
     wake: Ping,
@@ -361,6 +364,7 @@ impl Walls {
             thumbs_loaded: Default::default(),
             thumbs: Vec::new(),
             thumbs_asked: false,
+            vignette: 0.4,
             made: None,
             wake,
         };
@@ -381,6 +385,7 @@ impl Walls {
             match w.as_slice() {
                 [name] if known(name) => self.views = [View::of(name), View::of(name), View::of(name)],
                 ["mode", m] => self.each = *m == "each",
+                ["vignette", v] => self.vignette = v.parse::<f32>().unwrap_or(0.4).clamp(0.0, 1.0),
                 [side, name, rest @ ..] if known(name) => {
                     let i = match *side {
                         "both" => 0,
@@ -405,7 +410,7 @@ impl Walls {
         if let Some(d) = path.parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        let mut text = format!("mode {}\n", if self.each { "each" } else { "both" });
+        let mut text = format!("mode {}\nvignette {:.2}\n", if self.each { "each" } else { "both" }, self.vignette);
         for side in [Side::Both, Side::Left, Side::Right] {
             let v = &self.views[side.index()];
             text.push_str(&format!("{} {} {:.3} {:.4} {:.4}\n", side.word(), v.name, v.zoom, v.cx, v.cy));
@@ -469,6 +474,12 @@ impl Walls {
         self.make(true, false);
     }
 
+    /// The vignette's strength, kept.
+    pub fn set_vignette(&mut self, v: f32) {
+        self.vignette = v.clamp(0.0, 1.0);
+        self.keep();
+    }
+
     /// The panel being chosen for, with one on each.
     pub fn set_target(&mut self, side: Side) {
         if side != Side::Both {
@@ -480,19 +491,22 @@ impl Walls {
     /// The picture on the part being chosen for zoomed by `z` and moved by
     /// `d` (logical px on the screen, the way the finger went), as the
     /// picker showed it; kept, and the wallpaper made again at full quality.
-    /// Whether a new wallpaper is being made.
-    pub fn adjust(&mut self, z: f64, d: (f64, f64)) -> bool {
+    /// The view the zoom `z` and move `d` lead to, kept inside the picture,
+    /// and the zoom and move that show it (the picker's preview draws those,
+    /// so what the fingers see is what is made).
+    fn led_to(&self, z: f64, d: (f64, f64)) -> Option<(View, View, f64, (f64, f64))> {
         let part = self.part();
         let v = self.views[part.index()].clone();
         if v.name == AURORA {
-            return false;
+            return None;
         }
-        let Some(&(sw, sh)) = self.sizes.lock().unwrap().get(&v.name) else { return false };
+        let &(sw, sh) = self.sizes.lock().unwrap().get(&v.name)?;
         let (_, _, rw, rh) = region(part);
         let s = crate::layout::SCALE as f64;
         let (rw, rh) = (rw * s, rh * s);
         let ((x, y, ww, wh), max) = window(sw, sh, rw, rh, &v);
         let zoom = (v.zoom * z).clamp(1.0, max);
+        let z = zoom / v.zoom;
         // Px of the part per px of the picture, before.
         let per = rw / ww;
         let (cx, cy) = (x + ww / 2.0 - d.0 * s / (per * z), y + wh / 2.0 - d.1 * s / (per * z));
@@ -501,6 +515,21 @@ impl Walls {
         let ((x2, y2, w2, h2), _) = window(sw, sh, rw, rh, &nv);
         nv.cx = (x2 + w2 / 2.0) / sw as f64;
         nv.cy = (y2 + h2 / 2.0) / sh as f64;
+        // The move that shows the kept window.
+        let d = ((x + ww / 2.0 - (x2 + w2 / 2.0)) * per * z / s, (y + wh / 2.0 - (y2 + h2 / 2.0)) * per * z / s);
+        Some((v, nv, z, d))
+    }
+
+    /// The zoom and move the picker's fingers ask for, kept as the made
+    /// wallpaper will keep them.
+    pub fn preview(&self, z: f64, d: (f64, f64)) -> (f64, (f64, f64)) {
+        self.led_to(z, d).map(|(_, _, z, d)| (z, d)).unwrap_or((z, d))
+    }
+
+    /// Whether a new wallpaper is being made.
+    pub fn adjust(&mut self, z: f64, d: (f64, f64)) -> bool {
+        let part = self.part();
+        let Some((v, nv, _, _)) = self.led_to(z, d) else { return false };
         if nv == v {
             return false;
         }
