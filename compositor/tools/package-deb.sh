@@ -28,6 +28,12 @@ BASE=$(sed -n 's/^version = "\(.*\)"/\1/p' compositor/Cargo.toml | head -1)
 # higher (the bare date and hash did not: 84d12ac "lower" than 88d8dd9).
 VERSION="$BASE~git$(git log -1 --format=%cd.%h --date=format:%Y%m%d%H%M%S)"
 [ -z "$(git status --porcelain -- compositor crates session tools ../apps/settings)" ] || VERSION="$VERSION.dirty"
+# A release: the commit tagged item-v<version>, the tree clean - the bare
+# version (dev builds after it want the next version in Cargo.toml: 0.2.0~git
+# sorts below 0.2.0).
+if [ "$(git tag --points-at HEAD -l "item-v$BASE")" = "item-v$BASE" ] && [ -z "$(git status --porcelain -- compositor crates session tools ../apps/settings)" ]; then
+    VERSION=$BASE
+fi
 USER_NAME=droidian
 UID_N=32011
 
