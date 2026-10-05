@@ -1,0 +1,15 @@
+[package]
+name = "item-settings"
+edition = "2021"
+version = "0.1.0"
+description = "item's own Settings on the phone (GTK4, libadwaita); the rest in Cradle"
+
+[dependencies]
+# The phone has GTK 4.18 and libadwaita 1.7 (Debian trixie), the desktop
+# 4.14 and 1.5: what both have, so it builds and runs here too.
+gtk = { package = "gtk4", version = "0.10", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+
+[profile.release]
+lto = "thin"
+strip = true

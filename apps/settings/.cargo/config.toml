@@ -1,0 +1,14 @@
+# Cross builds for the Duo: cargo build --release --target aarch64-unknown-linux-gnu
+# (tools/fetch-sysroot.sh first: Debian trixie's arm64 GTK, libadwaita and
+# glibc to link against). A plain cargo build/run is the desktop's, for
+# looking at it here.
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+rustflags = ["-C", "link-arg=--sysroot=sysroot"]
+
+# pkg-config for the target only (the target-suffixed names), so a desktop
+# build keeps the desktop's libraries.
+[env]
+PKG_CONFIG_ALLOW_CROSS = "1"
+PKG_CONFIG_SYSROOT_DIR_aarch64_unknown_linux_gnu = { value = "sysroot", relative = true }
+PKG_CONFIG_LIBDIR_aarch64_unknown_linux_gnu = { value = "sysroot/usr/lib/aarch64-linux-gnu/pkgconfig", relative = true }
