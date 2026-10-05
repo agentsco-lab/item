@@ -205,6 +205,9 @@ impl State {
                         // went dark with the phone and came back: a blink.
                         tracing::info!("lid: open on the way into sleep: lit once awake");
                         self.lid_light_pending = true;
+                        // The lid's wake is spent: the kernel's alarm stops
+                        // the sleep, or ends it (sleep.rs).
+                        self.sleep.wake_soon();
                     } else {
                         // The camera from the lid itself, first: lighting
                         // the panels holds this thread ~0.5 s, the camera

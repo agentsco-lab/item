@@ -29,6 +29,16 @@
 //! screen, and the phone went to sleep 0.2 s later all the same (or slept
 //! and woke again: a blink). Held, the kernel gives the sleep up. It needs
 //! CAP_BLOCK_SUSPEND and the android_wakelock group (session-run.sh).
+//!
+//! The wakelock does not stop a sleep already on its way: systemd-sleep
+//! writes /sys/power/state without the wakeup_count handshake, so a lock
+//! taken after it began is not looked at. And the lid's own interrupt is
+//! spent by then - it reached item as the lid's event. Opened in that
+//! moment, the phone slept on with the lid open and dark until a Wi-Fi
+//! packet woke it (2026-10-05 11:28; it reset on that resume). So the lid
+//! opened on the way into sleep also sets the kernel's alarm a second away
+//! (`wake_soon`): the alarm timer refuses a sleep with an alarm under 2 s
+//! (the sleep given up), or, if the sleep is past that, wakes it.
 
 use std::sync::{Arc, Mutex};
 
@@ -206,6 +216,14 @@ impl Sleep {
             Ok(()) => tracing::info!("sleep: wakelock {}", if on { "held" } else { "let go" }),
             Err(e) => tracing::warn!("sleep: wakelock: {e}"),
         }
+    }
+
+    /// The kernel's alarm a second away: the sleep on its way given up, or
+    /// woken from at once (the lid opened as it went: see the top). The
+    /// alarm for Clocks is set again before the next sleep.
+    pub fn wake_soon(&self) {
+        set_alarm(self.timer, Some(now_s() + 1));
+        tracing::info!("sleep: woken again in a second");
     }
 
     /// An alarm snoozed now: woken for it again.
