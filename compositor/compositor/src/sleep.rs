@@ -9,11 +9,13 @@
 //! under item.
 //!
 //! It also puts the phone to sleep (`tick`): locked, the screen dark, no
-//! call, nothing playing, nothing holding the screen - after 30 s, or 15
-//! after something woke it (a Wi-Fi packet wakes it often, and it sleeps
-//! again, as Android does). The kernel may refuse (the USB cable in, a
-//! wakeup on its way): tried again a minute later. NO_SUSPEND=1 keeps it
-//! awake.
+//! call, nothing playing, nothing holding the screen - after 30 s, or 3
+//! after something else woke it (a Wi-Fi or modem packet, healthd's minute
+//! alarm: with 15 s it was awake most of a night - over a thousand such
+//! wakes, 300 mA - while Android sleeps again at once). The kernel may
+//! refuse (the USB cable in, a wakeup on its way): a refusal that comes
+//! back as a resume is tried again 3 s later, one without a resume 20 s
+//! later. NO_SUSPEND=1 keeps it awake.
 //!
 //! Clocks' alarms are GLib timers: asleep, nothing wakes the phone for them,
 //! and an alarm rang when something else woke it - minutes late, or not at
@@ -63,8 +65,8 @@ fn woken_by() -> (Woken, String) {
 }
 
 const DARK_NS: u64 = 30_000_000_000;
-const AGAIN_NS: u64 = 15_000_000_000;
-const RETRY_NS: u64 = 60_000_000_000;
+const AGAIN_NS: u64 = 3_000_000_000;
+const RETRY_NS: u64 = 20_000_000_000;
 /// Woken this long before an alarm.
 const EARLY_S: i64 = 5;
 /// Clocks' snooze.
@@ -214,8 +216,9 @@ impl Sleep {
     /// What woke the phone, once, after a resume.
     pub fn take_woken(&mut self, now_ns: u64) -> Option<Woken> {
         let w = self.woken.lock().unwrap().take()?;
-        // Awake again: asleep again sooner, from now.
+        // Awake again: asleep again sooner, from now (the last asking is over).
         self.may_since = Some(now_ns);
+        self.next_try = 0;
         self.just_woken = true;
         self.next_try = 0;
         Some(w)
