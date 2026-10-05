@@ -1,5 +1,5 @@
 //! The screen, mirrored to whoever connects to
-//! $XDG_RUNTIME_DIR/item-mirror.sock - cradle's live view of the phone. Only
+//! $XDG_RUNTIME_DIR/item-mirror.sock - Hythe's live view of the phone. Only
 //! the owner can (the socket is theirs, 0600), and it costs nothing while no
 //! one is connected.
 //!

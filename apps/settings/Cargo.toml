@@ -2,7 +2,7 @@
 name = "item-settings"
 edition = "2021"
 version = "0.1.0"
-description = "item's own Settings on the phone (GTK4, libadwaita); the rest in Cradle"
+description = "item's own Settings on the phone (GTK4, libadwaita); the rest in Hythe"
 
 [dependencies]
 # The phone has GTK 4.18 and libadwaita 1.7 (Debian trixie), the desktop
