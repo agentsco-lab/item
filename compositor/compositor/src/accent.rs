@@ -40,7 +40,7 @@ static WALL: AtomicU32 = AtomicU32::new(0xf08a7bff);
 static AUTO: AtomicBool = AtomicBool::new(false);
 static VERSION: AtomicU64 = AtomicU64::new(1);
 /// The kept file's text as last read or written here: a change to it from
-/// outside (Hythe, #168) is taken in by `follow`.
+/// outside (Gridbay, #168) is taken in by `follow`.
 static KEPT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 fn kept() -> PathBuf {
@@ -98,7 +98,7 @@ pub fn load() {
     }
 }
 
-/// The kept choice read again if something else changed it (Hythe, on the
+/// The kept choice read again if something else changed it (Gridbay, on the
 /// computer: #168); whether it did.
 pub fn follow() -> bool {
     let now = std::fs::read_to_string(kept()).unwrap_or_default();

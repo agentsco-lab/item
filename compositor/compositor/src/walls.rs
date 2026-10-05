@@ -537,7 +537,7 @@ impl Walls {
         *self.outside.borrow_mut() = outside();
     }
 
-    /// Whether the set or the kept choice changed from outside (Hythe
+    /// Whether the set or the kept choice changed from outside (Gridbay
     /// adding pictures or choosing one: #168).
     pub fn changed_outside(&self) -> bool {
         outside() != *self.outside.borrow()

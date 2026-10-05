@@ -814,7 +814,7 @@ impl Screen {
     /// buffer as a texture: a scaled glBlitFramebuffer between the two
     /// crashed in Adreno's driver when the mirror started and stopped often
     /// (2026-10-05, reproduced: SIGSEGV in libGLESv2_adreno.so after ~140
-    /// starts; Hythe's window did that with each change of focus).
+    /// starts; Gridbay's window did that with each change of focus).
     fn take_mirror(renderer: &mut GlesRenderer, tex: &mut Option<smithay::backend::renderer::gles::GlesTexture>, source: &smithay::backend::renderer::gles::GlesTexture, size: smithay::utils::Size<i32, smithay::utils::Physical>) -> Option<(smithay::backend::renderer::gles::GlesMapping, i32, i32)> {
         use smithay::backend::renderer::{Bind, ExportMem, Frame, Offscreen, Renderer};
         let (w, h) = (size.w / crate::mirror::SHRINK, size.h / crate::mirror::SHRINK);

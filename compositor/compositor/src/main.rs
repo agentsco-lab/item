@@ -1058,7 +1058,7 @@ fn main() {
             // The lock's state to logind, also while the screen is dark (no
             // frames then).
             data.take_logind_asks();
-            // The accent and the wallpapers changed from outside - Hythe on
+            // The accent and the wallpapers changed from outside - Gridbay on
             // the computer (#168) - taken in; not while the picker is open.
             if crate::accent::follow() {
                 data.state.needs_redraw = true;
