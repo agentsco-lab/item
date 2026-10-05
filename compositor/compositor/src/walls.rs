@@ -185,6 +185,9 @@ pub struct Walls {
     /// on (preview_window).
     pub held: Option<(Side, String, (f64, f64, f64, f64))>,
     wake: Ping,
+    /// What `outside()` was when the set and the choice were last read or
+    /// written here.
+    outside: std::cell::RefCell<String>,
 }
 
 fn home() -> PathBuf {
@@ -193,6 +196,14 @@ fn home() -> PathBuf {
 
 fn kept() -> PathBuf {
     home().join(".config/item/wallpaper")
+}
+
+/// The kept choice and the owner's pictures, as one text: a change to it
+/// is a change from outside.
+fn outside() -> String {
+    let mut names: Vec<String> = std::fs::read_dir(home().join(".local/share/item/walls")).map(|d| d.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| !n.starts_with("thumb-")).collect()).unwrap_or_default();
+    names.sort();
+    format!("{}\n{}", std::fs::read_to_string(kept()).unwrap_or_default(), names.join("\n"))
 }
 
 /// The wallpaper as last made, and what it was made from: read at the start
@@ -452,6 +463,7 @@ impl Walls {
             made: None,
             generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             held: None,
+            outside: Default::default(),
             wake,
         };
         walls.thumbs = vec![None; walls.names.len()];
@@ -468,6 +480,7 @@ impl Walls {
         walls.tall = walls.sizes.lock().unwrap().iter().filter(|(_, (w, h))| h > w).map(|(n, _)| n.clone()).collect();
         walls.read_kept();
         walls.sync_current();
+        *walls.outside.borrow_mut() = outside();
         tracing::info!("walls: {} pictures; {}", walls.names.len() - 1, walls.describe());
         walls.make(false, true);
         // The strip's small pictures ready before it is first opened.
@@ -521,6 +534,18 @@ impl Walls {
             text.push_str(&format!("{} {} {:.3} {:.4} {:.4}\n", side.word(), v.name, v.zoom, v.cx, v.cy));
         }
         let _ = std::fs::write(&path, text);
+        *self.outside.borrow_mut() = outside();
+    }
+
+    /// Whether the set or the kept choice changed from outside (Cradle
+    /// adding pictures or choosing one: #168).
+    pub fn changed_outside(&self) -> bool {
+        outside() != *self.outside.borrow()
+    }
+
+    /// The set and the choice read again, as at the start.
+    pub fn reload(&mut self) {
+        *self = Walls::new(self.wake.clone());
     }
 
     fn describe(&self) -> String {

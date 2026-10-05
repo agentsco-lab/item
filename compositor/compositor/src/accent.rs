@@ -39,6 +39,9 @@ static COLOR: AtomicU32 = AtomicU32::new(0xf08a7bff);
 static WALL: AtomicU32 = AtomicU32::new(0xf08a7bff);
 static AUTO: AtomicBool = AtomicBool::new(false);
 static VERSION: AtomicU64 = AtomicU64::new(1);
+/// The kept file's text as last read or written here: a change to it from
+/// outside (Cradle, #168) is taken in by `follow`.
+static KEPT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 fn kept() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/item/accent")
@@ -83,14 +86,28 @@ fn apply(c: [u8; 4]) {
 pub fn load() {
     let kept = std::fs::read_to_string(kept()).unwrap_or_default();
     let kept = kept.trim();
+    *KEPT.lock().unwrap() = kept.to_owned();
     if kept == "auto" {
         AUTO.store(true, Ordering::Relaxed);
         apply(wall());
     } else if let Some(hex) = kept.strip_prefix('#').filter(|h| h.len() == 6) {
         if let Ok(v) = u32::from_str_radix(hex, 16) {
+            AUTO.store(false, Ordering::Relaxed);
             apply(unpack((v << 8) | 0xff));
         }
     }
+}
+
+/// The kept choice read again if something else changed it (Cradle, on the
+/// computer: #168); whether it did.
+pub fn follow() -> bool {
+    let now = std::fs::read_to_string(kept()).unwrap_or_default();
+    if now.trim() == KEPT.lock().unwrap().as_str() {
+        return false;
+    }
+    load();
+    tracing::info!("accent: {:?}, changed from outside", get());
+    true
 }
 
 /// A choice made: None from the wallpaper, Some(i) the palette's; kept.
@@ -112,6 +129,7 @@ pub fn choose(choice: Option<usize>) {
     if let Some(d) = path.parent() {
         let _ = std::fs::create_dir_all(d);
     }
+    *KEPT.lock().unwrap() = text.clone();
     let _ = std::fs::write(&path, text);
     tracing::info!("accent: {:?}", get());
 }

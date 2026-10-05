@@ -1058,6 +1058,15 @@ fn main() {
             // The lock's state to logind, also while the screen is dark (no
             // frames then).
             data.take_logind_asks();
+            // The accent and the wallpapers changed from outside - Cradle on
+            // the computer (#168) - taken in; not while the picker is open.
+            if crate::accent::follow() {
+                data.state.needs_redraw = true;
+            }
+            if !data.state.picker.is_open() && data.state.walls.changed_outside() {
+                data.state.walls.reload();
+                data.state.needs_redraw = true;
+            }
             // `touch /tmp/item-shot` asks for a screenshot of the next frame.
             if std::fs::remove_file("/tmp/item-shot").is_ok() {
                 data.screen.shot = Some(format!("/tmp/item-shot-{}.rgba", data.started.elapsed().as_secs()));
