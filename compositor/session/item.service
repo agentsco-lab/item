@@ -26,6 +26,12 @@ User=@USER@
 PAMName=phosh
 WorkingDirectory=~
 Environment=LANG=C.UTF-8
+# A graphical session for logind (pam_systemd reads these): only then may
+# item set its IdleHint, which Droidian's ofono reads as the screen's state
+# to quiet the modem while it is dark. Without them the session was a tty
+# one, the hint refused, and the modem woke the closed phone all night.
+Environment=XDG_SESSION_TYPE=wayland
+Environment=XDG_SESSION_DESKTOP=item
 Environment=XDG_RUNTIME_DIR=/run/user/@UID@
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@UID@/bus
 # CV ID through item-face.
