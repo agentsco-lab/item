@@ -16,13 +16,18 @@ cd "$HERE"
 TARGET=aarch64-unknown-linux-gnu
 CARGO=${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}
 "$CARGO" build --release --target $TARGET -p item-compositor -p item-face -p pen-split
+# item Settings (#160), its own crate cross-built against a sysroot of
+# trixie's GTK and libadwaita (apps/settings/tools/fetch-sysroot.sh).
+SETTINGS="$HERE/../apps/settings"
+[ -d "$SETTINGS/sysroot" ] || sh "$SETTINGS/tools/fetch-sysroot.sh"
+(cd "$SETTINGS" && "$CARGO" build --release --target $TARGET)
 R=target/$TARGET/release
 
 BASE=$(sed -n 's/^version = "\(.*\)"/\1/p' compositor/Cargo.toml | head -1)
 # The commit's time to the second first: a later build always sorts
 # higher (the bare date and hash did not: 84d12ac "lower" than 88d8dd9).
 VERSION="$BASE~git$(git log -1 --format=%cd.%h --date=format:%Y%m%d%H%M%S)"
-[ -z "$(git status --porcelain -- compositor crates session tools)" ] || VERSION="$VERSION.dirty"
+[ -z "$(git status --porcelain -- compositor crates session tools ../apps/settings)" ] || VERSION="$VERSION.dirty"
 USER_NAME=droidian
 UID_N=32011
 
@@ -43,6 +48,8 @@ aarch64-linux-gnu-gcc -O2 -o "$lib/camera-warm" tools/camera-warm.c -lpthread -L
 aarch64-linux-gnu-strip "$lib/camera-warm"
 install -m755 session/item-session session/item-composer-fresh "$lib/"
 install -m755 session/item-switch "$S/usr/bin/item-switch"
+aarch64-linux-gnu-strip -o "$S/usr/bin/item-settings" "$SETTINGS/target/$TARGET/release/item-settings"
+install -Dm644 "$SETTINGS/lab.agentsco.item.Settings.desktop" "$S/usr/share/applications/lab.agentsco.item.Settings.desktop"
 install -m644 crates/cvid/models/*.onnx "$S/usr/share/item/cvid/"
 
 install -Dm644 session/item.session "$S/usr/share/gnome-session/sessions/item.session"
@@ -86,7 +93,7 @@ Maintainer: agentsco-lab
 Section: x11
 Priority: optional
 Installed-Size: $INSTALLED
-Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, gnome-session-bin, gnome-settings-daemon, adaptation-droidian-surfaceduo (>= 0.21)
+Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, adaptation-droidian-surfaceduo (>= 0.21)
 Recommends: phosh
 Description: item, the two-panel shell for the Surface Duo
  item-compositor and its session in place of phosh on Droidian: a dock

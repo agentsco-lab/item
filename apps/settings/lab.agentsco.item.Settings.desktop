@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=item Settings
+Comment=What the phone needs on the spot: networks, screen, sound, lock, battery, time; the rest in Cradle
+Exec=/usr/bin/item-settings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;
+StartupNotify=true
+X-Purism-FormFactor=Workstation;Mobile;
