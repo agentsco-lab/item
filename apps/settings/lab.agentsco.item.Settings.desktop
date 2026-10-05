@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=item Settings
-Comment=What the phone needs on the spot: networks, screen, sound, lock, battery, time; the rest in Gridbay
+Comment=What the phone needs on the spot: networks, screen, sound, lock, battery, time; the rest in item/grid
 Exec=/usr/bin/item-settings
 Icon=preferences-system
 Terminal=false

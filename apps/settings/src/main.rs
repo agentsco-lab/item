@@ -3,8 +3,8 @@
 //! What a phone needs on the spot, nothing more: Wi-Fi, Bluetooth, the mobile
 //! network, the display, sound, the lock, the battery, date and time, and
 //! about. What is set once or wants a keyboard - the agent's key, wallpapers,
-//! the look, updates, backups - is Gridbay's, on the computer ("More in
-//! Gridbay" at the bottom of the list).
+//! the look, updates, backups - is item/grid's, on the computer ("More in
+//! item/grid" at the bottom of the list).
 //!
 //! Across both panels of the Duo: the sections on the left, the one chosen on
 //! the right (AdwNavigationSplitView); on one panel, one column, a section
@@ -81,7 +81,7 @@ fn window(app: &adw::Application) -> adw::ApplicationWindow {
         listing.append(&r);
     }
     let more = gtk::Label::builder()
-        .label("More in Gridbay, on your computer: the agent and its key, wallpapers, the look, updates and backups.")
+        .label("More in item/grid, on your computer: the agent and its key, wallpapers, the look, updates and backups.")
         .wrap(true)
         .xalign(0.0)
         .css_classes(["dim-label", "caption"])
