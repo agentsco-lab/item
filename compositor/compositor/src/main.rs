@@ -101,6 +101,9 @@ pub struct Data {
     /// A call lit the dark screen: 0 while it lasts, then when it ended.
     call_lit: Option<u64>,
     alert_was: bool,
+    /// Till when the face's camera stays warm after the lock screen went
+    /// dark or shut (ns).
+    face_warm_until: u64,
     pub state: State,
     pub screen: Screen,
     started: Instant,
@@ -121,6 +124,10 @@ pub struct Data {
 /// (default 4), `LATE=0` draws at the vsync as before.
 /// The pen's frames' margin before the vsync, over their estimate.
 const PEN_MARGIN_NS: u64 = 3_000_000;
+
+/// How long the face's camera stays warm after the lock screen went dark
+/// or shut: a quick close and open finds it ready.
+const FACE_WARM_NS: u64 = 30_000_000_000;
 
 struct Pacing {
     late: bool,
@@ -417,11 +424,16 @@ impl Data {
         let enrol = setup_face || lock_enrol;
         self.state.face.want(((self.state.lock.wants_face() && facing) || enrol) && !folded_camera, enrol);
         // Held open only while it can be looked into: locked, the screen
-        // lit, the lid open, a face kept - not all night shut (its clocks
-        // kept the phone from sleeping deep: 2026-10-07, ~6 %/h). A look as
-        // the lid opens starts it from closed (~0.3 s later).
+        // lit, the lid open, a face kept - and 30 s after it went dark or
+        // shut, so a quick close and open finds it warm; not all night (its
+        // clocks kept the phone from sleeping deep: 2026-10-07, ~6 %/h). A
+        // look later starts it from closed (first frame ~0.7 s, not ~0.3).
         let lit = !self.state.lock.blank && !self.state.lid_shut;
-        self.state.face.hold(self.state.lock.locked && lit && crate::face::enrolled() && !folded_camera);
+        if lit {
+            self.face_warm_until = now + FACE_WARM_NS;
+        }
+        let warm = lit || now < self.face_warm_until;
+        self.state.face.hold(self.state.lock.locked && warm && crate::face::enrolled() && !folded_camera);
         if self.state.face.take_taken() {
             self.state.setup.face_taken();
         }
@@ -1275,7 +1287,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, frames_dock_done: false, lit_was: false, dim_was: false, call_lit: None, alert_was: false, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, lit_was: false, dim_was: false, call_lit: None, alert_was: false, face_warm_until: 0, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.
