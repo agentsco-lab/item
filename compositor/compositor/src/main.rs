@@ -416,7 +416,12 @@ impl Data {
         let lock_enrol = self.state.lock.enrolling_face();
         let enrol = setup_face || lock_enrol;
         self.state.face.want(((self.state.lock.wants_face() && facing) || enrol) && !folded_camera, enrol);
-        self.state.face.hold(self.state.lock.locked && !folded_camera);
+        // Held open only while it can be looked into: locked, the screen
+        // lit, the lid open, a face kept - not all night shut (its clocks
+        // kept the phone from sleeping deep: 2026-10-07, ~6 %/h). A look as
+        // the lid opens starts it from closed (~0.3 s later).
+        let lit = !self.state.lock.blank && !self.state.lid_shut;
+        self.state.face.hold(self.state.lock.locked && lit && crate::face::enrolled() && !folded_camera);
         if self.state.face.take_taken() {
             self.state.setup.face_taken();
         }

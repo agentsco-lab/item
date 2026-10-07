@@ -1,8 +1,8 @@
 //! CV ID on the lock screen (item-tracker #109; an experiment, CVID=1),
 //! through item-face (crates/item-face, org.sfduo.Face on the system bus):
 //! it holds the camera, the models and the faces kept, and says only
-//! whether a face was known. Here: the camera held open while locked
-//! (quick to start), a look asked for as the lid opens or the screen lights
+//! whether a face was known. Here: the camera held open while the lock
+//! screen is lit and a face is kept (quick to start; let go shut or dark), a look asked for as the lid opens or the screen lights
 //! locked, the doors opened on Identified - as for a known finger.
 //!
 //! Enrolling: in the first setup, unseen, the face of the one typing the PIN
