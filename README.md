@@ -20,16 +20,24 @@ usable while that groundwork settles.
 
 ## What it looks like
 
-Both panels as one picture, 2700x1800 without the hinge's strip, taken with
-`itemgrid screenshot`. The wallpaper is Aurora, drawn by the compositor
-itself.
+A minute of it, both panels at 60 fps with the gap between them, filmed
+from the compositor's own frames: the first setup (the PIN, a finger), the
+tour, the shade, the system screen, the pen's sheet.
+
+https://github.com/user-attachments/assets/3799c1b3-e2b0-46e7-925e-fc196ece50a8
+
+Both panels as one picture, taken with `itemgrid screenshot` (2700x1800,
+the hinge's strip left out) or as frames of the film (1392x900, the gap
+black). The wallpaper is Aurora, drawn by the compositor itself.
 
 | | |
 |---|---|
 | ![the desktop](docs/img/item-desktop.png) | ![a window on each panel](docs/img/item-two-windows.png) |
 | The desktop: the dock in two halves at the panels' outer edges, under the thumbs, and the clock on the free panel. | A window on each panel, each at its panel's full height: Clocks on the left, item Settings on the right. |
-| ![the lock screen](docs/img/item-lock.png) | |
-| The lock screen over the darkened wallpaper. A known face or finger unlocks it as the phone is opened. | |
+| ![the lock screen](docs/img/item-lock.png) | ![the first setup: a finger](docs/img/item-setup-finger.png) |
+| The lock screen over the darkened wallpaper. A known face or finger unlocks it as the phone is opened. | The first setup, its finger step: the reader's mark under the power key fills as the finger is read. |
+| ![the system screen](docs/img/item-system-screen.png) | ![the pen's sheet](docs/img/item-pen-sheet.png) |
+| The system screen, brought in from the left panel's outer edge: the battery, the next alarm and event, the connections, the storage. | The pen's sheet from the right panel's outer edge: strokes with the pen's pressure, four inks, undo and redo. |
 
 ## What it does
 
