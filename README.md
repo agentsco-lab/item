@@ -127,15 +127,15 @@ Droidian's is removed.
 
 ## Installing
 
-**With item/grid**, the way meant for it. item/grid is the desktop program
-(Linux) that looks after a connected Duo: it backs the phone up first, puts a
+**With [item/grid](https://github.com/agentsco-lab/itemgrid)**, the way
+meant for it. item/grid is the desktop program (Linux) that looks after a
+connected Duo: it backs the phone up first, puts a
 ready-made system image on it - Droidian 102, the port and item - RAM-boots
 the port's kernel on a phone coming from stock Android and writes it to the
 slots only once it booted there, and afterwards keeps item updated, reads
 its logs and takes it back to stock Android if you want. Its window shows
 the phone as it is held and one button for what to do now. It is the
-computer by the phone that an experiment like this needs; it is being
-published together with item.
+computer by the phone that an experiment like this needs.
 
 **By hand**, over a port 0.22.0 or later on Droidian 102:
 
