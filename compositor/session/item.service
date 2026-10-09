@@ -4,7 +4,7 @@
 # item-fallback.service brings phosh back. item-switch changes between them.
 [Unit]
 Description=item, the shell (item-compositor)
-Documentation=https://github.com/agentsco-lab/item-next
+Documentation=https://github.com/agentsco-lab/item
 # Not Conflicts=phosh.service: the composer is part of both (item-switch
 # keeps one at a time), and a conflict would stop it under item's start.
 Conflicts=getty@tty1.service
