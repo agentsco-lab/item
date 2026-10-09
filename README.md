@@ -1,84 +1,172 @@
-# item - a two-panel shell for the Surface Duo
+# item
 
-**item-shell** is a shell for a phone with two screens and a hinge between
-them, made on the Microsoft Surface Duo 1 running Droidian. It goes on top of
-the port, [iverbovoy/surfaceduo-droidian](https://github.com/iverbovoy/surfaceduo-droidian),
-which runs Droidian's own phosh on the two panels by itself; item-shell
-turns that into a desktop made for two panels.
+**item** is a shell for a phone with two screens and a hinge between them,
+made on the Microsoft Surface Duo 1 running Droidian. It is a Wayland
+compositor of its own, `item-compositor`, that draws straight into the
+phone's hwcomposer with the whole shell - the dock, the shades, the lock
+screen, the screens at the edges - drawn inside it, in the same GPU pass as
+the windows. It goes on top of the port,
+[agentsco-lab/surfaceduo-droidian](https://github.com/agentsco-lab/surfaceduo-droidian),
+and takes phosh's place; phosh stays installed as the way back.
 
-The shell is **experimental and in development**.
+**Until 1.0, item is an experiment.** It runs the owner's phone every day,
+but nothing here is promised to work on yours: a release can break the lock
+screen, the modem's sleep or the way back to phosh. Keep the port's backups,
+install with a computer by the phone on the USB cable, and know
+`sudo item-switch phosh`. What is done so far is the groundwork - the
+compositor, its frame path, the gestures and the phone's sleep. Every app
+and every menu you see will be reworked; they are there to make the phone
+usable while that groundwork settles.
 
 ## What it looks like
 
-Screenshots of the one output both panels share (2784x1800; the 84 px column
-the hinge hides is in the middle), at the port's output scale of 2.
+Both panels as one picture, 2700x1800 without the hinge's strip, taken with
+`itemgrid screenshot`. The wallpaper is Aurora, drawn by the compositor
+itself.
 
 | | |
 |---|---|
-| ![the desktop: the dock in two halves and the clock](docs/img/shell-desktop.png) | ![Settings on one panel, the clock on the other](docs/img/shell-window.png) |
-| Nothing open: the dock in two halves at the panels' outer edges, under the thumbs, and the time, the date and the weather on the right panel. No status bar outside the lock screen. | Settings on the panel it was opened on: the pages that apply to this phone, grouped, with its own Surface Duo page (the two-panel shell, the output scale, idle blanking) at the end. Back is the arrow in the corner under the thumb; the clock and the dock move to the free panel. |
-| ![a window on each panel](docs/img/shell-two.png) | ![the right-hand shade](docs/img/shell-shade.png) |
-| A window on each panel, each at its panel's full height: with both panels taken the dock and the clock step aside. | The right-hand shade: the clock, the date, signal, Wi-Fi and battery, the open windows with the panel each is on, and the notifications. The left-hand one holds the settings. |
-| ![the lock screen](docs/img/shell-lockscreen.png) | |
-| The lock screen; 55-60 fps on the unlock swipe at scale 2. | |
+| ![the desktop](docs/img/item-desktop.png) | ![a window on each panel](docs/img/item-two-windows.png) |
+| The desktop: the dock in two halves at the panels' outer edges, under the thumbs, and the clock on the free panel. | A window on each panel, each at its panel's full height: Clocks on the left, item Settings on the right. |
+| ![the lock screen](docs/img/item-lock.png) | |
+| The lock screen over the darkened wallpaper. A known face or finger unlocks it as the phone is opened. | |
 
-## What it adds
+## What it does
 
-- **A dock across both panels** that is also the desktop: an app launched
-  from it opens on the panel it was launched from, tiled to that panel; a
-  window can be minimized to it and called back, or sent to the other panel.
-- **A shade per half, each with its own job**: settings on the left; the open
-  windows, the phone's state and the notifications on the right. Either
-  folds down from anywhere on its panel.
-- **One window, the whole panel**: the bar moves to the free panel, and there
-  is no status bar outside the lock screen.
-- **The system screen** left of the left panel (clock, weather, calendar,
-  the device) and **the pen's sheet** right of the right one, brought in by a
-  swipe from the outer edge.
-- **Settings in one column** on one panel, grouping the pages of GNOME
-  Settings and Mobile Settings that apply to this phone.
-- **Motion**: windows close, minimize and cross between panels with an
-  animation, and the volume shows as an upright bar beside the keys.
+- **The dock** in two halves, under the thumbs. Its pieces are drops of
+  water: they follow a finger, slosh along as the phone folds like a book,
+  cross the hinge to the free panel and join. An app launched from it opens
+  on the panel it was launched from; a window is put away with a swipe up
+  from the panel's bottom edge and called back with a tap.
+- **Windows by panel.** A window takes its whole panel, or both when carried
+  across the hinge. There is no status bar.
+- **A shade per panel**, glass over the screen: a status line, brightness,
+  volume, quick settings and the player on the left; the open windows and the
+  notifications on the right. **The system screen** left of the left panel
+  (the battery with its 24 h graph, the calendar's next event, the device)
+  and **the pen's sheet** right of the right one, brought in from the outer
+  edge; the pen draws with its pressure, the other end erases.
+- **The lock screen**: the PIN pad's keys as drops, the fingerprint mark at
+  the reader under the power key. **CV ID**: a known face unlocks the phone
+  as it is opened - the camera is started at the lid itself, ahead of the
+  panels lighting. The faces enrolled stay on the phone, in
+  `/var/lib/item-face`, root's alone; the camera is open only while the lock
+  screen is lit.
+- **The first setup** after a clean install: a welcome, a new PIN, a finger,
+  a face, then a tour.
+- **The phone's sleep** is item's: the lid darkens and lights the screen,
+  asleep again 3 s after a wake that lit nothing, woken for alarms, an alarm
+  or a call keeps the screen lit.
+- **item Settings**: one window across both panels, the sections on the left,
+  one page on the right, with the pages of GNOME Settings and Mobile Settings
+  that apply to this phone opened in place.
 
-[docs/SHELL.md](docs/SHELL.md) has what each of these does and why.
+## Measured
 
-**What comes next**: item-shell moves onto a compositor of its own,
-`compositor/`, which draws the whole shell in one GPU pass through the
-phone's hwcomposer. Measured against item on phosh it keeps the vsync where
-phosh's shade and grid stutter, in a third of the memory. Until it has
-everything phosh gives today, item-shell 0.1 on phosh stays the one to
-install: [docs/COMPOSITOR.md](docs/COMPOSITOR.md).
+The same Duo 1, timed below both compositors with a uprobe on libhybris'
+`hwc2_compat_display_present` - the call both make to hand hwcomposer a
+frame (`compositor/log/2026-10-01-step-21-ab.md` and the two after it).
+
+| | item 0.1 on phosh | item-compositor |
+|---|---|---|
+| a tap, from the touch to the present with the app's new frame | 17.6 ms (p90 24.4) | 6.2 ms (p90 7.9) |
+| the shade pulled back up | 6 gaps over 25 ms each time, up to 54 ms | 0-1, up to 29 ms |
+| the app grid going down | a 235-243 ms freeze each time | up to 34 ms |
+| an animating app, its commit to the screen | not measurable (phoc reports no presentation) | one vsync, 15.8 ms |
+| the shell at rest: memory (PSS) | 461 MB (phoc, phosh, dock, system screen, pen) | 173 MB |
+| the shell at rest: CPU | 3.5 % of a core | 2.6 % |
+
+Against the Lindroid chain (a virtual DRM device handing frames to
+hwcomposer), the other way to run a compositor on this kernel: no CPU copy
+of each frame (the chain spends 9-13 ms and 0.76 W on it at 60 fps), and
+60 fps with both panels animating where the chain holds 30
+([docs/COMPOSITOR.md](docs/COMPOSITOR.md)).
+
+Other numbers: a frame of the shell renders in 1-1.5 ms; the shade follows
+the finger 22-26 ms behind it where the same shade through GTK took about
+39; a settings page opens in a tenth of a second where it took over one
+([docs/SETTINGS.md](docs/SETTINGS.md)); CV ID takes about 135 ms a frame
+on the Duo; a phone shut, Wi-Fi radio on and mobile data off, loses about
+1.3 % an hour (0.16 W) with the port 0.22.0.
+
+## How it is made
+
+Rust throughout. The compositor is on [smithay](https://github.com/Smithay/smithay)
+(calloop, its GLES renderer) with EGL on the Android platform - hwcomposer's
+window, no GBM - and hands frames to hwcomposer through libhybris' hwc2 API,
+with its vsync and fences; touch comes from libinput. Text is rendered
+with fontdue into textures; D-Bus with zbus (logind, UPower, NetworkManager,
+the notification server, polkit's agent, gnome-keyring's prompter); the PIN
+through PAM; the session by gnome-session. CV ID runs YuNet, SFace and
+MiniFASNetV2 as ONNX models with tract, the camera through GStreamer's
+droidcamsrc, as a service of its own (`item-face`). item Settings is GTK4
+and libadwaita. The on-screen keyboard is the port's stevia. All of it
+ships as one Debian package built on the computer for aarch64
+(`compositor/tools/package-deb.sh`).
+
+How the compositor came to be, step by step with its measurements:
+[docs/COMPOSITOR.md](docs/COMPOSITOR.md) and `compositor/log/`.
+
+## What it needs, and what it changes
+
+A Surface Duo 1 on Droidian 102 with the port 0.22.0 or later. item
+disables `phosh.service` and runs `item.service` and `item-face.service` in
+its place (`item-fallback.service` starts phosh if item does not come up);
+it sets the kernel's alarm before sleeping, holds a wakelock while the screen
+is lit, and keeps its state in `~/.config/item`. The faces enrolled are in
+`/var/lib/item-face`, root's alone, and never leave the phone. Nothing of
+Droidian's is removed.
 
 ## Installing
 
-item-shell 0.1.0 needs the port, 0.21.0 or later, on Droidian 102:
+**With item/grid**, the way meant for it. item/grid is the desktop program
+(Linux) that looks after a connected Duo: it backs the phone up first, puts a
+ready-made system image on it - Droidian 102, the port and item - RAM-boots
+the port's kernel on a phone coming from stock Android and writes it to the
+slots only once it booted there, and afterwards keeps item updated, reads
+its logs and takes it back to stock Android if you want. Its window shows
+the phone as it is held and one button for what to do now. It is the
+computer by the phone that an experiment like this needs; it is being
+published together with item.
+
+**By hand**, over a port 0.22.0 or later on Droidian 102:
 
 ```
-sudo apt install ./item-shell_0.1.0_arm64.deb
-sudo systemctl restart phosh
+sudo apt install ./item_0.2.1_arm64.deb
+sudo item-switch item
 ```
 
-Removing it gives Droidian's own shell on two panels back:
+The first start runs the setup. Back to Droidian's phosh, now and for the
+boots after:
 
 ```
-sudo apt remove item-shell
-sudo systemctl restart phosh
+sudo item-switch phosh
 ```
+
+`item-switch status` says which shell the phone starts.
+
+## Where it stands
+
+- Every app and menu is provisional: item Settings' pages, the shades'
+  contents, the system screen and the pen's sheet will be reworked once the
+  groundwork is done. Some of Settings' pages (networks and passwords among
+  them) open the system's page for now.
+- No wallpaper pictures ship yet: the desktop is Aurora, drawn by the
+  compositor; the picker for one's own pictures is in the code, not in this
+  release.
+- Before the setup has run, and with a picture that cannot be read, the
+  screen is black.
+- Tried on one phone, the owner's. Each step was measured and tried by
+  hand; there is no test suite beyond that.
 
 ## What is in this repository
 
 | | |
 |---|---|
-| `shell/` | the dock, the system screen, the pen's sheet, `sfduo-shell` (the shell's switch) and its polkit policy |
-| `apps/` | Settings in one column (`sfduo-settings`) and the launchers that send GNOME Settings and Mobile Settings to it |
-| `css/` | the shell's CSS rules, appended to the port's by its `sfduo-shell-css` |
-| `dconf/` | phoc's auto-maximize off: the dock tiles windows itself |
-| `patches/` | phoc, phosh and the on-screen keyboard: the shell's patches, on top of the port's set |
-| `package/` | `build.sh`, which makes `item-shell_<version>_arm64.deb` |
-| `tests/` | the running-apps grouping and the dock's placing, without a phone |
-| `tools/` | `sfduo-perfcheck`: the shell's frame times against thresholds, on the phone |
-| `compositor/` | item-compositor: the shell's next base, a compositor of its own in Rust drawing through hwcomposer, with its steps and measurements in `compositor/log/` ([COMPOSITOR.md](docs/COMPOSITOR.md)) |
-| `docs/` | [SHELL.md](docs/SHELL.md), [SETTINGS.md](docs/SETTINGS.md), [COMPOSITOR.md](docs/COMPOSITOR.md) |
+| `compositor/` | item-compositor, its session, `item-face` (CV ID), `pen-split`, the package build (`tools/package-deb.sh`), the steps and measurements in `compositor/log/` |
+| `apps/settings/` | item Settings (Rust, GTK4 and libadwaita), in the package |
+| `docs/` | [COMPOSITOR.md](docs/COMPOSITOR.md), [SETTINGS.md](docs/SETTINGS.md), [SHELL.md](docs/SHELL.md) (item-shell 0.1 on phosh) |
+| `shell/`, `patches/`, `css/`, `dconf/`, `package/`, `tests/`, `tools/`, the rest of `apps/` | item-shell 0.1, the shell as patches on the port's phoc and phosh (released as item-shell 0.1.0, 2026-09-29; its screenshots in `docs/img/item-shell-0.1/`); kept as it was, superseded by the compositor |
 
 ## License
 
