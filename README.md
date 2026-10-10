@@ -164,8 +164,8 @@ sudo item-switch phosh
   release.
 - Before the setup has run, and with a picture that cannot be read, the
   screen is black.
-- Tried on one phone, the owner's. Each step was measured and tried by
-  hand; there is no test suite beyond that.
+- Tried on one phone. Each step was measured and tried by hand; there is
+  no test suite beyond that.
 
 ## What is in this repository
 
