@@ -135,7 +135,11 @@ the port's kernel on a phone coming from stock Android and writes it to the
 slots only once it booted there, and afterwards keeps item updated, reads
 its logs and takes it back to stock Android if you want. Its window shows
 the phone as it is held and one button for what to do now. It is the
-computer by the phone that an experiment like this needs.
+computer by the phone that an experiment like this needs. The image it
+puts on is in the [releases](https://github.com/agentsco-lab/item/releases)
+too (`item-duo1-…`: the image, the kernel, the recovery, a manifest with
+the checksums), for item/grid's `~/.local/share/itemgrid/releases/` or
+for doing it by hand.
 
 **By hand**, over a port 0.22.0 or later on Droidian 102:
 
