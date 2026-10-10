@@ -1,7 +1,10 @@
 This repository is multi-licensed:
 
-- The shell's programs, scripts and the package build (shell/, apps/, css/, tools/,
-  dconf/, package/, tests/) and the compositor (compositor/): MIT (see LICENSES/MIT.txt)
-- The patches in patches/ change phoc, phosh and phosh-osk-stevia, and are
-  under the license of the project each one patches (GPL-3.0-or-later)
+- The compositor and its services (compositor/) and item Settings
+  (apps/settings/): MIT (see LICENSES/MIT.txt)
 - Documentation (docs/, README files): CC BY-SA 4.0 (see LICENSES/CC-BY-SA-4.0.txt)
+
+item-shell 0.1, the shell as patches on the port's phoc and phosh, is kept
+in the branch and tag item-shell-0.1 with the license it had: its programs
+MIT, its patches under the license of the project each one patches
+(GPL-3.0-or-later).

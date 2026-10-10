@@ -10,10 +10,6 @@ jobs:
       - name: sh -n / bash -n on every shell script
         run: |
           find . -name '*.sh' -print0 | xargs -0 -n1 bash -n
-          sh -n shell/sfduo-shell && sh -n apps/sfduo-one-column
-
-      - name: python scripts compile
-        run: python3 -m py_compile shell/sfduo-dock shell/sfduo-system-screen shell/sfduo-pen-screen apps/sfduo-settings tools/sfduo-perfcheck
 
       - name: internal markdown links resolve
         run: |
@@ -28,10 +24,3 @@ jobs:
           done < <(grep -RnoE '\]\([^)]+\)' --include='*.md' . \
                      | sed -E 's/^([^:]+):[0-9]+:\]\((.*)\)$/\1:\2/')
           exit $fail
-
-      - name: running-apps grouping tests
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq libglib2.0-dev python3-gi
-          bash tests/test-running-apps-filter.sh
-          /usr/bin/python3 tests/test-dock-follows.py

@@ -1,6 +1,8 @@
 # The shell on two panels
 
-The port (iverbovoy/surfaceduo-droidian, from 0.21) runs Droidian's own
+> item-shell 0.1 is superseded by the compositor (item 0.2, the rest of this repository). Its code - `shell/`, `patches/`, `css/`, `dconf/`, `package/`, `tests/` - is in the branch and tag `item-shell-0.1`; the paths below refer to it.
+
+The port ([agentsco-lab/surfaceduo-droidian](https://github.com/agentsco-lab/surfaceduo-droidian), from 0.21) runs Droidian's own
 phosh on the Surface Duo's two panels: a top bar and a shade per half,
 windows maximized one panel each, the app grid and the keyboard kept off the
 hinge. item-shell is what goes on top of that: a dock across both panels
