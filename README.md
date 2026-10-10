@@ -9,8 +9,8 @@ the windows. It goes on top of the port,
 [agentsco-lab/surfaceduo-droidian](https://github.com/agentsco-lab/surfaceduo-droidian),
 and takes phosh's place; phosh stays installed as the way back.
 
-**Until 1.0, item is an experiment.** It runs the owner's phone every day,
-but nothing here is promised to work on yours: a release can break the lock
+**Until 1.0, item is an experiment.** It is used on one phone, daily, but
+nothing here is promised to work on yours: a release can break the lock
 screen, the modem's sleep or the way back to phosh. Keep the port's backups,
 install with a computer by the phone on the USB cable, and know
 `sudo item-switch phosh`. What is done so far is the groundwork - the
