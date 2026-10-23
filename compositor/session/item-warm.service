@@ -1,0 +1,15 @@
+# item-warm: the dock's apps' files read into the page cache after the
+# session is up (session/item-warm), at the lowest disk and CPU priority,
+# so that the first launch after a boot is as quick as the second.
+[Unit]
+Description=Read the dock's apps into the page cache after boot
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/item-warm
+
+[Install]
+WantedBy=default.target

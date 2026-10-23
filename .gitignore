@@ -2,3 +2,4 @@ out/
 *.deb
 __pycache__/
 *.pyc
+compositor/log/

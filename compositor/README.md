@@ -161,6 +161,28 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
   virtual touchscreen, with no one at the phone: tapping GNOME Calculator,
   pulling the shades (`DRIVER=swipe`), or scrolling Settings (`DRIVER=scroll`)
 - `tools/frames-run.sh`, `tools/tap-at.py` - one tap and the 40 frames after it,
-  as they went to hwcomposer; `touch /tmp/item-shot` on the phone saves the next
-  frame
-- `log/` - what each step found, with the raw output
+  as they went to hwcomposer; `touch $XDG_RUNTIME_DIR/item-shot` on the phone
+  (as its user) saves the next frame beside it
+- `log/` - what each step found, with the raw output (not tracked since 0.3;
+  the early steps' logs are in the history up to item-v0.2.1)
+
+## Variables
+
+The compositor reads a few environment variables, for experiments and the
+benches; none is needed for a phone in use. Installed, they go into
+`~/.config/item/env` (sourced by `session/item-session`: item.service is a
+system unit, the user's environment.d does not reach it); with
+`tools/session-run.sh` they are passed through from the command.
+
+- `GPU_BOOST=0`, `CPU_BOOST=0` - no raising of the minimum clocks on touch (boost.rs)
+- `NO_SUSPEND=1` - the phone kept awake (sleep.rs); `IDLE_DELAY` - seconds to the dark screen
+- `CVID=1` - CV ID on (item.service sets it); `CAMERA_PEEK`, `FOLDCAM` - the camera experiments (camera.rs, foldcam.rs); `NO_FINGERPRINT=1`
+- `NO_OSK`, `NO_OSK_RESIZE`, `OSK_DEBUG` - stevia's layer surface (layers.rs)
+- `TOUR=1`, `SETUP=1`, `SETUP_DRY=1`, `SETUP_AUTO=1`, `DIALOG_TEST`, `CALL_TEST`, `CALL_UNLOCKED` - the tour, the setup and the dialogs run on demand
+- `TURN_MS` - the turn's length (output.rs); `LOG_FRAMES=1` - the per-second frame report in the journal
+- `FRAMES_EVERY`, `FRAMES_COUNT`, `FRAMES_DOCK`, `FRAMES_FULL`, `FRAMES_TOP` - frames dumped to the runtime directory for the benches (output.rs, main.rs)
+- `LOG_TIMES`, `LOG_BUFFERS`, `LOG_WAVE`, `PACE_DEBUG`, `SERVER_DEBUG` - more in the log (output.rs, pace.rs)
+- `HWC_PRESENT_OR_VALIDATE=1`, `HWC_SKIP_VALIDATE=1` - hwcomposer's shorter paths (crates/hybris-hwc)
+- `NO_SCHED=1` - no real-time priority for the input thread (sched.rs); `NO_LOGIN_SHELL=1` - apps spawned without a login shell
+- `CLIENT_ENV` - variables handed to every app spawned; `TOUCHSCREEN` - the touch device for a bench; `DOCK_SILVER`, `NIGHT`, `EDGE_*`, `INSTANCING`, `CANVAS`, `LATE`, `LATE_MARGIN_MS`, `ASAP`, `CALLBACKS` - the rendering and pacing experiments, each read where it is named in the sources
+

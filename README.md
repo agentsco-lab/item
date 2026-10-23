@@ -108,12 +108,14 @@ the notification server, polkit's agent, gnome-keyring's prompter); the PIN
 through PAM; the session by gnome-session. CV ID runs YuNet, SFace and
 MiniFASNetV2 as ONNX models with tract, the camera through GStreamer's
 droidcamsrc, as a service of its own (`item-face`). item Settings is GTK4
-and libadwaita. The on-screen keyboard is the port's stevia. All of it
-ships as one Debian package built on the computer for aarch64
+and libadwaita. The keyboard is the compositor's own (the port's stevia
+stays as a choice); the hinge, gravity and the gyroscope are read in-process
+from sensorfw's sockets; the browser is Debian's Chromium on Wayland. All of
+it ships as one Debian package built on the computer for aarch64
 (`compositor/tools/package-deb.sh`).
 
 How the compositor came to be, step by step with its measurements:
-[docs/COMPOSITOR.md](docs/COMPOSITOR.md) and `compositor/log/`.
+[docs/COMPOSITOR.md](docs/COMPOSITOR.md).
 
 ## What it needs, and what it changes
 
@@ -123,7 +125,23 @@ its place (`item-fallback.service` starts phosh if item does not come up);
 it sets the kernel's alarm before sleeping, holds a wakelock while the screen
 is lit, and keeps its state in `~/.config/item`. The faces enrolled are in
 `/var/lib/item-face`, root's alone, and never leave the phone. Nothing of
-Droidian's is removed.
+Droidian's is removed; the port's posture, dock and brightness autostarts are
+kept out of item's session, `mtp-server` is masked, and Android's Wi-Fi
+diagnostics daemon is stopped after boot (`item-quiet.service`). Three user
+units come with it: `item-warm` (the dock's apps' files read into the page
+cache after boot), `item-chromium` (Chromium resident without a window) and
+`item-agent-home` (the agent's tmux session, when Claude Code is installed).
+
+**Nothing leaves the phone by itself.** item has no telemetry and no
+account. The one network use of its own, the system screen's weather
+(met.no, the city chosen in GNOME Weather) and the port's latest release
+(GitHub), is behind item Settings' Online switch, off by default. The
+keyboard's voice goes to OpenRouter only with a key the owner put in the
+phone's keyring (`item-secret set openrouter`); keys live in gnome-keyring
+by name and are never written to a file or a log. The screen's mirror for
+item/grid is a socket in the user's runtime directory and stops while the
+phone is locked. `~/.config/item/env` is sourced by the session for the
+owner's variables: it is the owner's file, treat it as such.
 
 ## Installing
 
@@ -144,7 +162,7 @@ for doing it by hand.
 **By hand**, over a port 0.22.0 or later on Droidian 102:
 
 ```
-sudo apt install ./item_0.2.1_arm64.deb
+sudo apt install ./item_0.3.0_arm64.deb
 sudo item-switch item
 ```
 
@@ -163,9 +181,10 @@ sudo item-switch phosh
   contents, the system screen and the pen's sheet will be reworked once the
   groundwork is done. Some of Settings' pages (networks and passwords among
   them) open the system's page for now.
-- No wallpaper pictures ship yet: the desktop is Aurora, drawn by the
-  compositor; the picker for one's own pictures is in the code, not in this
-  release.
+- Nineteen wallpapers come in `/usr/share/item/walls`, photographs from
+  Unsplash with their credits beside them (`NAME.txt`, "Photo by ..."); the
+  picker takes one's own pictures from `~/.local/share/item/walls` too. The
+  desktop before one is chosen is Aurora, drawn by the compositor.
 - Before the setup has run, and with a picture that cannot be read, the
   screen is black.
 - Tried on one phone. Each step was measured and tried by hand; there is

@@ -1124,7 +1124,7 @@ dependencies = [
 
 [[package]]
 name = "item-compositor"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "aes",
  "async-channel",
@@ -1140,6 +1140,7 @@ dependencies = [
  "lz4_flex",
  "num-bigint",
  "resvg",
+ "serde",
  "serde_json",
  "sha2",
  "smithay",

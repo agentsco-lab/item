@@ -1,0 +1,18 @@
+# item-quiet: Android's cnss_diag (Qualcomm's Wi-Fi diagnostics, 3 % of a
+# core for nothing anyone reads) stopped once the container has started it.
+# "setprop ctl.stop" leaves it "stopping" and alive on this port; a kill
+# from the host does it (2026-10-23, measured on the Duo 1). Wi-Fi itself
+# is cnss-daemon's, which stays. mtp-server, the other idle burner, is
+# masked by the package (/etc/systemd/user).
+[Unit]
+Description=Stop Android's Wi-Fi diagnostics daemon after boot
+After=lxc@android.service
+Wants=lxc@android.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'n=0; until pkill -x cnss_diag || [ $n -ge 60 ]; do sleep 2; n=$((n+1)); done; true'
+TimeoutStartSec=150
+
+[Install]
+WantedBy=graphical.target

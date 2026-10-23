@@ -46,6 +46,8 @@ mkdir -p "$lib" "$S/usr/bin" "$S/usr/share/item/cvid" "$S/DEBIAN"
 for b in item-compositor item-face pen-split; do
     aarch64-linux-gnu-strip -o "$lib/$b" "$R/$b"
 done
+# The keyring's secrets in and out (secrets.rs), for the services the shell speaks to.
+aarch64-linux-gnu-strip -o "$S/usr/bin/item-secret" "$R/item-secret"
 # camera-warm declares the four GStreamer calls it makes itself: a stub
 # with GStreamer's soname is all the link needs.
 printf 'void gst_init(void){}\nvoid *gst_parse_launch(void){return 0;}\nint gst_element_set_state(void){return 0;}\nint gst_element_get_state(void){return 0;}\n' > "$WORK/gst.c"
@@ -54,9 +56,56 @@ aarch64-linux-gnu-gcc -O2 -o "$lib/camera-warm" tools/camera-warm.c -lpthread -L
 aarch64-linux-gnu-strip "$lib/camera-warm"
 install -m755 session/item-session session/item-composer-fresh "$lib/"
 install -m755 session/item-switch "$S/usr/bin/item-switch"
+# The Agent entry: Claude Code in a terminal, the keyboard's vibe layer under it (kbd.rs).
+install -m755 session/item-agent "$S/usr/bin/item-agent"
+install -m755 session/item-agents "$S/usr/bin/item-agents"
+install -m755 session/item-sync "$S/usr/bin/item-sync"
+install -Dm644 session/item-agent-home.service "$S/usr/lib/systemd/user/item-agent-home.service"
+# The dock's apps read into the page cache after boot (session/item-warm),
+# on by default for every user through the wants link.
+install -m755 session/item-warm "$S/usr/bin/item-warm"
+install -Dm644 session/item-warm.service "$S/usr/lib/systemd/user/item-warm.service"
+install -d "$S/usr/lib/systemd/user/default.target.wants"
+ln -s ../item-warm.service "$S/usr/lib/systemd/user/default.target.wants/item-warm.service"
+# Chromium kept resident, no window (session/item-chromium.service): the
+# dock asks it for a window over its socket (state.rs's resident_chromium).
+install -Dm644 session/item-chromium.service "$S/usr/lib/systemd/user/item-chromium.service"
+ln -s ../item-chromium.service "$S/usr/lib/systemd/user/default.target.wants/item-chromium.service"
+# Two idle burners off (draft 47): mtp-server masked for every user (ssh is
+# how files move), cnss_diag stopped by a root unit after the container is up.
+install -d "$S/etc/systemd/user"
+ln -s /dev/null "$S/etc/systemd/user/mtp-server.service"
+install -Dm644 session/item-quiet.service "$S/usr/lib/systemd/system/item-quiet.service"
+install -d "$S/usr/lib/systemd/system/graphical.target.wants"
+ln -s ../item-quiet.service "$S/usr/lib/systemd/system/graphical.target.wants/item-quiet.service"
+install -Dm644 session/agent-home.md "$S/usr/share/item/agent/CLAUDE.md"
+# The browser for links under item, Chromium: item-mimeapps.list, and its
+# flags for Debian's wrapper (the Wayland socket, text-input v3).
+install -Dm644 session/item-mimeapps.list "$S/etc/xdg/item-mimeapps.list"
+install -Dm644 session/item-chromium "$S/etc/chromium.d/item"
+install -Dm644 session/item-agent.desktop "$S/usr/share/applications/item-agent.desktop"
+install -Dm644 session/item-agent.svg "$S/usr/share/icons/hicolor/scalable/apps/item-agent.svg"
+install -Dm644 session/item-vibration-symbolic.svg "$S/usr/share/item/icons/vibration-symbolic.svg"
 aarch64-linux-gnu-strip -o "$S/usr/bin/item-settings" "$SETTINGS/target/$TARGET/release/item-settings"
 install -Dm644 "$SETTINGS/lab.agentsco.item.Settings.desktop" "$S/usr/share/applications/lab.agentsco.item.Settings.desktop"
+install -Dm644 "$SETTINGS/lab.agentsco.item.Settings.svg" "$S/usr/share/icons/hicolor/scalable/apps/lab.agentsco.item.Settings.svg"
 install -m644 crates/cvid/models/*.onnx "$S/usr/share/item/cvid/"
+# The wallpapers with their credits (notes/drafts/30): the owner's set from
+# WALLS (NAME.jpg with NAME.txt beside it, Unsplash's "Photo by ..." lines),
+# each brought to 12 Mpx at most (walls.rs's SOURCE_PX: the picker's zoom
+# and the memory want no more), its metadata dropped. None there: a phone
+# starts with Aurora, drawn by the compositor.
+WALLS="${WALLS:-$HOME/Desktop/walls/ready}"
+if [ -d "$WALLS" ]; then
+  mkdir -p "$S/usr/share/item/walls"
+  for jpg in "$WALLS"/*.jpg; do
+    n=$(basename "$jpg")
+    case "$n" in thumb-*) continue ;; esac
+    convert "$jpg" -strip -resize '12000000@>' -quality 90 "$S/usr/share/item/walls/$n"
+    [ -f "${jpg%.jpg}.txt" ] && install -m644 "${jpg%.jpg}.txt" "$S/usr/share/item/walls/"
+  done
+  echo "wallpapers: $(ls "$S/usr/share/item/walls"/*.jpg | wc -l) pictures from $WALLS"
+fi
 
 install -Dm644 session/item.session "$S/usr/share/gnome-session/sessions/item.session"
 install -Dm644 session/gnome-session@item.target.d/session.conf "$S/usr/lib/systemd/user/gnome-session@item.target.d/session.conf"
@@ -72,9 +121,11 @@ cat > "$S/usr/lib/systemd/system/sfduo-pen-split.service.d/50-item-rust.conf" <<
 [Service]
 ExecStart=
 ExecStart=/usr/libexec/item/pen-split
+Environment=PEN_SOCK_OWNER=@UID@
 CPUSchedulingPolicy=fifo
 CPUSchedulingPriority=50
 CONF
+sed -i "s/@UID@/$UID_N/" "$S/usr/lib/systemd/system/sfduo-pen-split.service.d/50-item-rust.conf"
 # The vendor composer bound to no shell: the port's 20-phosh.conf
 # (BindsTo=phosh.service, from phosh-config-hwcomposer) replaced by the same
 # name in /etc - see install-phone.sh for why.
@@ -95,11 +146,11 @@ cat > "$S/DEBIAN/control" <<CONTROL
 Package: item
 Version: $VERSION
 Architecture: arm64
-Maintainer: agentsco-lab
+Maintainer: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Section: x11
 Priority: optional
 Installed-Size: $INSTALLED
-Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, adaptation-droidian-surfaceduo (>= 0.21)
+Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, chromium, adaptation-droidian-surfaceduo (>= 0.21)
 Recommends: phosh
 Description: item, the two-panel shell for the Surface Duo
  item-compositor and its session in place of phosh on Droidian: a dock
@@ -132,7 +183,7 @@ if [ "$1" = configure ]; then
     # copies in item's XDG overlay, made from the port's current files.
     mkdir -p /usr/share/item/xdg/autostart
     : > /var/lib/item-autostart.list.new
-    for a in sfduo-dock sfduo-system-screen sfduo-pen-screen sfduo-fingerprint sfduo-brightness; do
+    for a in sfduo-posture sfduo-brightness sfduo-fingerprint sfduo-dock sfduo-system-screen sfduo-pen-screen; do
         [ -f /etc/xdg/autostart/$a.desktop ] || continue
         sed '/^NotShowIn=/d; /^\[Desktop Entry\]/a NotShowIn=item;' /etc/xdg/autostart/$a.desktop > /usr/share/item/xdg/autostart/$a.desktop
         echo /usr/share/item/xdg/autostart/$a.desktop >> /var/lib/item-autostart.list.new

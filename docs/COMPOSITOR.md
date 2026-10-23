@@ -8,7 +8,8 @@ phosh", item-shell 0.1.x on phosh stays the shell in use, and phosh stays
 the way back after.
 
 The work so far, step by step with its measurements, is in
-`compositor/log/` (steps 1-23, 2026-09-30 to 2026-10-01); the probes that
+`compositor/log/` (steps 1-23, 2026-09-30 to 2026-10-01; the directory left
+the tree with 0.3 and is in the history up to item-v0.2.1); the probes that
 chose the path are in agentsco-lab/duo-lindroid (private).
 
 ## Why a compositor of our own
@@ -53,7 +54,7 @@ most here (duo-lindroid's `log/2026-09-30-choosing-a-base.md`).
 The same phone, the same night, timed below both compositors: a uprobe on
 libhybris' `hwc2_compat_display_present`, the call both make to hand
 hwcomposer a frame, and a probe client both serve alike
-(`compositor/log/2026-10-01-step-21-ab.md`, `-step-22-canvas.md`, `-step-23-paces.md`).
+(`compositor/log/2026-10-01-step-21-ab.md`, `-step-22-canvas.md`, `-step-23-paces.md`, at item-v0.2.1).
 
 | | item on phosh | item-compositor |
 |---|---|---|

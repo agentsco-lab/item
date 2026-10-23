@@ -6,6 +6,10 @@
 #
 # ITEM_COMPOSITOR overrides the binary (tests run one from /tmp).
 COMPOSITOR=${ITEM_COMPOSITOR:-/usr/libexec/item/item-compositor}
+# The owner's own variables for the compositor (experiments: LOG_FRAMES,
+# TURN_MS, FRAMES_COUNT...): item.service is a system unit, so the user's
+# environment.d does not reach it; this file does.
+[ -r "$HOME/.config/item/env" ] && . "$HOME/.config/item/env"
 
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=item:GNOME
