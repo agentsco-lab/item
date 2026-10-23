@@ -1,0 +1,494 @@
+//! The Duo's sensors read by item itself, in Rust, as the port's
+//! sfduo-posture (Python) read them: sensorfw's hinge, accelerometer and
+//! gyroscope sessions, each a data socket (/run/sensord.sock) that brings
+//! frames of readings. From them, as the daemon did: the hinge's angle
+//! glided between its whole-degree readings; the posture with hysteresis;
+//! Moving; gravity smoothed; the roll about the screen's normal from the
+//! gyroscope pulled to gravity's; Still. Told to posture.rs over a
+//! channel (no bus in between: the decision ~15 ms sooner, one process
+//! fewer), and published on the session bus as org.sfduo.Posture for
+//! item/grid and anyone else - unless the daemon still owns the name.
+//!
+//! While the display is dark the sensors are stopped (main.rs says), and
+//! started again as it lights; the first hinge reading then is where the
+//! hinge is, not a place to glide to.
+
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+
+use smithay::reexports::calloop::ping::Ping;
+use zbus::zvariant::{OwnedValue, Value};
+
+use crate::posture::Told;
+
+const SENSORFW: &str = "com.nokia.SensorService";
+const MANAGER: &str = "/SensorManager";
+const MANAGER_IFACE: &str = "local.SensorManager";
+const SOCKET: &str = "/run/sensord.sock";
+
+const BUS_NAME: &str = "org.sfduo.Posture";
+const PATH: &str = "/org/sfduo/Posture";
+const IFACE: &str = "org.sfduo.Posture";
+
+/// The hinge: readings every hundred milliseconds in whole degrees; the
+/// estimate glides to the last one in ARRIVE readings' time (the daemon's
+/// measured choice against a spring and an alpha-beta filter), at a
+/// FRAME_MS clock while it moves.
+const FRAME_MS: u64 = 16;
+const ARRIVE: f64 = 1.5;
+const MOVING_DEG_S: f64 = 20.0;
+const STILL_AFTER_MS: f64 = 400.0;
+const CONFIRM: u32 = 2;
+const HYSTERESIS: f64 = 5.0;
+const POSTURES: [(&str, f64, f64); 4] = [("closed", -1.0, 10.0), ("laptop", 60.0, 130.0), ("flat", 150.0, 210.0), ("folded", 340.0, 361.0)];
+
+/// The accelerometer: thousandths of g, ten a second.
+const ACCEL_INTERVAL_MS: i32 = 100;
+const GRAVITY_STEP: f64 = 0.02;
+const GRAVITY_SMOOTH: f64 = 0.5;
+/// The gyroscope: thousandths of a degree a second, twenty a second
+/// whatever is asked (measured 2026-10-22).
+const GYRO_INTERVAL_MS: i32 = 20;
+const ROLL_STEP: f64 = 0.5;
+const ROLL_PULL: f64 = 0.08;
+const ROLL_GRAVITY_MAX_Z: f64 = 0.85;
+const STILL_DEG_S: f64 = 8.0;
+const STILL_AFTER_S: f64 = 0.12;
+
+/// What a sensor's socket brings.
+enum Reading {
+    Hinge(u32),
+    Accel([f64; 3]),
+    Gyro([f64; 3]),
+}
+
+enum Event {
+    Reading(Reading),
+    Dark(bool),
+    /// A socket died: its sensor is asked for again.
+    Lost(&'static str),
+}
+
+/// A sensor as sensorfw has it.
+struct Sensor {
+    name: &'static str,
+    iface: &'static str,
+    interval_ms: Option<i32>,
+    session: Option<i32>,
+}
+
+/// The values as told last, for the bus's properties.
+#[derive(Clone, Default)]
+pub struct Values {
+    pub angle: f64,
+    pub raw: u32,
+    pub posture: String,
+    pub moving: bool,
+    pub velocity: f64,
+    pub gravity: [f64; 3],
+    pub roll: f64,
+    pub still: bool,
+}
+
+struct Bus {
+    shared: Arc<Mutex<Values>>,
+}
+
+#[zbus::interface(name = "org.sfduo.Posture")]
+impl Bus {
+    #[zbus(property)]
+    fn angle(&self) -> f64 {
+        self.shared.lock().unwrap().angle
+    }
+    #[zbus(property)]
+    fn raw(&self) -> u32 {
+        self.shared.lock().unwrap().raw
+    }
+    #[zbus(property)]
+    fn posture(&self) -> String {
+        self.shared.lock().unwrap().posture.clone()
+    }
+    #[zbus(property)]
+    fn moving(&self) -> bool {
+        self.shared.lock().unwrap().moving
+    }
+    #[zbus(property)]
+    fn velocity(&self) -> f64 {
+        self.shared.lock().unwrap().velocity
+    }
+    #[zbus(property)]
+    fn gravity(&self) -> Vec<f64> {
+        self.shared.lock().unwrap().gravity.to_vec()
+    }
+    #[zbus(property)]
+    fn roll(&self) -> f64 {
+        self.shared.lock().unwrap().roll
+    }
+    #[zbus(property)]
+    fn still(&self) -> bool {
+        self.shared.lock().unwrap().still
+    }
+}
+
+/// The sensors, running: `told` carries every change to posture.rs;
+/// `dark` is for main.rs to say the display went dark or lit.
+pub struct Sensors {
+    cmds: Sender<Event>,
+}
+
+impl Sensors {
+    /// Starts the sensors; what they say comes on the receiver returned.
+    pub fn start(wake: Ping) -> (Sensors, Receiver<Told>) {
+        let (events_tx, events_rx) = channel::<Event>();
+        let (told_tx, told_rx) = channel::<Told>();
+        let cmds = events_tx.clone();
+        let _ = std::thread::Builder::new().name("sensors".into()).spawn(move || run(events_tx, events_rx, told_tx, wake));
+        (Sensors { cmds }, told_rx)
+    }
+
+    /// The display dark (the sensors stopped) or lit (started, the hinge
+    /// read afresh).
+    pub fn dark(&self, dark: bool) {
+        let _ = self.cmds.send(Event::Dark(dark));
+    }
+}
+
+fn posture_for(angle: f64, current: &str) -> &'static str {
+    for (name, low, high) in POSTURES {
+        let (lo, hi) = if name == current { (low - HYSTERESIS, high + HYSTERESIS) } else { (low, high) };
+        if lo <= angle && angle <= hi {
+            return name;
+        }
+    }
+    "between"
+}
+
+/// The thread: the sessions set up, each socket read on a thread of its
+/// own, the readings turned into the posture's values here.
+fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>, wake: Ping) {
+    let Ok(system) = crate::bus::system() else {
+        tracing::warn!("sensors: no system bus");
+        return;
+    };
+    let shared = Arc::new(Mutex::new(Values { angle: 180.0, posture: "between".into(), gravity: [0.0, 0.0, 1.0], still: true, ..Default::default() }));
+    // The bus: ours unless the port's daemon still owns the name.
+    let session = crate::bus::session().and_then(|c| crate::bus::serve(&c, &[BUS_NAME], PATH, Bus { shared: shared.clone() }).map(|_| c));
+    match &session {
+        Ok(_) => tracing::info!("sensors: {BUS_NAME} is item's"),
+        Err(e) => tracing::info!("sensors: {BUS_NAME} not taken ({e}): the daemon keeps it"),
+    }
+    let session = session.ok();
+    let publish = |changed: HashMap<&str, Value<'_>>| {
+        if let Some(conn) = &session {
+            let _ = conn.emit_signal(None::<&str>, PATH, "org.freedesktop.DBus.Properties", "PropertiesChanged", &(IFACE, changed, Vec::<String>::new()));
+        }
+    };
+
+    let mut sensors = [
+        Sensor { name: "hingesensor", iface: "local.HingeSensor", interval_ms: None, session: None },
+        Sensor { name: "accelerometersensor", iface: "local.AccelerometerSensor", interval_ms: Some(ACCEL_INTERVAL_MS), session: None },
+        Sensor { name: "gyroscopesensor", iface: "local.GyroscopeSensor", interval_ms: Some(GYRO_INTERVAL_MS), session: None },
+    ];
+    let mut dark = false;
+    for s in sensors.iter_mut() {
+        open(&system, s, &events_tx);
+        call(&system, s, "start");
+    }
+    // The hinge's value now: the socket brings only changes.
+    if let Some(h) = read_hinge(&system) {
+        let _ = events_tx.send(Event::Reading(Reading::Hinge(h)));
+    }
+
+    // The state, as the daemon kept it.
+    let mut v = shared.lock().unwrap().clone();
+    let mut raw: Option<u32> = None;
+    let mut raw_at = std::time::Instant::now();
+    let mut angle: Option<f64> = None;
+    let mut fresh = true;
+    let mut gliding = false;
+    let mut last_tick = std::time::Instant::now();
+    let mut candidate: (&'static str, u32) = ("between", 0);
+    let mut gravity_told: Option<[f64; 3]> = None;
+    let mut roll: Option<f64> = None;
+    let mut roll_told: Option<f64> = None;
+    let mut gyro_at: Option<std::time::Instant> = None;
+    let mut moved_at = std::time::Instant::now() - std::time::Duration::from_secs(10);
+
+    let tell = |v: &Values, told: &Sender<Told>, wake: &Ping| {
+        let _ = told.send(Told { angle: v.angle, gravity: v.gravity, moving: v.moving, roll: v.roll, still: v.still });
+        wake.ping();
+    };
+
+    loop {
+        let timeout = if gliding { std::time::Duration::from_millis(FRAME_MS) } else { std::time::Duration::from_secs(5) };
+        let event = match events_rx.recv_timeout(timeout) {
+            Ok(e) => Some(e),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        };
+        let now = std::time::Instant::now();
+        let mut changed: HashMap<&str, Value<'_>> = HashMap::new();
+        match event {
+            Some(Event::Dark(d)) => {
+                if d != dark {
+                    dark = d;
+                    for s in sensors.iter() {
+                        call(&system, s, if dark { "stop" } else { "start" });
+                    }
+                    if !dark {
+                        fresh = true;
+                        if let Some(h) = read_hinge(&system) {
+                            let _ = events_tx.send(Event::Reading(Reading::Hinge(h)));
+                        }
+                    }
+                    tracing::info!("sensors: display {}", if dark { "off: not reading" } else { "on: reading" });
+                }
+            }
+            Some(Event::Lost(name)) => {
+                if let Some(s) = sensors.iter_mut().find(|s| s.name == name) {
+                    s.session = None;
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    open(&system, s, &events_tx);
+                    if !dark {
+                        call(&system, s, "start");
+                    }
+                }
+            }
+            Some(Event::Reading(Reading::Hinge(deg))) if !dark => {
+                let degrees = deg as f64;
+                if fresh {
+                    fresh = false;
+                    gliding = false;
+                    raw = Some(deg);
+                    raw_at = now;
+                    angle = Some(degrees);
+                    v.angle = degrees;
+                    v.raw = deg;
+                    v.velocity = 0.0;
+                    changed.insert("Angle", v.angle.into());
+                    changed.insert("Raw", v.raw.into());
+                    let name = posture_for(degrees, &v.posture);
+                    if name != v.posture {
+                        v.posture = name.into();
+                        changed.insert("Posture", v.posture.clone().into());
+                    }
+                    candidate = (name, 0);
+                    if v.moving {
+                        v.moving = false;
+                        changed.insert("Moving", false.into());
+                        changed.insert("Velocity", 0.0f64.into());
+                    }
+                } else {
+                    let interval = now.duration_since(raw_at).as_secs_f64().clamp(0.05, 0.3);
+                    raw = Some(deg);
+                    raw_at = now;
+                    changed.insert("Raw", deg.into());
+                    v.raw = deg;
+                    let a = angle.unwrap_or(degrees);
+                    v.velocity = (degrees - a) / (ARRIVE * interval);
+                    if !gliding {
+                        last_tick = now;
+                        gliding = true;
+                    }
+                    // The posture by the reading, after CONFIRM in a row.
+                    let name = posture_for(degrees, &v.posture);
+                    if name == v.posture {
+                        candidate = (name, 0);
+                    } else {
+                        let count = if candidate.0 == name { candidate.1 + 1 } else { 1 };
+                        candidate = (name, count);
+                        if count >= CONFIRM {
+                            v.posture = name.into();
+                            candidate = (name, 0);
+                            changed.insert("Posture", v.posture.clone().into());
+                        }
+                    }
+                    let moving = v.velocity.abs() >= MOVING_DEG_S;
+                    if moving != v.moving {
+                        v.moving = moving;
+                        changed.insert("Moving", moving.into());
+                        changed.insert("Velocity", v.velocity.into());
+                    }
+                }
+            }
+            Some(Event::Reading(Reading::Accel(xyz))) if !dark => {
+                let g = xyz.map(|x| x / 1000.0);
+                v.gravity = match gravity_told {
+                    None => g,
+                    Some(_) => [0, 1, 2].map(|i| v.gravity[i] + (g[i] - v.gravity[i]) * GRAVITY_SMOOTH),
+                };
+                if gravity_told.is_none_or(|t| (0..3).any(|i| (v.gravity[i] - t[i]).abs() >= GRAVITY_STEP)) {
+                    gravity_told = Some(v.gravity);
+                    changed.insert("Gravity", v.gravity.to_vec().into());
+                }
+                let [x, y, z] = v.gravity;
+                if z.abs() < ROLL_GRAVITY_MAX_Z && x * x + y * y > 0.1 {
+                    let own = x.atan2(y).to_degrees();
+                    roll = Some(match roll {
+                        None => own,
+                        Some(r) => r + ((own - r + 180.0).rem_euclid(360.0) - 180.0) * ROLL_PULL,
+                    });
+                }
+            }
+            Some(Event::Reading(Reading::Gyro(xyz))) if !dark => {
+                let [wx, wy, wz] = xyz.map(|x| x / 1000.0);
+                let moving = wx.abs().max(wy.abs()).max(wz.abs()) >= STILL_DEG_S;
+                if moving {
+                    moved_at = now;
+                }
+                let still = !moving && now.duration_since(moved_at).as_secs_f64() >= STILL_AFTER_S;
+                if still != v.still {
+                    v.still = still;
+                    changed.insert("Still", still.into());
+                }
+                if let (Some(at), Some(r)) = (gyro_at, roll) {
+                    let dt = now.duration_since(at).as_secs_f64().min(0.2);
+                    if moving {
+                        roll = Some((r + wz * dt + 180.0).rem_euclid(360.0) - 180.0);
+                    }
+                }
+                gyro_at = Some(now);
+            }
+            Some(Event::Reading(_)) => {}
+            None => {}
+        }
+        // The hinge gliding to its last reading.
+        if gliding && !dark {
+            let dt = now.duration_since(last_tick).as_secs_f64().min(0.05);
+            last_tick = now;
+            if let (Some(a), Some(r)) = (angle, raw) {
+                let next = a + v.velocity * dt;
+                let r = r as f64;
+                let arrived = (v.velocity > 0.0 && next >= r) || (v.velocity < 0.0 && next <= r) || v.velocity == 0.0;
+                let a = if arrived { r } else { next };
+                angle = Some(a);
+                v.angle = a;
+                changed.insert("Angle", a.into());
+                if arrived {
+                    gliding = false;
+                    v.velocity = 0.0;
+                }
+                let moving = v.velocity.abs() >= MOVING_DEG_S && now.duration_since(raw_at).as_secs_f64() * 1000.0 < STILL_AFTER_MS;
+                if moving != v.moving {
+                    v.moving = moving;
+                    changed.insert("Moving", moving.into());
+                    changed.insert("Velocity", v.velocity.into());
+                }
+            }
+        }
+        // The roll told at its step.
+        if let Some(r) = roll {
+            if roll_told.is_none_or(|t| (r - t).abs() >= ROLL_STEP) {
+                roll_told = Some(r);
+                v.roll = r;
+                changed.insert("Roll", r.into());
+            }
+        }
+        if !changed.is_empty() {
+            *shared.lock().unwrap() = v.clone();
+            tell(&v, &told, &wake);
+            publish(changed);
+        }
+    }
+}
+
+/// A session asked of sensorfw for `s`, its socket read on a thread.
+fn open(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<Event>) {
+    let r = system
+        .call_method(Some(SENSORFW), MANAGER, Some(MANAGER_IFACE), "loadPlugin", &(s.name,))
+        .and_then(|_| system.call_method(Some(SENSORFW), MANAGER, Some(MANAGER_IFACE), "requestSensor", &(s.name, 0i64)))
+        .and_then(|r| r.body().deserialize::<i32>());
+    let session = match r {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!("sensors: no {}: {e}", s.name);
+            return;
+        }
+    };
+    s.session = Some(session);
+    if let Some(ms) = s.interval_ms {
+        let _ = system.call_method(Some(SENSORFW), format!("{MANAGER}/{}", s.name).as_str(), Some(s.iface), "setInterval", &(session, ms));
+    }
+    tracing::info!("sensors: {} session {session}", s.name);
+    let (name, events) = (s.name, events.clone());
+    let _ = std::thread::Builder::new().name(format!("sensor {name}")).spawn(move || {
+        if let Err(e) = read_socket(session, name, &events) {
+            tracing::warn!("sensors: {name}'s socket: {e}");
+        }
+        let _ = events.send(Event::Lost(name));
+    });
+}
+
+fn call(system: &zbus::blocking::Connection, s: &Sensor, method: &str) {
+    if let Some(session) = s.session {
+        if let Err(e) = system.call_method(Some(SENSORFW), format!("{MANAGER}/{}", s.name).as_str(), Some(s.iface), method, &(session,)) {
+            tracing::warn!("sensors: {method} {}: {e}", s.name);
+        }
+    }
+}
+
+/// The hinge's value asked for once (the socket brings only changes).
+fn read_hinge(system: &zbus::blocking::Connection) -> Option<u32> {
+    let r = system
+        .call_method(Some(SENSORFW), "/SensorManager/hingesensor", Some("org.freedesktop.DBus.Properties"), "Get", &("local.HingeSensor", "hinge"))
+        .ok()?;
+    let v: OwnedValue = r.body().deserialize().ok()?;
+    // (timestamp, degrees) in a struct, or a plain number.
+    match v.downcast_ref::<zbus::zvariant::Structure>() {
+        Ok(s) => s.fields().get(1).and_then(|f| u32::try_from(f.try_clone().ok()?).ok()),
+        Err(_) => u32::try_from(v).ok(),
+    }
+}
+
+/// sensorfw's data socket for a session: a greeting byte, the session's
+/// number sent back, then frames of a count and as many readings - 16
+/// bytes for the hinge (u64 time, u32 value, 4 pad), 24 for x, y, z (u64,
+/// three f32, 4 pad). The last reading of a frame is the one told.
+fn read_socket(session: i32, name: &'static str, events: &Sender<Event>) -> std::io::Result<()> {
+    let mut sock = std::os::unix::net::UnixStream::connect(SOCKET)?;
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    let mut greeting = [0u8; 1];
+    sock.read_exact(&mut greeting)?;
+    sock.write_all(&session.to_le_bytes())?;
+    sock.set_read_timeout(None)?;
+    let size = if name == "hingesensor" { 16 } else { 24 };
+    let mut pending: Vec<u8> = Vec::with_capacity(4096);
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = sock.read(&mut buf)?;
+        if n == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "closed"));
+        }
+        pending.extend_from_slice(&buf[..n]);
+        let mut last: Option<Reading> = None;
+        while pending.len() >= 4 {
+            let count = u32::from_le_bytes([pending[0], pending[1], pending[2], pending[3]]) as usize;
+            if count > 1000 {
+                pending.clear();
+                break;
+            }
+            let end = 4 + size * count;
+            if pending.len() < end {
+                break;
+            }
+            if count > 0 {
+                let r = &pending[end - size..end];
+                last = Some(if name == "hingesensor" {
+                    Reading::Hinge(u32::from_le_bytes([r[8], r[9], r[10], r[11]]))
+                } else {
+                    let f = |o: usize| f32::from_le_bytes([r[o], r[o + 1], r[o + 2], r[o + 3]]) as f64;
+                    let xyz = [f(8), f(12), f(16)];
+                    if name == "gyroscopesensor" { Reading::Gyro(xyz) } else { Reading::Accel(xyz) }
+                });
+            }
+            pending.drain(..end);
+        }
+        if let Some(r) = last {
+            if events.send(Event::Reading(r)).is_err() {
+                return Ok(());
+            }
+        }
+    }
+}

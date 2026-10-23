@@ -22,6 +22,7 @@
 mod apps;
 mod back;
 mod boost;
+mod bus;
 mod mirror;
 mod clock;
 mod curtain;
@@ -57,6 +58,8 @@ mod accent;
 mod alert;
 mod camera;
 mod posture;
+mod sensors;
+mod flow;
 mod calls;
 mod dialog;
 mod display;
@@ -73,6 +76,12 @@ mod state;
 mod sysscreen;
 mod text;
 mod tour;
+mod haptic;
+mod prefs;
+mod kbd;
+mod secrets;
+mod typing;
+mod voice;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -147,7 +156,7 @@ struct Pacing {
     pen_peak_ns: f64,
     /// Whether the frame being drawn is the pen's.
     pen: bool,
-    /// The pen's budget the other way (`floor`, the default; `/tmp/item-
+    /// The pen's budget the other way (`floor`, the default; `$XDG_RUNTIME_DIR/item-
     /// pen-tune` says `old` for the one above, to compare them): hwcomposer's
     /// present waits for a moment of its own before the vsync, so its time
     /// counted whole into the budget drew the frame earlier and made the
@@ -247,6 +256,8 @@ struct Report {
     swap_ms: Vec<f64>,
     present_ms: Vec<f64>,
     touch_to_screen_ms: Vec<f64>,
+    /// A key of item's keyboard: the finger's lift to the client's answer on screen.
+    key_ms: Vec<f64>,
     /// From a finger's move on the shade (the kernel's time) to the frame
     /// showing it.
     shade_ms: Vec<f64>,
@@ -448,6 +459,41 @@ impl Data {
         if self.state.posture.take_changed() {
             self.state.needs_redraw = true;
         }
+        // Held another way: the system screen's Hinge row says so, and
+        // with the hinge horizontal the frame turns (layout.rs).
+        if self.state.posture.take_orientation_changed() {
+            self.state.system.stale();
+        }
+        // The frame's turn as the posture wants it (layout.rs): applied when
+        // it differs, but not while the lock screen, the first setup, the
+        // tour or the wallpaper picker hold the book's geometry (draft 45);
+        // then as soon as they let go.
+        {
+            use crate::posture::Orientation;
+            let turn = match self.state.posture.orientation() {
+                Orientation::Laptop { lid: p } | Orientation::Stacked { up: p } => if p == 1 { 1 } else { 2 },
+                _ => 0,
+            };
+            let held = self.state.lock.locked || self.state.setup.active || self.state.tour.watching() || self.state.picker.is_open();
+            let was = crate::layout::turn();
+            let dock_places = self.state.dock.places_now(hybris_hwc::now_ns());
+            if turn != was && !held && crate::layout::set_turn(turn) {
+                // The dock's halves glide from where they stood to their new corners.
+                self.state.dock.carry(dock_places, |(x, y)| { let p = crate::layout::carry((x, y).into(), was); (p.x, p.y) }, hybris_hwc::now_ns());
+                self.state.ribbon.turned(turn != 0);
+                self.state.deck = None;
+                self.state.grid.relay();
+                self.state.shade.quick.relay();
+                self.state.kbd.relay();
+                self.state.relayout = true;
+                self.state.apply_ribbon();
+                self.state.needs_redraw = true;
+            }
+        }
+        // The turn's animation wants a frame each vsync.
+        if self.screen.turning() {
+            self.state.needs_redraw = true;
+        }
         // Asleep when nothing needs it awake (sleep.rs).
         let playing = self.state.shade.quick.media.lock().unwrap().as_ref().is_some_and(|m| m.playing);
         let may = self.state.lock.locked && self.state.lock.blank && !self.state.calls.any() && !self.state.alert.holds_screen() && !playing && !self.state.setup.active && !self.state.idle_held();
@@ -515,6 +561,7 @@ impl Data {
             }
             self.state.display_config.set_dark(!lit);
             self.state.system.display(lit);
+            self.state.posture.dark(!lit);
         }
         // A finger held still on a desk: the wallpaper's choosing.
         if !self.state.picker.is_open() && !self.state.lock.holds_screen() && !self.state.setup.holds_screen() {
@@ -561,6 +608,7 @@ impl Data {
             }
         }
         self.state.lock.idle(now);
+        self.state.warm_tick(now);
         self.state.boost.tick(now);
         if now.saturating_sub(hybris_hwc::last_vsync_ns()) > 50_000_000 {
             self.pacing.target_ns = now + self.screen.vsync_period_ns;
@@ -789,7 +837,7 @@ impl Data {
             // Each missed frame, with where its time went.
             let d = hybris_hwc::last_present_detail();
             let ms = |ns: u64| ns as f64 / 1e6;
-            tracing::info!(
+            tracing::debug!(
                 "missed: drawn {:.1} ms before the vsync, draw {:.1} swap {:.1}, presented {:.1} ms late: {:.1} after the last present, validate {:.1}, present {:.1}, GPU {}; redrawn {:.0}%, shade {}",
                 target as f64 / 1e6 - started as f64 / 1e6, ms(draw_ns), ms(swap_ns), ms(presented - target),
                 ms(d.since_last_ns), ms(d.validate_ns), ms(d.present_ns), if d.gpu_pending { "busy" } else { "done" },
@@ -811,6 +859,11 @@ impl Data {
         }
         if let Some(touched) = self.state.touch_answered.take() {
             self.report.touch_to_screen_ms.push(shown_at.saturating_sub(touched) as f64 / 1e6);
+        }
+        if let Some(sent) = self.state.key_answered.take() {
+            let ms = shown_at.saturating_sub(sent) as f64 / 1e6;
+            tracing::debug!("keyboard: key->screen {ms:.1} ms");
+            self.report.key_ms.push(ms);
         }
         if let Some((moved_us, reached_ns)) = self.state.shade.take_moved() {
             let moved_ns = moved_us * 1000;
@@ -836,6 +889,30 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(hybris_hwc::now_ns());
         }
+        // A deck page on its way (state.rs): a frame each vsync.
+        if self.state.settle_deck(hybris_hwc::now_ns()) {
+            self.state.needs_redraw = true;
+        }
+        // The flow's row running (flow.rs): frames; settled on another
+        // cover, the screen pages to its window.
+        {
+            let (settled, frames) = self.state.flow.settle(hybris_hwc::now_ns());
+            if frames || self.state.flow.moving() {
+                self.state.needs_redraw = true;
+            }
+            if let Some(i) = settled {
+                self.state.flow_chose(i);
+            }
+        }
+        // The screen asked for another frame (a cover without its picture yet).
+        if self.screen.take_more_frames() {
+            self.state.needs_redraw = true;
+        }
+        // The turn's animation (output.rs, draft 42): a frame each vsync.
+        if self.screen.turning() {
+            self.state.needs_redraw = true;
+            self.state.boost.kick(hybris_hwc::now_ns());
+        }
         let now = hybris_hwc::now_ns();
         for done in self.state.gestures.settle(self.pacing.target_ns) {
             let crate::gesture::Done::PutAway(window, panel) = done;
@@ -853,6 +930,8 @@ impl Data {
         }
         let mut keep: Vec<_> = self.state.closing.iter().map(|(id, _)| id.clone()).collect();
         keep.extend(self.state.space.elements().map(|w| smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())));
+        // The flow's covers: every ribbon window's last frame kept (flow.rs).
+        keep.extend(self.state.ribbon.pages.iter().filter_map(|p| if let crate::ribbon::Page::App(w) = p { Some(smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())) } else { None }));
         self.screen.forget(&keep);
         // The volume bar: frames while it fades, one more when it is gone.
         match self.state.shade.quick.volume_bar_state(now) {
@@ -911,6 +990,32 @@ impl Data {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
         }
+        // The keyboard: words that came back from the microphone into its
+        // field; the mic pulses while it listens (kbd.rs).
+        self.state.kbd.poll();
+        // A finger held on a key: repeats, the row of alternatives.
+        self.state.kbd.hold(now);
+        for ask in self.state.kbd.asks() {
+            self.state.keyboard_ask(ask);
+        }
+        if self.state.kbd.settle(now) {
+            self.state.needs_redraw = true;
+            // Landed: the window above gives it the room (once).
+            self.state.follow_keyboard();
+        }
+        self.state.settle_field(now);
+        // The preferences changed in Settings (prefs.rs): applied.
+        if self.state.prefs.poll(now) {
+            let langs = self.state.prefs.langs.clone();
+            self.state.kbd.set_langs(langs);
+            crate::haptic::set_on(self.state.prefs.haptic);
+            self.state.needs_redraw = true;
+        }
+        // The big cores held up while the keyboard is up: a key after a
+        // pause answered at speed (the terminal took 35-77 ms, Web 300).
+        if self.state.kbd.out() {
+            self.state.boost.kick(now);
+        }
         if self.state.grid.settle(self.pacing.target_ns) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
@@ -941,13 +1046,30 @@ impl Data {
     fn log_report(&mut self) {
         // The pen's budget's way, as /tmp/item-pen-tune says (for the bench).
         // `old`, or `floor` and the margin in ms (`floor 2`).
-        let tune = std::fs::read_to_string("/tmp/item-pen-tune").unwrap_or_default();
+        let tune = std::fs::read_to_string(format!("{}/item-pen-tune", crate::prefs::runtime_dir())).unwrap_or_default();
         let mut words = tune.split_whitespace();
         self.pacing.pen_floor = words.next() != Some("old");
         self.pacing.pen_margin_ns = words.next().and_then(|m| m.parse::<f64>().ok()).map_or(PEN_MARGIN_NS, |m| (m * 1e6) as u64);
         let st = take_stats();
         let v = vsyncs();
         let r = std::mem::take(&mut self.report);
+        // The process's resident memory, logged when it moved 32 MB since
+        // the last line (for growth to be seen in the journal).
+        if let Some(rss) = std::fs::read_to_string("/proc/self/statm").ok().and_then(|s| s.split_whitespace().nth(1)?.parse::<u64>().ok()).map(|pages| pages * 4096) {
+            static LOGGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let last = LOGGED.load(std::sync::atomic::Ordering::Relaxed);
+            if rss.abs_diff(last) >= 32 << 20 {
+                LOGGED.store(rss, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!("memory: resident {} MB", rss >> 20);
+            }
+        }
+        // The second's report: for looking at (LOG_FRAMES=1), not for the
+        // journal every second of the phone's life.
+        if std::env::var_os("LOG_FRAMES").is_none() && r.missed == 0 {
+            let _ = self.state.boost.take_share(hybris_hwc::now_ns(), 1_000_000_000);
+            self.report.vsyncs_at_last = v;
+            return;
+        }
         let lat = &r.touch_to_screen_ms;
         let lat_text = if lat.is_empty() {
             String::from("-")
@@ -999,6 +1121,8 @@ extern "C" fn on_stop_signal(_: libc::c_int) {
 }
 
 fn stop_on_signal() {
+    // SAFETY: the handler has the C signature signal asks for and only stores an atomic,
+    // which is async-signal-safe.
     unsafe {
         let handler: extern "C" fn(libc::c_int) = on_stop_signal;
         libc::signal(libc::SIGTERM, handler as libc::sighandler_t);
@@ -1015,6 +1139,17 @@ fn stop_on_signal() {
 }
 
 fn main() {
+    // glibc's malloc for a process that passes 20-100 MB pixel buffers
+    // through: those come from mmap and go back to the system when freed,
+    // not from the heap where they would leave holes (the dynamic mmap
+    // threshold would climb to 32 MB after the first such free); the
+    // heap's free top is trimmed past 2 MB; four arenas for 58 threads.
+    // SAFETY: mallopt takes two integers; it is called before any other thread exists.
+    unsafe {
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 4 << 20);
+        libc::mallopt(libc::M_TRIM_THRESHOLD, 2 << 20);
+        libc::mallopt(libc::M_ARENA_MAX, 4);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1047,7 +1182,11 @@ fn main() {
         .expect("socket source");
     handle
         .insert_source(Generic::new(display, Interest::READ, CalloopMode::Level), |_, display, data: &mut Data| {
-            unsafe { display.get_mut().dispatch_clients(&mut data.state).unwrap() };
+            // SAFETY: get_mut is only unsafe because the source must keep its fd: the Display is
+            // dispatched here, never replaced or closed.
+            if let Err(e) = unsafe { display.get_mut().dispatch_clients(&mut data.state) } {
+                tracing::warn!("wayland: dispatching clients: {e}");
+            }
             if std::mem::take(&mut data.state.client_frame) {
                 data.on_client_frame();
             }
@@ -1084,14 +1223,16 @@ fn main() {
                 data.state.walls.reload();
                 data.state.needs_redraw = true;
             }
-            // `touch /tmp/item-shot` asks for a screenshot of the next frame.
-            if std::fs::remove_file("/tmp/item-shot").is_ok() {
-                data.screen.shot = Some(format!("/tmp/item-shot-{}.rgba", data.started.elapsed().as_secs()));
+            // `touch $XDG_RUNTIME_DIR/item-shot` asks for a screenshot of the
+            // next frame, written beside it (item/grid's screenshot).
+            let run = crate::prefs::runtime_dir();
+            if std::fs::remove_file(format!("{run}/item-shot")).is_ok() {
+                data.screen.shot = Some(format!("{run}/item-shot-{}.rgba", data.started.elapsed().as_secs()));
                 data.state.needs_redraw = true;
             }
-            // `touch /tmp/item-frames` asks for the next 40 frames
+            // `touch $XDG_RUNTIME_DIR/item-frames` asks for the next 40 frames
             // (FRAMES_COUNT).
-            if std::fs::remove_file("/tmp/item-frames").is_ok() {
+            if std::fs::remove_file(format!("{run}/item-frames")).is_ok() {
                 data.screen.frames_left = std::env::var("FRAMES_COUNT").ok().and_then(|n| n.parse().ok()).unwrap_or(40);
             }
             // `touch /tmp/item-birth`: the dock born of a drop where the
@@ -1219,6 +1360,10 @@ fn main() {
         })
         .expect("wake source");
     let mut state = State::new(dh.clone(), event_loop.get_signal(), wake);
+    // The keyboard's preferences at the start (prefs.rs).
+    crate::haptic::set_on(state.prefs.haptic);
+    let langs = state.prefs.langs.clone();
+    state.kbd.set_langs(langs);
     // The output's global after xdg-output's manager (made in State::new):
     // phosh-osk-stevia asks the manager for each wl_output as it is
     // announced, and crashed on a null manager when the output came first.
@@ -1234,7 +1379,9 @@ fn main() {
     // own fought it for the input method (the second one gets "unavailable").
     // No unit: stevia started directly. NO_OSK=1 leaves it out.
     // Under a session manager the keyboard is the session's (its target).
-    if std::env::var_os("NO_OSK").is_none() && args.session.is_none() {
+    // Not when the phone uses item's own keyboard (kbd.rs): stevia stays
+    // installed, for `item-switch keyboard stevia`.
+    if std::env::var_os("NO_OSK").is_none() && args.session.is_none() && kbd::choice() == kbd::Choice::Stevia {
         state.spawn("systemctl --user restart mobi.phosh.OSK.service 2>/dev/null || exec phosh-osk-stevia --replace");
     }
     // A real session starts locked, as phosh's does after a boot: the first

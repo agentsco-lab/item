@@ -30,6 +30,8 @@ pub struct Glass {
     /// The sharp picture in its lower half, the blurred in its upper.
     atlas: (GlesTexture, Size<i32, Buffer>),
     pane: Option<GlesTexProgram>,
+    /// The keyboard's tile (tile.frag).
+    tile: Option<GlesTexProgram>,
 }
 
 impl Glass {
@@ -51,7 +53,7 @@ impl Glass {
         let half = levels[0].1;
         let atlas_size: Size<i32, Buffer> = (half.w, half.h * 2).into();
         let atlas: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, atlas_size).ok()?;
-        let pane_names = ["texl", "src0", "origin"].map(|n| UniformName::new(n, UniformType::_2f)).into_iter().chain([UniformName::new("sheet", UniformType::_4f)]).collect::<Vec<_>>();
+        let pane_names = ["texl", "src0", "origin"].map(|n| UniformName::new(n, UniformType::_2f)).into_iter().chain([UniformName::new("sheet", UniformType::_4f), UniformName::new("turn", UniformType::_1f)]).collect::<Vec<_>>();
         let pane = match renderer.compile_custom_texture_shader(include_str!("pane.frag"), &pane_names) {
             Ok(p) => Some(p),
             Err(e) => {
@@ -59,7 +61,22 @@ impl Glass {
                 None
             }
         };
-        Some(Glass { program, levels, id: smithay::backend::renderer::element::Id::new(), atlas: (atlas, atlas_size), pane })
+        let tile_names = ["texl", "src0", "origin"].map(|n| UniformName::new(n, UniformType::_2f)).into_iter().chain([UniformName::new("tile", UniformType::_4f), UniformName::new("round", UniformType::_1f), UniformName::new("veil", UniformType::_1f), UniformName::new("turn", UniformType::_1f)]).collect::<Vec<_>>();
+        let tile = match renderer.compile_custom_texture_shader(include_str!("tile.frag"), &tile_names) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                tracing::warn!("glass: the tile's shader: {e}");
+                None
+            }
+        };
+        Some(Glass { program, levels, id: smithay::backend::renderer::element::Id::new(), atlas: (atlas, atlas_size), pane, tile })
+    }
+
+    /// The atlas: the picture sharp in its lower half (rows 0 to h/2 as
+    /// blitted), blurred in its upper, both at half the output's size; the
+    /// turn (output.rs) draws from the blurred half.
+    pub fn atlas(&self) -> (&GlesTexture, Size<i32, Buffer>) {
+        (&self.atlas.0, self.atlas.1)
     }
 
     /// Takes the canvas's picture and blurs it.
@@ -132,11 +149,16 @@ impl Glass {
         let program = self.pane.clone()?;
         let shadow = 0;
         let (w, full) = (panel.size.w, (h + shadow).min(self.atlas.1.h / 2));
-        let src = Rectangle::<f64, smithay::utils::Logical>::new((panel.loc.x as f64, 0.0).into(), (w as f64, full as f64).into());
+        // The element's part of the atlas: where the panel lies, or, turned,
+        // the corner (the shader samples where the frame lies anyway, and
+        // the frame's lower panel is below the atlas).
+        let turned = crate::layout::turned();
+        let at = if turned { (0.0, 0.0) } else { (panel.loc.x as f64, 0.0) };
+        let src = Rectangle::<f64, smithay::utils::Logical>::new(at.into(), (w as f64, full as f64).into());
         let inner = TextureRenderElement::from_static_texture(
             self.id.clone(),
             renderer.context_id(),
-            ((panel.loc.x * crate::layout::SCALE) as f64, 0.0),
+            ((panel.loc.x * crate::layout::SCALE) as f64, (panel.loc.y * crate::layout::SCALE) as f64),
             self.atlas.0.clone(),
             1,
             Transform::Normal,
@@ -148,9 +170,57 @@ impl Glass {
         );
         let uniforms = vec![
             Uniform::new("texl", (self.atlas.1.w as f32, self.atlas.1.h as f32)),
-            Uniform::new("src0", (panel.loc.x as f32, 0.0f32)),
-            Uniform::new("origin", (panel.loc.x as f32, 0.0f32)),
-            Uniform::new("sheet", (panel.loc.x as f32, w as f32, h as f32, 0.0f32)),
+            Uniform::new("src0", (at.0 as f32, at.1 as f32)),
+            Uniform::new("origin", (panel.loc.x as f32, panel.loc.y as f32)),
+            Uniform::new("sheet", (panel.loc.x as f32, w as f32, (panel.loc.y + h) as f32, 0.0f32)),
+            Uniform::new("turn", crate::layout::turn() as f32),
+        ];
+        Some(TextureShaderElement::new(inner, program, uniforms))
+    }
+
+    /// The keyboard's tile over `rect` (logical px) as frosted glass with
+    /// its top corners round (tile.frag), `tint` the dark's share, drawn at
+    /// `alpha`: None without its shader.
+    pub fn tile(&self, renderer: &GlesRenderer, rect: Rectangle<i32, smithay::utils::Logical>, round: f32, tint: f32, alpha: f32) -> Option<smithay::backend::renderer::gles::element::TextureShaderElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        use smithay::backend::renderer::gles::element::TextureShaderElement;
+        let program = self.tile.clone()?;
+        let half = self.atlas.1.h / 2;
+        let turned = crate::layout::turned();
+        let (y, h) = if turned {
+            (rect.loc.y, rect.size.h.min(half))
+        } else {
+            let y = rect.loc.y.clamp(0, half);
+            (y, (rect.loc.y + rect.size.h).clamp(0, half) - y)
+        };
+        if h <= 0 || rect.size.w > self.atlas.1.w {
+            return None;
+        }
+        // Its part of the atlas: where it lies, or, turned, the corner (the
+        // shader samples where the frame lies; see pane).
+        let at = if turned { (0.0, 0.0) } else { (rect.loc.x as f64, y as f64) };
+        let src = Rectangle::<f64, smithay::utils::Logical>::new(at.into(), (rect.size.w as f64, h as f64).into());
+        let inner = TextureRenderElement::from_static_texture(
+            self.id.clone(),
+            renderer.context_id(),
+            ((rect.loc.x * crate::layout::SCALE) as f64, (y * crate::layout::SCALE) as f64),
+            self.atlas.0.clone(),
+            1,
+            Transform::Normal,
+            Some(alpha),
+            Some(src),
+            Some((rect.size.w, h).into()),
+            None,
+            smithay::backend::renderer::element::Kind::Unspecified,
+        );
+        let uniforms = vec![
+            Uniform::new("texl", (self.atlas.1.w as f32, self.atlas.1.h as f32)),
+            Uniform::new("src0", (at.0 as f32, at.1 as f32)),
+            Uniform::new("origin", (rect.loc.x as f32, y as f32)),
+            Uniform::new("tile", (rect.loc.x as f32, rect.loc.y as f32, rect.size.w as f32, rect.size.h as f32)),
+            Uniform::new("round", round),
+            Uniform::new("veil", tint),
+            Uniform::new("turn", crate::layout::turn() as f32),
         ];
         Some(TextureShaderElement::new(inner, program, uniforms))
     }

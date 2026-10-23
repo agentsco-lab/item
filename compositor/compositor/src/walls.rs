@@ -94,6 +94,12 @@ pub struct Vignette {
     pub glow: bool,
 }
 
+impl Vignette {
+    /// The frame turned (layout.rs): the picture on the upper panel alone,
+    /// its edges darkened whether or not each panel has its own picture.
+    pub const TURNED: Vignette = Vignette { strength: 0.8, size: 0.62, soft: 0.75, glow: false };
+}
+
 impl Default for Vignette {
     fn default() -> Vignette {
         Vignette { strength: 0.55, size: 0.5, soft: 0.6, glow: false }
@@ -117,14 +123,13 @@ pub fn each_on() -> bool {
 
 /// The wallpaper's size, logical px (the screen and the parallax's room).
 fn canvas() -> (f64, f64) {
-    (crate::layout::LAYOUT.0 as f64 + crate::state::WALL_LEFT + crate::state::WALL_RIGHT, crate::layout::LAYOUT.1 as f64)
+    (crate::layout::LANDSCAPE.0 as f64 + crate::state::WALL_LEFT + crate::state::WALL_RIGHT, crate::layout::LANDSCAPE.1 as f64)
 }
 
 /// Where the seam between the panels' pictures is on the wallpaper, logical
 /// px: the middle of the hinge.
 fn seam() -> f64 {
-    let [l, r] = crate::layout::panels();
-    crate::state::WALL_LEFT + ((l.loc.x + l.size.w) as f64 + r.loc.x as f64) / 2.0
+    crate::state::WALL_LEFT + crate::layout::LANDSCAPE.0 as f64 / 2.0
 }
 
 /// A part of the wallpaper, logical px: x, y, w, h.
@@ -349,6 +354,28 @@ const BLACK: &str = "black";
 
 /// The small pictures' size, px.
 const THUMB_PX: (u32, u32) = (360, 202);
+
+/// A source picture kept at most this many px (12 Mpx, 48 MB in RGBA): the
+/// phone's pictures are 12-26 Mpx (50-104 MB each, three kept). The
+/// picker's zoom goes as far as the source's px allow (window), so the cap
+/// costs zoom on the largest pictures: 1.55x across both panels, 2x (the
+/// most) on one. 2026-10-23: item-compositor held 712 MB resident, most of
+/// it the pictures and the holes they left in the heap (main.rs's mallopt).
+const SOURCE_PX: f64 = 12.0e6;
+
+/// The decoded picture brought down to SOURCE_PX if it is larger.
+fn shrink((rgba, w, h): (Vec<u8>, u32, u32), name: &str) -> (Vec<u8>, u32, u32) {
+    let px = w as f64 * h as f64;
+    if px <= SOURCE_PX {
+        return (rgba, w, h);
+    }
+    let f = (SOURCE_PX / px).sqrt();
+    let (nw, nh) = (((w as f64 * f).round() as u32).max(1), ((h as f64 * f).round() as u32).max(1));
+    let mut out = vec![0u8; (nw * nh * 4) as usize];
+    resample(&rgba, w, h, (0.0, 0.0, w as f64, h as f64), &mut out, nw, 0, 0, nw, nh);
+    tracing::info!("walls: {name} {w}x{h} kept at {nw}x{nh}");
+    (out, nw, nh)
+}
 
 /// A window of `src` (x, y, w, h in its px, fractional) scaled into `dst`
 /// (stride `dst_w`) at (`dx`, `dy`), `dw` x `dh` px: separable, a triangle
@@ -779,7 +806,7 @@ impl Walls {
                     match hit {
                         Some(s) => s,
                         None => {
-                            let Some(d) = decode(path) else { continue };
+                            let Some(d) = decode(path).map(|d| shrink(d, &view.name)) else { continue };
                             let s: Source = Arc::new(d);
                             let mut c = cache.lock().unwrap();
                             c.retain(|(n, _)| *n != view.name);

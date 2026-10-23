@@ -73,7 +73,7 @@ impl Default for Style {
 static STYLE: Mutex<Option<(Style, u64)>> = Mutex::new(None);
 
 fn style_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/item/clock")
+    crate::prefs::path("clock")
 }
 
 /// The look now (read from its file the first time).
@@ -127,8 +127,8 @@ pub struct Clock {
     accent: u64,
     /// Carried along the ribbon at the last frame.
     was_carried: std::cell::Cell<bool>,
-    /// FONTS loaded: the time's and the date's.
-    all_fonts: Vec<Option<(Font, Font)>>,
+    /// FONTS, loaded as a look asks for one: the time's and the date's.
+    all_fonts: Vec<std::cell::OnceCell<Option<(Font, Font)>>>,
     /// The look it is drawn in (`style`'s count).
     styled: u64,
     /// Where it was last drawn, logical px: what a finger takes hold of.
@@ -150,7 +150,7 @@ impl Clock {
             on: std::cell::Cell::new((None, 0)),
             accent: 0,
             was_carried: Default::default(),
-            all_fonts: FONTS.iter().map(|(_, t, d)| Font::load(&[t]).zip(Font::load(&[d]))).collect(),
+            all_fonts: FONTS.iter().map(|_| std::cell::OnceCell::new()).collect(),
             styled: 0,
             last_rect: Default::default(),
         };
@@ -161,7 +161,7 @@ impl Clock {
     /// Brings it up to the minute; returns whether it changed.
     pub fn refresh(&mut self) -> bool {
         let (st, styled) = style();
-        let Some((bold, medium)) = self.all_fonts.get(st.font).and_then(|f| f.as_ref()).or(self.fonts.as_ref()) else { return false };
+        let Some((bold, medium)) = self.all_fonts.get(st.font).and_then(|f| f.get_or_init(|| FONTS.get(st.font).and_then(|(_, t, d)| Font::load(&[t]).zip(Font::load(&[d])))).as_ref()).or(self.fonts.as_ref()) else { return false };
         let now = local_time();
         let minute = now.tm_hour * 60 + now.tm_min;
         // The accent or the look changed: drawn again in it.
@@ -256,7 +256,7 @@ impl Clock {
         let rect = layout::panels()[panel];
         let mid = middle.map(|m| m.round() as i32).unwrap_or(rect.loc.x + rect.size.w / 2);
         let (fx, fy) = style().0.at.unwrap_or((1.0 - RIGHT as f64 / rect.size.w as f64, TOP));
-        let top = (rect.size.h as f64 * fy + moved.1).round() as i32;
+        let top = rect.loc.y + (rect.size.h as f64 * fy + moved.1).round() as i32;
         let mut out = Vec::new();
         let mut y = top;
         // Its right edge where its look puts it (RIGHT in from the panel's).

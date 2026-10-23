@@ -37,16 +37,32 @@ uniform float tint;
 uniform vec2 texl;
 uniform vec2 src0;
 uniform vec2 origin;
+// The frame's turn (layout.rs): 0 none, 1 the right panel up, 2 the left.
+uniform float turn;
 uniform vec4 sheet;
 
 const float TINT_A = 0.5;
 const vec3 TINT = vec3(0.04, 0.05, 0.08);
 
+// A point of the frame where it lies on the screen (the atlas is the
+// screen as hwcomposer has it, the hinge vertical).
+vec2 lying(vec2 q) {
+    if (turn > 1.5) {
+        return vec2(q.y, texl.y * 0.5 - q.x);
+    }
+    if (turn > 0.5) {
+        return vec2(texl.x - q.y, q.x);
+    }
+    return q;
+}
+
 vec3 sharp(vec2 q) {
+    q = lying(q);
     return texture2D(tex, vec2(q.x, texl.y * 0.5 - q.y) / texl).rgb;
 }
 
 vec3 frosted(vec2 q) {
+    q = lying(q);
     return texture2D(tex, vec2(q.x, texl.y - q.y) / texl).rgb;
 }
 
