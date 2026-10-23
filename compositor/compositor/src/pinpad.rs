@@ -273,6 +273,7 @@ impl PinPad {
     }
 
     pub fn clear(&mut self) {
+        // SAFETY: zeroing the bytes keeps the String valid UTF-8.
         unsafe { self.pin.as_bytes_mut().fill(0) };
         self.pin.clear();
         self.pressed = None;
@@ -294,7 +295,10 @@ impl PinPad {
         let w = 3.0 * KEY + 2.0 * KEY_GAP;
         let x0 = p.loc.x as f64 + (p.size.w as f64 - w) / 2.0;
         let (col, row) = ((i % 3) as f64, (i / 3) as f64);
-        Rectangle::new((x0 + col * (KEY + KEY_GAP), PAD_TOP + row * (KEY + KEY_GAP)).into(), (KEY, KEY).into())
+        // From its panel's top (the deck's, the frame turned); the pad sits
+        // lower in the book's tall panel than in the turned frame's short one.
+        let top = p.loc.y as f64 + if layout::turned() { 40.0 } else { PAD_TOP };
+        Rectangle::new((x0 + col * (KEY + KEY_GAP), top + row * (KEY + KEY_GAP)).into(), (KEY, KEY).into())
     }
 
     /// The OK key's middle: an unlock's wave starts there.

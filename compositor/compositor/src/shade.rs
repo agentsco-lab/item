@@ -232,6 +232,11 @@ impl Shade {
     /// an open sheet. Returns whether it was.
     pub fn down(&mut self, slot: TouchSlot, x: f64, y: f64, time_us: u64) -> bool {
         let Some(p) = layout::panel_at((x, y).into()) else { return false };
+        // The frame turned (layout.rs): the shade is the screen's; the
+        // deck has none.
+        if layout::turned() && p == 1 {
+            return false;
+        }
         let now = hybris_hwc::now_ns();
         let sheet = &mut self.sheets[p];
         let height = sheet.height_at(now);
@@ -329,7 +334,7 @@ impl Shade {
         }
         grab.last = (time_us, y);
         grab.moved |= (y - grab.start_y).abs() > TAP;
-        sheet.height = (y + grab.offset).clamp(0.0, layout::LAYOUT.1 as f64);
+        sheet.height = (y + grab.offset).clamp(0.0, Self::full());
         self.moved.get_or_insert((time_us, hybris_hwc::now_ns()));
     }
 
@@ -370,8 +375,13 @@ impl Shade {
         None
     }
 
+    /// A sheet's full height: its panel's (the frame's, in the book).
+    fn full() -> f64 {
+        layout::panels()[0].size.h as f64
+    }
+
     fn release(&mut self, slot: TouchSlot) {
-        let full = layout::LAYOUT.1 as f64;
+        let full = Self::full();
         for (p, sheet) in self.sheets.iter_mut().enumerate() {
             if !sheet.grab.as_ref().is_some_and(|g| g.slot == slot) {
                 continue;
@@ -398,7 +408,7 @@ impl Shade {
     pub fn open(&mut self, panel: usize) {
         let opened = self.visible();
         let sheet = &mut self.sheets[panel];
-        let full = layout::LAYOUT.1 as f64;
+        let full = Self::full();
         sheet.grab = None;
         sheet.run = Some(Run::new(sheet.height, full, 0.0));
         sheet.height = full;
@@ -492,7 +502,7 @@ impl Shade {
             let panel = panel.to_physical(SCALE);
             // The content is there from the start, hanging from the edge the
             // finger pulls: only the first bit of the way brings it up.
-            let k = (heights[i] as f64 / layout::LAYOUT.1 as f64 / 0.15).clamp(0.0, 1.0);
+            let k = (heights[i] as f64 / Self::full() / 0.15).clamp(0.0, 1.0);
             let alpha = (k * k * (3.0 - 2.0 * k)) as f32;
             // The settings (left) or the open windows (right), over the head.
             out.extend(self.quick.elements(renderer, i, panel.loc.x, h, rows, alpha));
@@ -514,15 +524,16 @@ impl Shade {
             let icons = [&self.net_icon, &self.battery_icon].iter().filter(|i| i.is_some()).count() as i32;
             let width = icons * 22 + 10 + self.battery.extent.w;
             let mut x = panel.loc.x + (panel.size.w - width * SCALE) / 2;
+            // (quick.rs's sliders start under it, at -584.)
             if let Some(ic) = &self.net_icon {
-                put(&mut out, ic, x, -628);
+                put(&mut out, ic, x, -622);
                 x += 32 * SCALE;
             }
             if let Some(ic) = &self.battery_icon {
-                put(&mut out, ic, x, -628);
+                put(&mut out, ic, x, -622);
                 x += 22 * SCALE;
             }
-            put(&mut out, &self.battery.buffer, x, -630);
+            put(&mut out, &self.battery.buffer, x, -624);
             let mut ids = sheet.ids.iter();
             let handle = Rectangle::<i32, Physical>::new(
                 (panel.loc.x + panel.size.w / 2 - 30 * SCALE, h - 16 * SCALE).into(),
@@ -557,6 +568,8 @@ pub fn date_line(tm: &libc::tm) -> String {
 }
 
 pub fn local_time() -> libc::tm {
+    // SAFETY: time with a null argument is allowed; `tm` is a live local (all-zero is a valid tm)
+    // and `now` a live time_t for localtime_r.
     unsafe {
         let now = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();

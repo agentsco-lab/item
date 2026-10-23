@@ -78,12 +78,15 @@ pub enum Tile {
     Dark,
     Airplane,
     Night,
+    /// The keyboard's ticks (haptic.rs): the `haptic` preference, as item
+    /// Settings' switch writes it (prefs.rs).
+    Haptic,
     /// CV ID (face.rs): on with a face kept; tapped, the caller's.
     Face,
     Settings,
 }
 
-const TILES: [Tile; 10] = [Tile::Wifi, Tile::Data, Tile::Bluetooth, Tile::Mute, Tile::Dnd, Tile::Dark, Tile::Airplane, Tile::Night, Tile::Face, Tile::Settings];
+const TILES: [Tile; 11] = [Tile::Wifi, Tile::Data, Tile::Bluetooth, Tile::Mute, Tile::Dnd, Tile::Dark, Tile::Airplane, Tile::Night, Tile::Haptic, Tile::Face, Tile::Settings];
 
 impl Tile {
     fn label(self) -> &'static str {
@@ -96,6 +99,7 @@ impl Tile {
             Tile::Dark => "Dark Style",
             Tile::Airplane => "Airplane Mode",
             Tile::Night => "Night Light",
+            Tile::Haptic => "Vibration",
             Tile::Face => "Face Unlock",
             Tile::Settings => "Settings",
         }
@@ -111,6 +115,7 @@ impl Tile {
             Tile::Dark => "/usr/share/icons/Adwaita/symbolic/status/weather-clear-night-symbolic.svg",
             Tile::Airplane => "/usr/share/icons/Adwaita/symbolic/status/airplane-mode-symbolic.svg",
             Tile::Night => "/usr/share/icons/Adwaita/symbolic/status/night-light-symbolic.svg",
+            Tile::Haptic => "/usr/share/item/icons/vibration-symbolic.svg",
             Tile::Face => "/usr/share/icons/Adwaita/symbolic/status/avatar-default-symbolic.svg",
             Tile::Settings => "/usr/share/icons/hicolor/symbolic/apps/org.gnome.Settings-symbolic.svg",
         }
@@ -126,6 +131,7 @@ impl Tile {
             Tile::Dark => s.dark,
             Tile::Airplane => s.airplane,
             Tile::Night => s.night,
+            Tile::Haptic => crate::haptic::on(),
             Tile::Face => crate::face::enrolled(),
             Tile::Settings => false,
         }
@@ -170,12 +176,25 @@ pub struct Row {
 // The layout, logical px from the panel's left and from the sheet's bottom
 // edge (the content hangs from it, as the head does).
 const SIDE: f64 = 30.0;
+
+/// The settings sheet's layout (`Quick::lay`): the tiles' columns, where the
+/// tiles and the lock/power buttons start (from the sheet's bottom edge),
+/// and the two sliders' rectangles.
+struct Lay {
+    cols: usize,
+    tiles_y: f64,
+    power_y: f64,
+    brightness: Rectangle<f64, Logical>,
+    volume: Rectangle<f64, Logical>,
+}
 const SLIDER_H: f64 = 48.0;
-const BRIGHTNESS_Y: f64 = -644.0;
-const VOLUME_Y: f64 = -584.0;
-const TILE_H: f64 = 72.0;
-const TILE_GAP: f64 = 12.0;
-const TILES_Y: f64 = -512.0;
+// Under the head (shade.rs: the time at -760, the date at -668, the status
+// line at -624): the sliders, four rows of tiles, the lock and the power.
+const BRIGHTNESS_Y: f64 = -584.0;
+const VOLUME_Y: f64 = -524.0;
+const TILE_H: f64 = 56.0;
+const TILE_GAP: f64 = 10.0;
+const TILES_Y: f64 = -452.0;
 const POWER_Y: f64 = -164.0;
 const BUTTON_H: f64 = 52.0;
 const ICON: i32 = 24;
@@ -289,8 +308,8 @@ impl Quick {
             media,
             jobs: tx,
             font: Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]),
-            tile_on: crate::accent::Rounded::new(tile_w, TILE_H, 20.0),
-            tile_off: crate::grid::rounded(tile_w, TILE_H, 20.0, [34, 34, 34, 34]),
+            tile_on: crate::accent::Rounded::new(tile_w, TILE_H, 16.0),
+            tile_off: crate::grid::rounded(tile_w, TILE_H, 16.0, [34, 34, 34, 34]),
             button: crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, [34, 34, 34, 34]),
             button_red: crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, RED),
             media_bg: crate::grid::rounded(panel_w - 2.0 * SIDE, MEDIA_H, 22.0, [34, 34, 34, 34]),
@@ -317,23 +336,74 @@ impl Quick {
         let _ = self.jobs.send(Job::Read);
     }
 
-    fn tile_rect(i: usize) -> Rectangle<f64, Logical> {
+    /// The sheet's layout: the book's panel (675 wide, the sheet 900 tall:
+    /// the sliders one under the other, three columns of tiles) or the
+    /// turned frame's screen (900 wide, 675 tall, the dock's band at its
+    /// bottom: the sliders side by side, four columns, everything higher).
+    fn lay() -> Lay {
         let panel_w = crate::layout::panels()[0].size.w as f64;
-        let w = (panel_w - 2.0 * SIDE - 2.0 * TILE_GAP) / 3.0;
-        let (col, row) = ((i % 3) as f64, (i / 3) as f64);
-        Rectangle::new((SIDE + col * (w + TILE_GAP), TILES_Y + row * (TILE_H + TILE_GAP)).into(), (w, TILE_H).into())
+        if crate::layout::turned() {
+            let half = (panel_w - 2.0 * SIDE - 2.0 * TILE_GAP) / 2.0;
+            Lay {
+                cols: 4,
+                tiles_y: -480.0,
+                power_y: -230.0,
+                brightness: Rectangle::new((SIDE, -560.0).into(), (half, SLIDER_H).into()),
+                volume: Rectangle::new((SIDE + half + 2.0 * TILE_GAP, -560.0).into(), (half, SLIDER_H).into()),
+            }
+        } else {
+            let full = panel_w - 2.0 * SIDE;
+            Lay {
+                cols: 3,
+                tiles_y: TILES_Y,
+                power_y: POWER_Y,
+                brightness: Rectangle::new((SIDE, BRIGHTNESS_Y).into(), (full, SLIDER_H).into()),
+                volume: Rectangle::new((SIDE, VOLUME_Y).into(), (full, SLIDER_H).into()),
+            }
+        }
+    }
+
+    fn tile_w() -> f64 {
+        let panel_w = crate::layout::panels()[0].size.w as f64;
+        let cols = Self::lay().cols as f64;
+        (panel_w - 2.0 * SIDE - (cols - 1.0) * TILE_GAP) / cols
+    }
+
+    fn tile_rect(i: usize) -> Rectangle<f64, Logical> {
+        let lay = Self::lay();
+        let w = Self::tile_w();
+        let (col, row) = ((i % lay.cols) as f64, (i / lay.cols) as f64);
+        Rectangle::new((SIDE + col * (w + TILE_GAP), lay.tiles_y + row * (TILE_H + TILE_GAP)).into(), (w, TILE_H).into())
+    }
+
+    /// The frame turned (layout.rs): the pieces drawn to the new widths.
+    pub fn relay(&mut self) {
+        let panel_w = crate::layout::panels()[0].size.w as f64;
+        let tile_w = Self::tile_w();
+        let track_w = Self::lay().brightness.size.w - 48.0;
+        let button_w = (panel_w - 2.0 * SIDE - TILE_GAP) / 2.0;
+        self.tile_on = crate::accent::Rounded::new(tile_w, TILE_H, 16.0);
+        self.tile_off = crate::grid::rounded(tile_w, TILE_H, 16.0, [34, 34, 34, 34]);
+        self.button = crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, [34, 34, 34, 34]);
+        self.button_red = crate::grid::rounded(button_w, BUTTON_H, BUTTON_H / 2.0, RED);
+        self.media_bg = crate::grid::rounded(panel_w - 2.0 * SIDE, MEDIA_H, 22.0, [34, 34, 34, 34]);
+        self.track = crate::grid::rounded(track_w, 8.0, 4.0, [40, 40, 40, 40]);
+        self.fill = crate::grid::rounded(track_w, 8.0, 4.0, [235, 235, 235, 235]);
+        self.row_bg = crate::grid::rounded(panel_w - 2.0 * SIDE, ROW_H - 8.0, 16.0, [16, 16, 16, 16]);
+        self.banner_bg = crate::grid::rounded(panel_w - 32.0, 72.0, 18.0, [36, 40, 46, 245]);
     }
 
     /// The buttons under the tiles: 0 lock (or restart), 1 power.
     fn button_rect(i: usize) -> Rectangle<f64, Logical> {
         let panel_w = crate::layout::panels()[0].size.w as f64;
         let w = (panel_w - 2.0 * SIDE - TILE_GAP) / 2.0;
-        Rectangle::new((SIDE + i as f64 * (w + TILE_GAP), POWER_Y).into(), (w, BUTTON_H).into())
+        Rectangle::new((SIDE + i as f64 * (w + TILE_GAP), Self::lay().power_y).into(), (w, BUTTON_H).into())
     }
 
+    /// A slider's rectangle, named by its book y (BRIGHTNESS_Y or VOLUME_Y).
     fn slider_rect(y: f64) -> Rectangle<f64, Logical> {
-        let panel_w = crate::layout::panels()[0].size.w as f64;
-        Rectangle::new((SIDE, y).into(), (panel_w - 2.0 * SIDE, SLIDER_H).into())
+        let lay = Self::lay();
+        if y == BRIGHTNESS_Y { lay.brightness } else { lay.volume }
     }
 
     /// The track of a slider, from its rect: left of it the icon.
@@ -464,7 +534,7 @@ impl Quick {
 
     /// The bar's rectangle (logical): its x, top, width, height.
     fn bar_rect() -> (f64, f64, f64, f64) {
-        (crate::layout::LAYOUT.0 as f64 - BAR_EDGE - BAR_W, BAR_Y, BAR_W, BAR_H)
+        (crate::layout::size().0 as f64 - BAR_EDGE - BAR_W, BAR_Y, BAR_W, BAR_H)
     }
 
     /// A finger down: on the volume bar while it is up, it takes the bar
@@ -552,6 +622,14 @@ impl Quick {
             Tile::Dark => sys.dark = on,
             Tile::Airplane => sys.airplane = on,
             Tile::Night => sys.night = on,
+            // At once, so the tile and the next key answer; the file for
+            // Settings' switch and the next start.
+            Tile::Haptic => {
+                crate::haptic::set_on(on);
+                if on {
+                    crate::haptic::tick(crate::haptic::Tick::Firm);
+                }
+            }
             Tile::Settings | Tile::Face => return,
         }
         let _ = self.jobs.send(Job::Toggle(tile, on));
@@ -584,6 +662,11 @@ impl Quick {
         self.labels.borrow().get(&key).map(|l| l.extent.w as f64).unwrap_or(0.0)
     }
 
+    fn label_height(&self, text: &str, size: f32, color: [f32; 4]) -> f64 {
+        let key = format!("{size}:{color:?}:{text}");
+        self.labels.borrow().get(&key).map(|l| l.extent.h as f64).unwrap_or(0.0)
+    }
+
     /// What the settings (panel 0) or the windows (panel 1) draw, the sheet's
     /// bottom edge at `bottom` (physical px), the panel's left at `left`,
     /// with `alpha` as the sheet comes.
@@ -611,39 +694,24 @@ impl Quick {
                 (VOLUME_Y, if sys.muted { 0.0 } else { sys.volume }, "/usr/share/icons/Adwaita/symbolic/status/audio-volume-high-symbolic.svg"),
             ] {
                 let (a, b) = Self::track_span(y);
-                let cy = y + SLIDER_H / 2.0;
+                let r = Self::slider_rect(y);
+                let cy = r.loc.y + SLIDER_H / 2.0;
                 let knob_x = a + (b - a) * value;
                 push(&self.knob, knob_x - 12.0, cy - 12.0, None);
                 push(&self.fill, a, cy - 4.0, Some(Rectangle::new((0.0, 0.0).into(), ((b - a) * value, 8.0).into())));
                 push(&self.track, a, cy - 4.0, None);
                 if let Some(i) = self.icons.get(icon) {
-                    push(i, SIDE + 4.0, cy - ICON as f64 / 2.0, None);
+                    push(i, r.loc.x + 4.0, cy - ICON as f64 / 2.0, None);
                 }
             }
-            // A tile: its icon, its name, and under it what it is now.
+            // A tile: its icon and its name in one line; what it is now is
+            // its fill (the accent when on).
             for (i, tile) in TILES.iter().enumerate() {
                 let r = Self::tile_rect(i);
                 let on = tile.on(&sys);
-                let state = match tile {
-                    Tile::Settings => None,
-                    _ => Some(if on { "On".to_owned() } else { "Off".to_owned() }),
-                };
-                let text_x = r.loc.x + 54.0;
-                match &state {
-                    Some(st) => {
-                        if let Some(l) = self.label(tile.label(), 14.0, WHITE) {
-                            push(&l, text_x, r.loc.y + 14.0, None);
-                        }
-                        let color = if on { [1.0, 1.0, 1.0, 0.8] } else { DIM };
-                        if let Some(l) = self.label(st, 12.0, color) {
-                            push(&l, text_x, r.loc.y + 38.0, None);
-                        }
-                    }
-                    None => {
-                        if let Some(l) = self.label(tile.label(), 14.0, WHITE) {
-                            push(&l, text_x, r.loc.y + 25.0, None);
-                        }
-                    }
+                if let Some(l) = self.label(tile.label(), 14.0, WHITE) {
+                    let h = self.label_height(tile.label(), 14.0, WHITE);
+                    push(&l, r.loc.x + 54.0, r.loc.y + (TILE_H - h) / 2.0, None);
                 }
                 if let Some(ic) = self.icons.get(tile.icon()) {
                     push(ic, r.loc.x + 18.0, r.loc.y + (TILE_H - ICON as f64) / 2.0, None);
@@ -741,7 +809,8 @@ impl Quick {
     /// `age` into its time, sliding in and out over 200 ms. The card's
     /// rect (logical px) for touches, and what it draws.
     pub fn banner(&self, renderer: &mut GlesRenderer, note: &crate::notify::Note, age_ns: u64) -> (Rectangle<f64, Logical>, Vec<ShellElement>) {
-        let panel = crate::layout::panels()[1];
+        // The right panel's top; turned (layout.rs), the screen's.
+        let panel = crate::layout::panels()[if crate::layout::turned() { 0 } else { 1 }];
         let (w, h) = (panel.size.w as f64 - 32.0, 72.0);
         let slide = 200e6;
         let left_ns = crate::notify::BANNER_NS.saturating_sub(age_ns) as f64;
@@ -807,7 +876,7 @@ fn set(cmd: &str, args: &[&str]) {
 /// are set to it at the start - left alone they came up apart, one at the
 /// level systemd-backlight saved (12 of 255), the other at 200.
 fn brightness_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/item/brightness")
+    crate::prefs::path("brightness")
 }
 
 /// The level kept; 40 % at first, as the port's own default.
@@ -837,10 +906,14 @@ fn read_sys() -> Sys {
         .split("Sink #")
         .find(|b| default.as_ref().is_some_and(|d| b.contains(&format!("Name: {d}"))))
         .unwrap_or("");
+    // "Volume: front-left: 29491 /  45%,   front-right: ..." - the first
+    // channel's percent; a sink with dB has "/ 45% / -20.00 dB," there,
+    // the droid sinks have not (every key press set 45 %, 2026-10-21).
     let volume = block
         .lines()
         .find(|l| l.trim_start().starts_with("Volume:"))
         .and_then(|l| l.split('/').nth(1))
+        .and_then(|p| p.split(',').next())
         .and_then(|p| p.trim().trim_end_matches('%').trim().parse::<f64>().ok())
         .map(|p| p / 100.0)
         .unwrap_or(0.5);
@@ -893,7 +966,7 @@ fn read_media(bus: &zbus::blocking::Connection) -> Option<Media> {
 }
 
 fn worker(rx: mpsc::Receiver<Job>, sys: Arc<Mutex<Sys>>, media: Arc<Mutex<Option<Media>>>, wake: Ping) {
-    let bus = zbus::blocking::Connection::session().map_err(|e| tracing::warn!("quick: no session bus, no media players: {e}")).ok();
+    let bus = crate::bus::session().map_err(|e| tracing::warn!("quick: no session bus, no media players: {e}")).ok();
     let read_media_now = || {
         let m = bus.as_ref().and_then(read_media);
         *media.lock().unwrap() = m;
@@ -988,6 +1061,7 @@ fn worker(rx: mpsc::Receiver<Job>, sys: Arc<Mutex<Sys>>, media: Arc<Mutex<Option
                         Tile::Dark => {
                             set("gsettings", &["set", "org.gnome.desktop.interface", "color-scheme", if on { "prefer-dark" } else { "default" }]);
                         }
+                        Tile::Haptic => crate::prefs::write("haptic", onoff),
                         Tile::Settings | Tile::Face => {}
                     }
                     // What the system says now.

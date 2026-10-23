@@ -23,7 +23,6 @@ use smithay::reexports::input::{Libinput, LibinputInterface};
 use smithay::utils::SERIAL_COUNTER;
 
 use crate::dock::Tap;
-use crate::layout::LAYOUT;
 use crate::state::State;
 use crate::Data;
 
@@ -94,11 +93,11 @@ pub fn init(handle: &LoopHandle<'static, Data>) {
         .expect("libinput source");
 }
 
-/// The on-screen keyboard shown or hidden, as phosh asks stevia
-/// (sm.puri.OSK0), on a thread.
-fn toggle_keyboard() {
+/// stevia shown or hidden, as phosh asks it (sm.puri.OSK0), on a thread:
+/// the power key's when the phone uses stevia (kbd::choice).
+pub fn toggle_stevia() {
     std::thread::spawn(|| {
-        let Ok(bus) = zbus::blocking::Connection::session() else { return };
+        let Ok(bus) = crate::bus::session() else { return };
         let visible = bus
             .call_method(Some("sm.puri.OSK0"), "/sm/puri/OSK0", Some("org.freedesktop.DBus.Properties"), "Get", &("sm.puri.OSK0", "Visible"))
             .ok()
@@ -132,6 +131,11 @@ impl State {
     /// A finger takes the ribbon at x: the pages that may come are made
     /// ready to be drawn.
     fn ribbon_grab(&mut self, slot: TouchSlot, x: f64, time: u64) {
+        // On the deck (the turned frame's lower panel) a sideways swipe is
+        // the deck's, not the ribbon's (state.rs's deck_swiped).
+        if self.deck_swipe.is_some_and(|(s, ..)| s == slot) {
+            return;
+        }
         self.system.ready();
         self.pen.ready();
         self.ribbon.grab(slot, x, time);
@@ -151,7 +155,7 @@ impl State {
                     if event.state() == KeyState::Pressed {
                         if !self.lock.blank {
                             if !self.lock.locked && !self.setup.holds_screen() {
-                                toggle_keyboard();
+                                self.toggle_keyboard();
                             }
                         } else if !self.lid_shut {
                             tracing::info!("power key: dark with the lid open: lit");
@@ -224,14 +228,14 @@ impl State {
                 }
                 return;
             }
-            InputEvent::TouchDown { event } => Contact::Down(event.slot(), event.position_transformed(LAYOUT.into()), event.time()),
-            InputEvent::TouchMotion { event } => Contact::Motion(event.slot(), event.position_transformed(LAYOUT.into()), event.time()),
+            InputEvent::TouchDown { event } => Contact::Down(event.slot(), crate::layout::from_landscape(event.position_transformed(crate::layout::LANDSCAPE.into())), event.time()),
+            InputEvent::TouchMotion { event } => Contact::Motion(event.slot(), crate::layout::from_landscape(event.position_transformed(crate::layout::LANDSCAPE.into())), event.time()),
             InputEvent::TouchUp { event } => Contact::Up(event.slot(), event.time()),
             InputEvent::TouchFrame { .. } => Contact::Frame,
             InputEvent::TouchCancel { .. } => Contact::Cancel,
             // The pen: its tip down, moved, up.
             InputEvent::TabletToolTip { event } => {
-                let pos = event.position_transformed(LAYOUT.into());
+                let pos = crate::layout::from_landscape(event.position_transformed(crate::layout::LANDSCAPE.into()));
                 // On the pen's sheet the pen draws, with its pressure; its
                 // other end erases.
                 let down = TabletToolTipEvent::<LibinputInputBackend>::tip_state(&event) == TabletToolTipState::Down;
@@ -253,7 +257,7 @@ impl State {
                     if l.len() >= 5 {
                         l.sort_by(|a, b| a.total_cmp(b));
                         let at = |q: f64| l[((l.len() - 1) as f64 * q).round() as usize];
-                        tracing::info!("pen: pen->screen over {} frames: median {:.1}, p95 {:.1}, max {:.1} ms", l.len(), at(0.5), at(0.95), at(1.0));
+                        tracing::debug!("pen: pen->screen over {} frames: median {:.1}, p95 {:.1}, max {:.1} ms", l.len(), at(0.5), at(0.95), at(1.0));
                     }
                     self.needs_redraw = true;
                     return;
@@ -268,7 +272,7 @@ impl State {
             }
             InputEvent::TabletToolAxis { event } => {
                 if self.pen_drawing {
-                    let pos = event.position_transformed(LAYOUT.into());
+                    let pos = crate::layout::from_landscape(event.position_transformed(crate::layout::LANDSCAPE.into()));
                     let eraser = TabletToolEvent::<LibinputInputBackend>::tool(&event).tool_type == TabletToolType::Eraser;
                     self.pen.pen_motion(pos, TabletToolEvent::<LibinputInputBackend>::pressure(&event), eraser, event.time());
                     // The newest move before the frame: its kernel time and
@@ -283,7 +287,7 @@ impl State {
                 if !self.pen_down {
                     return;
                 }
-                self.contact(Contact::Motion(pen_slot(), event.position_transformed(LAYOUT.into()), event.time()));
+                self.contact(Contact::Motion(pen_slot(), crate::layout::from_landscape(event.position_transformed(crate::layout::LANDSCAPE.into())), event.time()));
                 Contact::Frame
             }
             // The pen's barrel button, held: it erases on the sheet.
@@ -297,6 +301,22 @@ impl State {
     }
 
     fn contact(&mut self, contact: Contact) {
+        // The turn's animation (draft 42): what is touched is on its way;
+        // the touches in flight are cancelled, new ones dropped.
+        if crate::layout::turning_now(hybris_hwc::now_ns()) && !matches!(contact, Contact::Cancel) {
+            if !self.turn_cancelled {
+                self.turn_cancelled = true;
+                self.contact(Contact::Cancel);
+            }
+            return;
+        }
+        self.turn_cancelled = false;
+        // No posture decided while a finger is down or just after (posture.rs).
+        match &contact {
+            Contact::Down(..) => crate::posture::touched(true, hybris_hwc::now_ns()),
+            Contact::Up(..) | Contact::Cancel => crate::posture::touched(false, hybris_hwc::now_ns()),
+            _ => {}
+        }
         match contact {
             Contact::Down(slot, _, _) if slot == pen_slot() => self.pen_down = true,
             Contact::Up(slot, _) if slot == pen_slot() => self.pen_down = false,
@@ -335,7 +355,11 @@ impl State {
                         }
                     }
                 }
-                Contact::Cancel => self.setup_touch = None,
+                Contact::Cancel => {
+                    self.setup_touch = None;
+                    self.deck_swipe = None;
+                    self.flow.cancel();
+                }
                 _ => {}
             }
             self.needs_redraw = true;
@@ -578,9 +602,23 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                // The flow's row on the deck (flow.rs): a finger in its room is its.
+                if crate::layout::turned() && self.deck.is_none() && !self.lock.locked && self.flow.shown() && crate::flow::Flow::band(crate::flow::Flow::room(self.kbd.deck_cut())).contains(pos) && self.flow.down(slot, pos, time) {
+                    self.needs_redraw = true;
+                    return;
+                }
+                // A finger on the deck: its sideways travel is read on the lift.
+                if crate::layout::turned() && crate::layout::panel_at(pos) == Some(1) && !self.lock.locked {
+                    self.deck_swipe = Some((slot, pos.x, pos.x, pos.y, pos.y));
+                }
                 // The ribbon caught while it runs: it stops under the finger.
                 if self.ribbon.moving() {
                     self.ribbon_grab(slot, pos.x, time);
+                    return;
+                }
+                // item's keyboard (kbd.rs).
+                if self.kbd.down(slot, pos, time) {
+                    self.needs_redraw = true;
                     return;
                 }
                 // The pen's sheet's buttons (pensheet.rs).
@@ -612,9 +650,27 @@ impl State {
                         return;
                     }
                 }
+                // The turned frame's taskbar band (the screen's bottom, under
+                // the window): a swipe up from it opens the app grid (grid.rs).
+                if crate::layout::turned() && crate::layout::panel_at(pos) == Some(0) {
+                    let r = crate::layout::panels()[0];
+                    if pos.y >= (r.loc.y + r.size.h - self.dock_band(0)) as f64 && self.grid.down(slot, pos, true) {
+                        self.needs_redraw = true;
+                        return;
+                    }
+                }
                 // The bottom band of a panel with a window: the swipe that
-                // puts it away (gesture.rs).
-                if pos.y >= LAYOUT.1 as f64 - crate::gesture::EDGE {
+                // puts it away (gesture.rs). With the keyboard up on the
+                // panel, the band is above the keyboard's tile.
+                let band_bottom = match crate::layout::panel_at(pos) {
+                    // The panel's bottom, less the taskbar's band (turned) and the keyboard's tile.
+                    Some(p) => {
+                        let r = crate::layout::panels()[p];
+                        (r.loc.y + r.size.h - self.dock_band(p)) as f64 - self.kbd.cut().filter(|(kp, _)| *kp == p).map_or(0.0, |(_, h)| h as f64)
+                    }
+                    None => f64::MIN,
+                };
+                if pos.y >= band_bottom - crate::gesture::EDGE && pos.y < band_bottom {
                     if let Some(panel) = crate::layout::panel_at(pos) {
                         if let Some(window) = self.top_window(panel) {
                             self.gestures.down(slot, pos, time, window, panel);
@@ -624,7 +680,8 @@ impl State {
                     }
                 }
                 // The app grid, and an empty panel's swipes (grid.rs).
-                let empty = crate::layout::panel_at(pos).is_some_and(|p| self.top_window(p).is_none());
+                // Not the deck: the turned frame's lower panel is no desk.
+                let empty = crate::layout::panel_at(pos).is_some_and(|p| self.top_window(p).is_none() && !(crate::layout::turned() && p == 1));
                 if self.grid.down(slot, pos, empty) {
                     self.needs_redraw = true;
                     return;
@@ -635,6 +692,7 @@ impl State {
                     self.space.raise_element(&window, true);
                     let surface = window.toplevel().unwrap().wl_surface().clone();
                     self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), serial);
+                    self.window_touched_at = hybris_hwc::now_ns();
                 }
                 let under = self.surface_under(pos);
                 self.touches += 1;
@@ -648,6 +706,16 @@ impl State {
                 touch.down(self, under, &DownEvent { slot, location: pos, serial, time: msec(time) });
             }
             Contact::Motion(slot, pos, time) => {
+                if self.flow.holds(slot) {
+                    let room = crate::flow::Flow::room(self.kbd.deck_cut());
+                    self.flow.motion(slot, pos, time, room);
+                    self.needs_redraw = true;
+                    return;
+                }
+                if let Some(d) = self.deck_swipe.as_mut().filter(|(s, ..)| *s == slot) {
+                    d.2 = pos.x;
+                    d.4 = pos.y;
+                }
                 if self.ribbon.holds(slot) {
                     self.ribbon.motion(slot, pos.x, time);
                     self.needs_redraw = true;
@@ -663,6 +731,14 @@ impl State {
                 }
                 if self.shade.holds(slot) {
                     self.shade.motion_at(slot, pos.x, pos.y, time);
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.kbd.holds(slot) {
+                    self.kbd.motion(slot, pos, time);
+                    for ask in self.kbd.asks() {
+                        self.keyboard_ask(ask);
+                    }
                     self.needs_redraw = true;
                     return;
                 }
@@ -745,17 +821,47 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
+                if self.flow.holds(slot) {
+                    let room = crate::flow::Flow::room(self.kbd.deck_cut());
+                    // Put away, not closed (draft 49): the app stays warm for
+                    // the dock's next tap; its own close button ends it.
+                    if let Some(window) = self.flow.up(slot, room, hybris_hwc::now_ns()) {
+                        tracing::info!("flow: {} put away by a swipe up", crate::state::app_id(&window));
+                        let panel = self.space.element_location(&window).and_then(|l| crate::layout::panel_at(l.to_f64())).unwrap_or(0);
+                        self.put_window_away(window, panel);
+                    }
+                    if let Some(i) = self.flow.take_heading() {
+                        self.flow_chose(i);
+                    }
+                    self.needs_redraw = true;
+                    return;
+                }
+                if let Some((_, x0, x1, y0, y1)) = self.deck_swipe.take_if(|(s, ..)| *s == slot) {
+                    self.deck_swiped(x1 - x0, y1 - y0);
+                }
                 if self.bottom_start.is_some_and(|(s, _)| s == slot) {
                     self.bottom_start = None;
                 }
                 if self.system.holds(slot) {
-                    self.system.touch_up(slot);
+                    if let Some(cmd) = self.system.touch_up(slot) {
+                        self.open_agent(&cmd);
+                    }
                     self.needs_redraw = true;
                     return;
                 }
                 if self.shade.holds(slot) {
                     if let Some(ask) = self.shade.up(slot) {
                         self.shade_ask(ask);
+                    }
+                    self.needs_redraw = true;
+                    return;
+                }
+                if self.kbd.holds(slot) {
+                    if let Some(ask) = self.kbd.up(slot) {
+                        // From the finger's lift (libinput's clock, us) to
+                        // the frame with the client's answer: the report.
+                        self.key_sent = Some(time * 1000);
+                        self.keyboard_ask(ask);
                     }
                     self.needs_redraw = true;
                     return;
@@ -803,6 +909,7 @@ impl State {
                 self.back.cancel();
                 self.system.cancel();
                 self.pen.cancel();
+                self.kbd.cancel();
                 self.ribbon.cancel();
                 self.bottom_start = None;
                 self.carrying = None;

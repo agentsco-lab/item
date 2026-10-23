@@ -24,6 +24,8 @@ const WAIT_NS: u64 = 20_000_000_000;
 
 struct Up {
     panel: usize,
+    /// The app on its way, for the log.
+    name: String,
     icon: Option<MemoryRenderBuffer>,
     since_ns: u64,
     /// The launched app's window, once it is mapped.
@@ -43,8 +45,8 @@ impl Curtain {
     }
 
     /// Up over `panel` with this icon.
-    pub fn raise(&mut self, panel: usize, icon: Option<MemoryRenderBuffer>, now_ns: u64) {
-        self.up = Some(Up { panel, icon, since_ns: now_ns, window: None, lifting_ns: None });
+    pub fn raise(&mut self, panel: usize, icon: Option<MemoryRenderBuffer>, name: &str, now_ns: u64) {
+        self.up = Some(Up { panel, name: name.to_owned(), icon, since_ns: now_ns, window: None, lifting_ns: None });
     }
 
     /// Whether a window mapped on `panel` is the one the curtain waits for.
@@ -62,7 +64,7 @@ impl Curtain {
         if let Some(up) = &mut self.up {
             if up.lifting_ns.is_none() && up.window.as_ref() == Some(surface) {
                 up.lifting_ns = Some(now_ns);
-                tracing::info!("curtain: the window drew {:.2} s after the tap", (now_ns - up.since_ns) as f64 / 1e9);
+                tracing::info!("curtain: {} drew {:.2} s after the tap", up.name, (now_ns - up.since_ns) as f64 / 1e9);
                 return true;
             }
         }
@@ -71,6 +73,11 @@ impl Curtain {
 
     /// The panel the curtain holds for the app it waits for: the dock
     /// leaves it at the tap, not when the window comes.
+    /// The icon of the app on its way, while it is up (the flow's cover for it).
+    pub fn icon(&self) -> Option<&MemoryRenderBuffer> {
+        self.up.as_ref().and_then(|u| u.icon.as_ref())
+    }
+
     pub fn panel(&self) -> Option<usize> {
         self.up.as_ref().map(|u| u.panel)
     }

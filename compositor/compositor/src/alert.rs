@@ -146,7 +146,7 @@ impl Alert {
             let bg = if i == 0 { self.first_bg.get() } else { self.other_bg.clone() };
             put(&mut out, &bg, r.loc.x, r.loc.y, a);
         }
-        let (w, h) = layout::LAYOUT;
+        let (w, h) = layout::size();
         let rect = Rectangle::<i32, Physical>::from_size((w * SCALE, h * SCALE).into());
         out.push(ShellElement::Solid(SolidColorRenderElement::new(self.dim.clone(), rect, CommitCounter::from((k * 1000.0) as usize), [0.02, 0.02, 0.03, alpha], Kind::Unspecified)));
         out

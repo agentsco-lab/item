@@ -148,16 +148,6 @@ impl Dialog {
         self.field.set(regular, &shown);
     }
 
-    /// Words the answer was wrong for: the hint says so, the field empties.
-    pub fn wrong_text(&mut self, hint: &str) {
-        self.keys.clear();
-        self.show_field();
-        if let Some((_, regular)) = &self.fonts {
-            self.hint.set(regular, hint);
-        }
-        crate::fingerprint::buzz("bell-terminal");
-    }
-
     fn field_rect() -> Rectangle<f64, Logical> {
         let left = layout::panels()[0];
         Rectangle::new((left.loc.x as f64 + SIDE, 430.0).into(), (left.size.w as f64 - 2.0 * SIDE, FIELD_H).into())
@@ -298,7 +288,7 @@ impl Dialog {
         put(&mut out, &self.cancel.buffer, b.loc.x + (BUTTON_W - self.cancel.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - self.cancel.extent.h as f64) / 2.0, alpha * pressed);
         put(&mut out, &self.button, b.loc.x, b.loc.y, alpha);
         // The screen dimmed under it, darker on the left where it speaks.
-        let (w, h) = layout::LAYOUT;
+        let (w, h) = layout::size();
         let commit = CommitCounter::from((k * 1000.0) as usize);
         let lrect = Rectangle::<i32, Physical>::new(left.loc.to_physical(SCALE), left.size.to_physical(SCALE));
         out.push(ShellElement::Solid(SolidColorRenderElement::new(self.left_id.clone(), lrect, commit, [0.0, 0.0, 0.0, 0.35 * alpha], Kind::Unspecified)));

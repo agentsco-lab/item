@@ -299,7 +299,7 @@ fn glow(size: f64) -> Option<MemoryRenderBuffer> {
 /// Where the PIN's length is kept - the length alone, never the PIN - so a
 /// PIN typed to it is checked without OK, as Android's auto-confirm.
 fn pin_len_path() -> std::path::PathBuf {
-    std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/item/pin-length")
+    crate::prefs::path("pin-length")
 }
 
 pub fn pin_len() -> Option<usize> {
@@ -606,6 +606,7 @@ impl Lock {
                 *verified.lock().unwrap() = Some(pin);
             } else {
                 let mut pin = pin;
+                // SAFETY: zeroing the bytes keeps the String valid UTF-8.
                 unsafe { pin.as_bytes_mut().fill(0) };
             }
             *slot.lock().unwrap() = Some(Some(ok));
@@ -777,11 +778,6 @@ impl Lock {
             self.hint.set(regular, FACE_OK);
         }
         self.notice_until = 0;
-    }
-
-    /// Whether a face has unlocked it (the doors wait for a swipe).
-    pub fn face_unlocked(&self) -> bool {
-        self.face_ok && self.locked
     }
 
     pub fn unlock(&mut self) {
@@ -987,7 +983,7 @@ impl Lock {
         let panels = layout::panels();
         let (left, right) = (panels[0], panels[1]);
         let middle = (left.loc.x + left.size.w + right.loc.x) as f64 / 2.0;
-        let (w, h) = layout::LAYOUT;
+        let (w, h) = layout::size();
         let left_dx = -middle * open;
         let right_dx = (w as f64 - middle) * open;
         // The pad, with the right half.
@@ -1149,7 +1145,7 @@ impl Lock {
     fn door_dx(open: f64) -> (f64, f64) {
         let panels = layout::panels();
         let middle = (panels[0].loc.x + panels[0].size.w + panels[1].loc.x) as f64 / 2.0;
-        let w = layout::LAYOUT.0 as f64;
+        let w = layout::size().0 as f64;
         (-middle * open, (w - middle) * open)
     }
 

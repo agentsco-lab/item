@@ -34,8 +34,9 @@ use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_input_method_manager, delegate_layer_shell, delegate_output,
-    delegate_seat, delegate_shm, delegate_text_input_manager, delegate_virtual_keyboard_manager, delegate_xdg_shell,
+    delegate_seat, delegate_shm, delegate_virtual_keyboard_manager, delegate_xdg_activation, delegate_xdg_shell,
 };
+use smithay::wayland::xdg_activation::{XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData};
 
 use crate::layout;
 use crate::boost::GpuBoost;
@@ -55,6 +56,9 @@ pub struct State {
     pub seat: Seat<State>,
     compositor_state: CompositorState,
     xdg_shell_state: XdgShellState,
+    /// xdg-activation: an app presenting a window of its own that is put
+    /// away (warm since boot, or put away by a swipe) brings it back.
+    xdg_activation_state: XdgActivationState,
     shm_state: ShmState,
     _output_manager_state: OutputManagerState,
     seat_state: SeatState<State>,
@@ -83,6 +87,10 @@ pub struct State {
     started: std::time::Instant,
     /// Something changed since the last frame: draw at the next vsync.
     pub needs_redraw: bool,
+    /// The frame turned: every window shown is sized to its panel again.
+    pub relayout: bool,
+    /// The touches in flight cancelled once for the turn's animation (input.rs).
+    pub turn_cancelled: bool,
     /// A touch no client has answered yet (CLOCK_MONOTONIC ns).
     pub touch_pending: Option<u64>,
     /// A touch a client has answered with a commit: the next frame shows it.
@@ -121,18 +129,70 @@ pub struct State {
     pub pen_down: bool,
     /// The pen's sheet, right of the right panel (pensheet.rs).
     pub pen: crate::pensheet::PenSheet,
+    /// The keyboard of item's own (kbd.rs), and a launch of the Agent entry
+    /// waiting for its window to put it under (ns).
+    pub kbd: crate::kbd::Keyboard,
+    pub kbd_wanted: Option<u64>,
+    /// The keyboard came up by itself for a text field (text_field), not
+    /// by a hand: it goes by itself when the field is left.
+    kbd_auto: bool,
+    /// A text-input enable (true) or disable waiting for its commit
+    /// (protocols.rs).
+    pub field_pending: Option<bool>,
+    /// When the text field was left: the keyboard goes half a second
+    /// later unless another field takes the cursor.
+    field_left_at: Option<u64>,
+    /// The last touch that landed on a window (input.rs): a field raises
+    /// the keyboard only soon after one, not when a page focuses a field
+    /// by itself on loading.
+    pub window_touched_at: u64,
+    /// The surface whose text inputs were told `enter` (focus_changed):
+    /// smithay tells them only with an input method bound, and item has
+    /// none in item mode.
+    text_entered: Option<WlSurface>,
+    /// The keyboard's preferences from Settings (prefs.rs).
+    pub prefs: crate::prefs::Prefs,
+    /// The window the keyboard came up under: it goes along when that one
+    /// is moved to the other panel.
+    pub kbd_window: Option<Window>,
+    /// A key the keyboard sent (the finger's lift, ns), and one a client
+    /// answered with a commit: the next frame shows it (main.rs's report).
+    pub key_sent: Option<u64>,
+    pub key_answered: Option<u64>,
     /// The pen draws on the sheet: its stroke began there.
     pub pen_drawing: bool,
     /// How quickly each client answers its frame callbacks (pace.rs).
     pub paces: crate::pace::Paces,
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
+    /// The dock's apps kept warm (draft 49): launched after boot, their
+    /// windows put away before a frame shows them. By app id, since when.
+    warming: HashMap<String, u64>,
+    /// Windows that came while a warm launch was pending, not yet shown nor
+    /// put away: told apart by app id at their first buffer.
+    warm_pending: Vec<(Window, usize)>,
+    /// The desktop files still to warm, and when the next may start.
+    warm_queue: Vec<String>,
+    warm_next_ns: u64,
+    warm_begun: bool,
     /// How many windows have been put away or closed (the tour's hint for
     /// apps goes when one is).
     pub windows_gone: u64,
     /// A touch in a panel's bottom band, until it shows which way it goes:
     /// up puts the window away, sideways moves the ribbon.
     pub bottom_start: Option<(smithay::backend::input::TouchSlot, Point<f64, Logical>)>,
+    /// The frame turned: what the deck (the lower panel) shows - the system
+    /// screen or the pen's sheet, swiped in from a side; None is black.
+    pub deck: Option<crate::ribbon::Page>,
+    /// A finger down on the deck: its slot, where it started (x, y), where it is.
+    pub deck_swipe: Option<(smithay::backend::input::TouchSlot, f64, f64, f64, f64)>,
+    /// The deck's page on its way in or out: which side it lives at (1 the
+    /// right, -1 the left), since when, whether it is leaving.
+    pub deck_run: Option<(f64, u64, bool)>,
+    /// The open windows as covers on the deck (flow.rs).
+    pub flow: crate::flow::Flow,
+    /// When the screen last had a window or the curtain (the dock stays on the deck a moment after).
+    pub deck_wanted_ns: u64,
     /// polkit's agent, and the system's own dialog it asks through.
     pub polkit: crate::polkit::Polkit,
     pub dialog: crate::dialog::Dialog,
@@ -196,18 +256,25 @@ impl State {
         let dh = &display_handle;
         let mut seat_state = SeatState::new();
         let mut seat = seat_state.new_wl_seat(dh, "duo");
-        seat.add_keyboard(Default::default(), 200, 25).expect("keyboard");
+        // US and Russian: the keyboard of item's own types Cyrillic in the
+        // second group (typing.rs).
+        seat.add_keyboard(smithay::input::keyboard::XkbConfig { layout: "us,ru", ..Default::default() }, 200, 25).expect("keyboard");
         seat.add_touch();
         crate::protocols::create_globals(dh);
         let face = crate::face::Face::new(wake.clone());
         State {
             compositor_state: CompositorState::new::<State>(dh),
             xdg_shell_state: XdgShellState::new::<State>(dh),
+            xdg_activation_state: XdgActivationState::new::<State>(dh),
             shm_state: ShmState::new::<State>(dh, vec![]),
             _output_manager_state: OutputManagerState::new_with_xdg_output::<State>(dh),
             data_device_state: DataDeviceState::new::<State>(dh),
             layer_shell_state: WlrLayerShellState::new::<State>(dh),
-            _input_method_state: InputMethodManagerState::new::<State, _>(dh, |_| true),
+            // item's own keyboard (kbd.rs): no client gets the input method,
+            // so stevia, which the session starts (a required component of
+            // it), never comes up over a text field; with stevia chosen it
+            // works as phosh's.
+            _input_method_state: InputMethodManagerState::new::<State, _>(dh, |_| crate::kbd::choice() == crate::kbd::Choice::Stevia),
             _text_input_state: TextInputManagerState::new::<State>(dh),
             _virtual_keyboard_state: VirtualKeyboardManagerState::new::<State, _>(dh, |_| true),
             data_control_state: DataControlState::new::<State, _>(dh, None, |_| true),
@@ -229,6 +296,13 @@ impl State {
             commits: 0,
             started: std::time::Instant::now(),
             needs_redraw: true,
+            relayout: false,
+            deck: None,
+            deck_swipe: None,
+            deck_run: None,
+            flow: Default::default(),
+            deck_wanted_ns: 0,
+            turn_cancelled: false,
             touch_pending: None,
             touch_answered: None,
             stop_after: None,
@@ -254,9 +328,25 @@ impl State {
             system: crate::sysscreen::SystemScreen::new(wake.clone()),
             pen_down: false,
             pen: crate::pensheet::PenSheet::new(),
+            kbd: crate::kbd::Keyboard::new(wake.clone()),
+            kbd_wanted: None,
+            kbd_auto: false,
+            field_pending: None,
+            field_left_at: None,
+            window_touched_at: 0,
+            text_entered: None,
+            prefs: crate::prefs::Prefs::load(),
+            kbd_window: None,
+            key_sent: None,
+            key_answered: None,
             pen_drawing: false,
             paces: Default::default(),
             put_away: Vec::new(),
+            warming: HashMap::new(),
+            warm_pending: Vec::new(),
+            warm_queue: Vec::new(),
+            warm_next_ns: 0,
+            warm_begun: false,
             windows_gone: 0,
             ribbon: crate::ribbon::Ribbon::new(),
             polkit: crate::polkit::Polkit::new(wake.clone()),
@@ -308,6 +398,8 @@ impl State {
         use std::os::unix::process::CommandExt;
         let mut command_line = std::process::Command::new("sh");
         // An app gets every core, not the loop's own (sched.rs).
+        // SAFETY: the hook runs in the forked child before exec and only makes sched syscalls (unpin):
+        // no allocation, no lock, nothing async-signal-unsafe.
         unsafe {
             command_line.pre_exec(|| {
                 crate::sched::unpin();
@@ -327,7 +419,8 @@ impl State {
             .spawn();
         match child {
             Ok(child) => {
-                tracing::info!("spawned: {command}");
+                // The command's first words only: a line may carry a URL or a path of the owner's.
+                tracing::info!("spawned: {}", command.split_whitespace().take(3).collect::<Vec<_>>().join(" "));
                 Some(child)
             }
             Err(e) => {
@@ -353,12 +446,22 @@ impl State {
         if self.picker.is_open() {
             return [true, true];
         }
+        // The frame turned (layout.rs): the lower panel is the deck, the
+        // dock's halves at its corners, the window above untouched.
+        if crate::layout::turned() {
+            // The dock is the screen's taskbar, or on the deck with a window
+            // up (dock.rs's targets); a deck page under a window leaves it
+            // nowhere: hidden.
+            let hidden = self.window_up() && self.deck.is_some();
+            return [hidden, hidden];
+        }
         let mut taken = self.pages_taken(view, None);
         if let Some(p) = self.grid.bound_panel() {
             taken[p] = true;
         }
-        // The keyboard's panel: the dock leaves it as the keyboard comes up.
-        if let Some(p) = self.layers.keyboard_panel() {
+        // The keyboard's panel: the dock leaves it as the keyboard comes up
+        // (stevia's, or item's own tile: kbd.rs).
+        if let Some(p) = self.layers.keyboard_panel().or_else(|| self.kbd.panel()) {
             taken[p] = true;
         }
         // The pen's sheet spread over the left panel too.
@@ -465,6 +568,16 @@ impl State {
 
     pub fn place_dock(&mut self, frame_ns: u64) {
         self.dock.set_book(self.posture.book());
+        // The deck calls the dock as soon as the launch curtain covers the
+        // screen; it lets go only after the screen has been bare for a
+        // moment (the curtain lifting before the window's page is applied
+        // must not send it up and back).
+        let now = hybris_hwc::now_ns();
+        if layout::turned() && (self.window_up() || self.curtain.panel() == Some(0)) {
+            self.deck_wanted_ns = now;
+        }
+        let on_deck = layout::turned() && now.saturating_sub(self.deck_wanted_ns) < 400_000_000;
+        self.dock.set_on_deck(on_deck, now);
         // The apps running, on the half of the panel each was opened onto
         // (the right one if not known).
         let windows = self.windows();
@@ -510,21 +623,6 @@ impl State {
                 self.boost.kick(hybris_hwc::now_ns());
             }
         }
-    }
-
-    /// Which panels a window has. A window on its way away no longer has
-    /// its panel.
-    pub fn panels_taken(&self) -> [bool; 2] {
-        let panels = layout::panels();
-        let mut taken = [false; 2];
-        for window in self.space.elements().filter(|w| !self.gestures.leaving(w)) {
-            if let Some(loc) = self.space.element_location(window) {
-                if let Some(p) = panels.iter().position(|p| p.contains(loc)) {
-                    taken[p] = true;
-                }
-            }
-        }
-        taken
     }
 
     /// The right shade's rows: the notifications, newest first, then the
@@ -586,8 +684,18 @@ impl State {
     pub fn apply_ribbon(&mut self) {
         use crate::ribbon::Page;
         self.ribbon.unsettled = false;
+        let relayout = std::mem::take(&mut self.relayout);
         let panels = layout::panels();
-        let shown = [self.ribbon.on(0).cloned(), self.ribbon.on(1).cloned()];
+        // Turned, the lower panel is the deck: black, or the page swiped onto it.
+        let shown = [self.ribbon.on(0).cloned(), if layout::turned() { self.deck.clone() } else { self.ribbon.on(1).cloned() }];
+        // The keyboard along with its window, if the row moved that one
+        // to the other panel (kbd.rs).
+        if let (Some(w), Some(kp)) = (self.kbd_window.clone(), self.kbd.panel()) {
+            let wp = (0..2).find(|&p| matches!(&shown[p], Some(Page::App(x)) | Some(Page::Wide(x)) if x == &w));
+            if let Some(wp) = wp.filter(|&wp| wp != kp) {
+                self.kbd.show(Some(wp), None);
+            }
+        }
         let windows: Vec<Window> = self.ribbon.pages.iter().filter_map(|p| if let Page::App(w) = p { Some(w.clone()) } else { None }).collect();
         for w in windows {
             // Across both panels: as wide as the two, standing where its
@@ -602,9 +710,9 @@ impl State {
                 };
                 match x {
                     Some(x) => {
-                        let size = (layout::LAYOUT.0, layout::LAYOUT.1);
+                        let size = (layout::size().0, layout::size().1);
                         let at: smithay::utils::Point<i32, Logical> = (x, 0).into();
-                        if self.space.element_location(&w) != Some(at) || w.geometry().size.w != size.0 {
+                        if relayout || self.space.element_location(&w) != Some(at) || w.geometry().size.w != size.0 {
                             w.toplevel().unwrap().with_pending_state(|s| s.size = Some(size.into()));
                             w.toplevel().unwrap().send_pending_configure();
                             self.space.map_element(w.clone(), at, false);
@@ -621,12 +729,12 @@ impl State {
             match shown.iter().position(|s| s.as_ref() == Some(&Page::App(w.clone()))) {
                 Some(k) => {
                     let rect = panels[k];
-                    if self.space.element_location(&w) != Some(rect.loc) || w.geometry().size.w > rect.size.w {
-                        let cut = match self.osk_applied {
+                    if relayout || self.space.element_location(&w) != Some(rect.loc) || w.geometry().size.w > rect.size.w {
+                        let cut = match self.kbd.cut().or(self.osk_applied) {
                             Some((kp, h)) if kp == k => h,
                             _ => 0,
                         };
-                        w.toplevel().unwrap().with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - cut).into()));
+                        w.toplevel().unwrap().with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - cut - self.dock_band(k)).into()));
                         w.toplevel().unwrap().send_pending_configure();
                         self.space.map_element(w.clone(), rect.loc, false);
                     }
@@ -638,8 +746,8 @@ impl State {
                 }
             }
         }
-        self.system.show(shown[0] == Some(Page::System));
-        self.pen.show(shown[1] == Some(Page::Pen));
+        self.system.show(shown.contains(&Some(Page::System)));
+        self.pen.show(shown.contains(&Some(Page::Pen)));
         // The keyboard to a window shown: the one it had, else the left's.
         let keyboard = self.seat.get_keyboard().unwrap();
         let shown_surfaces: Vec<_> = self.space.elements().map(|w| w.toplevel().unwrap().wl_surface().clone()).collect();
@@ -648,7 +756,127 @@ impl State {
             keyboard.set_focus(self, next, smithay::utils::SERIAL_COUNTER.next_serial());
         }
         tracing::info!("ribbon: applied, {:?} | {:?}", shown[0], shown[1]);
+        // The flow's covers: the ribbon's windows, the screen's one in the middle.
+        let flow_windows: Vec<Window> = self.ribbon.pages.iter().filter_map(|p| if let Page::App(w) = p { Some(w.clone()) } else { None }).collect();
+        let flow_shown = match &shown[0] { Some(Page::App(w)) => flow_windows.iter().position(|x| x == w), _ => None };
+        self.flow.sync(flow_windows, flow_shown);
+        // What the keyboard (and the deck's strip) would type into now.
+        let (web, terminal) = self.keyboard_window().map(|w| (crate::kbd::is_browser(&app_id(&w)), crate::kbd::is_terminal(&app_id(&w)))).unwrap_or((false, false));
+        self.kbd.set_window(web, terminal);
         self.needs_redraw = true;
+    }
+
+    /// The band the dock takes from a panel's windows: the turned frame's
+    /// upper panel carries the dock along its bottom as a taskbar.
+    pub fn dock_band(&self, _panel: usize) -> i32 {
+        // The dock leaves the screen to its window (it goes to the deck):
+        // no band taken from windows.
+        0
+    }
+
+    /// The frame turned: whether a window stands on the screen.
+    pub fn window_up(&self) -> bool {
+        matches!(self.ribbon.on(0), Some(crate::ribbon::Page::App(_) | crate::ribbon::Page::Wide(_)))
+    }
+
+    /// A swipe across the deck (the turned frame's lower panel) let go:
+    /// left brings the pen's sheet, right the system screen - the ribbon's
+    /// two ends - and the other way takes the one shown away.
+    pub fn deck_swiped(&mut self, dx: f64, dy: f64) {
+        use crate::ribbon::Page;
+        const SWIPE: f64 = 80.0;
+        // Up and down are the keyboard's; sideways, with the keyboard up,
+        // is the keyboard's own (the space bar's cursor, the alternatives).
+        if dy.abs() > dx.abs() {
+            if dy <= -SWIPE {
+                self.deck_keyboard(true);
+            } else if dy >= SWIPE {
+                self.deck_keyboard(false);
+            }
+            return;
+        }
+        if self.kbd.out() {
+            return;
+        }
+        let next = match (self.deck.clone(), dx) {
+            (None, d) if d <= -SWIPE => Some(Page::Pen),
+            (None, d) if d >= SWIPE => Some(Page::System),
+            (Some(Page::Pen), d) if d >= SWIPE => None,
+            (Some(Page::System), d) if d <= -SWIPE => None,
+            (deck, _) => deck,
+        };
+        if next == self.deck || self.deck_run.is_some() {
+            return;
+        }
+        tracing::info!("deck: {}", match &next { Some(Page::Pen) => "the pen's sheet", Some(Page::System) => "the system screen", _ => "black" });
+        let side = |p: &Page| if *p == Page::Pen { 1.0 } else { -1.0 };
+        let now = hybris_hwc::now_ns();
+        match (&self.deck, &next) {
+            // A page comes in from its side.
+            (None, Some(p)) => {
+                self.deck_run = Some((side(p), now, false));
+                self.deck = next;
+                self.apply_ribbon();
+            }
+            // The page shown goes back out its side; the deck is black after.
+            (Some(p), None) => self.deck_run = Some((side(p), now, true)),
+            _ => {
+                self.deck = next;
+                self.apply_ribbon();
+            }
+        }
+        self.needs_redraw = true;
+    }
+
+    /// The flow settled on a cover (flow.rs): the screen pages to its window.
+    pub fn flow_chose(&mut self, i: usize) {
+        let Some(window) = self.flow.windows.get(i).cloned() else { return };
+        if let Some(page) = self.ribbon.find(&window) {
+            if self.ribbon.view != page {
+                tracing::info!("flow: {} chosen, page {page}", app_id(&window));
+                // The screen pages as the row runs, in the row's own time.
+                self.ribbon.go_to_in(page, crate::flow::RUN_NS as u64);
+                self.needs_redraw = true;
+            }
+        }
+    }
+
+    /// A vertical swipe on the deck: up pulls the keyboard, down puts it
+    /// away (the owner's word, 2026-10-22). Not while the system screen is
+    /// up there (it scrolls).
+    pub fn deck_keyboard(&mut self, up: bool) {
+        if up && matches!(self.deck, Some(crate::ribbon::Page::System)) {
+            return;
+        }
+        if self.kbd.out() != up {
+            tracing::info!("deck: the keyboard {}", if up { "pulled up" } else { "put away" });
+            self.toggle_keyboard();
+        }
+    }
+
+    /// How long a deck page takes to come or go (ns), and its way at `now`:
+    /// the page's offset from its place, logical px, while it runs.
+    pub const DECK_NS: u64 = 350_000_000;
+    pub fn deck_offset(&self, now: u64) -> Option<f64> {
+        let (side, start, leaving) = self.deck_run?;
+        let k = (now.saturating_sub(start) as f64 / Self::DECK_NS as f64).clamp(0.0, 1.0);
+        let e = if k < 0.5 { 4.0 * k * k * k } else { 1.0 - (-2.0 * k + 2.0).powi(3) / 2.0 };
+        let w = layout::panels()[1].size.w as f64;
+        Some(side * w * if leaving { e } else { 1.0 - e })
+    }
+
+    /// The deck's run settled: whether a frame is still wanted.
+    pub fn settle_deck(&mut self, now: u64) -> bool {
+        let Some((_, start, leaving)) = self.deck_run else { return false };
+        if now < start + Self::DECK_NS {
+            return true;
+        }
+        self.deck_run = None;
+        if leaving {
+            self.deck = None;
+            self.apply_ribbon();
+        }
+        true
     }
 
     /// A tap on a shade: a window closed, Settings opened.
@@ -687,7 +915,7 @@ impl State {
                 }
             }
             crate::shade::ShadeAsk::Settings(panel) => {
-                if let Some(e) = crate::apps::entry("org.sfduo.Settings.desktop").or_else(|| crate::apps::entry("org.gnome.Settings.desktop")) {
+                if let Some(e) = crate::apps::entry("lab.agentsco.item.Settings.desktop").or_else(|| crate::apps::entry("org.gnome.Settings.desktop")) {
                     let icon = e.icon.as_deref().and_then(|n| crate::apps::icon(n, crate::curtain::ICON));
                     self.launch(&e.exec, &e.ids, icon, panel);
                 }
@@ -706,7 +934,11 @@ impl State {
             .find(|w| {
                 self.space.element_location(w).is_some_and(|loc| {
                     let width = w.geometry().size.w.max(1);
-                    loc.x < rect.loc.x + rect.size.w && loc.x + width > rect.loc.x
+                    let height = w.geometry().size.h.max(1);
+                    // Turned, the panels share their x: the deck's rows
+                    // must not find the screen's window (the put-away on a
+                    // deck swipe, 2026-10-23).
+                    loc.x < rect.loc.x + rect.size.w && loc.x + width > rect.loc.x && loc.y < rect.loc.y + rect.size.h && loc.y + height > rect.loc.y
                 })
             })
             .cloned()
@@ -717,6 +949,7 @@ impl State {
         tracing::info!("put away: {} from the {} panel", app_id(&window), if panel == 0 { "left" } else { "right" });
         self.space.unmap_elem(&window);
         self.ribbon.remove(&window);
+        self.keyboard_gone_with(&window);
         self.put_away.push((window.clone(), panel));
         self.windows_gone += 1;
         // The keyboard goes to what is left on top.
@@ -729,15 +962,105 @@ impl State {
         self.needs_redraw = true;
     }
 
+    /// A window that waited for its app id (new_toplevel, draft 49): a
+    /// warming app's is put away as it is, never shown; another's is
+    /// shown now, as new_toplevel would have.
+    fn warm_or_show(&mut self, window: Window, pi: usize) {
+        let id = app_id(&window);
+        let now = hybris_hwc::now_ns();
+        if let Some(since) = self.warming.remove(&id) {
+            // The launch's other ids (the desktop file's name beside the
+            // window's class) go with it.
+            self.warming.retain(|_, s| *s != since);
+            tracing::info!("warm: {id} ready in {:.2} s, put away unshown", now.saturating_sub(since) as f64 / 1e9);
+            self.put_away.push((window, pi));
+            return;
+        }
+        let panel = layout::panels()[pi];
+        self.ribbon.open(window.clone(), pi);
+        self.opened_onto(&window, pi);
+        self.space.map_element(window.clone(), panel.loc, true);
+        self.needs_redraw = true;
+        tracing::info!("window mapped on the {} panel after a warm wait", if pi == 0 { "left" } else { "right" });
+    }
+
+    /// Whether a window of one of `ids` is about: shown, put away or waiting.
+    fn app_about(&self, ids: &[String]) -> bool {
+        let is = |w: &Window| ids.iter().any(|id| *id == app_id(w));
+        self.space.elements().any(is) || self.put_away.iter().any(|(w, _)| is(w)) || self.warm_pending.iter().any(|(w, _)| is(w))
+    }
+
+    /// The dock's apps warmed after boot (draft 49): from 30 s after the
+    /// start, one every 3 s, each launched without a curtain and put away
+    /// at its first buffer; not Chromium (resident on its own), not an app
+    /// about already, none when the memory left is under 1.5 GB. Called
+    /// from the tick.
+    pub fn warm_tick(&mut self, now: u64) {
+        const START_S: f64 = 30.0;
+        const GAP_NS: u64 = 3_000_000_000;
+        const FORGET_NS: u64 = 60_000_000_000;
+        const MEM_FLOOR_KB: u64 = 1_500_000;
+        if !self.warm_begun {
+            if self.started.elapsed().as_secs_f64() < START_S {
+                return;
+            }
+            self.warm_begun = true;
+            self.warm_queue = crate::dock::configured_desktops().into_iter().filter(|d| d != "chromium.desktop").collect();
+            self.warm_next_ns = now;
+        }
+        // A warming app that never came: forgotten.
+        self.warming.retain(|id, since| {
+            let kept = now.saturating_sub(*since) < FORGET_NS;
+            if !kept {
+                tracing::info!("warm: {id} never came, forgotten");
+            }
+            kept
+        });
+        if self.warm_queue.is_empty() || now < self.warm_next_ns || !self.warming.is_empty() {
+            return;
+        }
+        let desktop = self.warm_queue.remove(0);
+        self.warm_next_ns = now + GAP_NS;
+        let Some(entry) = crate::apps::entry(&desktop) else { return };
+        if self.app_about(&entry.ids) {
+            return;
+        }
+        let available_kb = crate::sysfacts::mem_available_kb().unwrap_or(u64::MAX);
+        if available_kb < MEM_FLOOR_KB {
+            tracing::info!("warm: {} MB left, {desktop} not warmed", available_kb >> 10);
+            self.warm_queue.clear();
+            return;
+        }
+        for id in &entry.ids {
+            self.warming.insert(id.clone(), now);
+        }
+        tracing::info!("warm: launching {desktop}");
+        self.spawn_app(&entry.exec, entry.ids.first().map(String::as_str).unwrap_or("app"));
+    }
+
     /// An app onto a panel, from the dock or the grid: a window of it put
     /// away comes back; else it is launched under the curtain.
     pub fn launch(&mut self, exec: &str, ids: &[String], icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>, panel: usize) {
+        // The frame turned (layout.rs): every launch is the screen's, from
+        // whichever half of the taskbar; the curtain rises there.
+        let panel = if layout::turned() { 0 } else { panel };
+        // The Agent entry: the keyboard comes under its window, the agent's
+        // keys up (kbd.rs).
+        let agent = ids.iter().any(|id| id == "item-agent");
         if self.bring_back(ids, panel) || self.call_over(ids, panel) {
+            if agent {
+                if let Some(w) = self.top_window(panel) {
+                    self.keyboard_for(w, crate::kbd::Layer::Vibe);
+                }
+            }
             return;
         }
         let now = hybris_hwc::now_ns();
+        if agent {
+            self.kbd_wanted = Some(now);
+        }
         self.launch_to = Some((panel, now));
-        self.curtain.raise(panel, icon, now);
+        self.curtain.raise(panel, icon, ids.first().map(String::as_str).unwrap_or("app"), now);
         self.spawn_app(exec, ids.first().map(String::as_str).unwrap_or("app"));
         self.needs_redraw = true;
     }
@@ -749,6 +1072,12 @@ impl State {
     /// cannot be made (no user manager: found once, at the first launch's
     /// start, SCOPES), the app starts as before.
     pub fn spawn_app(&self, exec: &str, id: &str) {
+        // Chromium kept resident (session/item-chromium.service): its
+        // window asked of it, no second process.
+        if id == "chromium" && resident_chromium(exec) {
+            tracing::info!("chromium: a window asked of the resident instance");
+            return;
+        }
         if !SCOPES.load(std::sync::atomic::Ordering::Relaxed) {
             self.spawn(exec);
             return;
@@ -786,6 +1115,209 @@ impl State {
         true
     }
 
+    /// An agent's session opened from the system screen (sysfacts.rs's
+    /// taps): a terminal on the right panel running `item-agents open`,
+    /// the agent's keys under it.
+    pub fn open_agent(&mut self, cmd: &str) {
+        tracing::info!("agent: {cmd}");
+        let now = hybris_hwc::now_ns();
+        let panel = 1;
+        self.launch_to = Some((panel, now));
+        self.kbd_wanted = Some(now);
+        let icon = crate::apps::icon("item-agent", crate::curtain::ICON);
+        self.curtain.raise(panel, icon, "item-agent", now);
+        let quoted = cmd.replace('\'', "'\\''");
+        self.spawn_app(&format!("kgx -- sh -c '{quoted}; echo; echo [session ended]; sleep 2'"), "item-agent");
+        self.needs_redraw = true;
+    }
+
+    /// The keyboard up under a window (kbd.rs), in a layer: the agent's for
+    /// a terminal.
+    pub fn keyboard_for(&mut self, window: Window, layer: crate::kbd::Layer) {
+        let panel = (0..2).find(|&p| self.ribbon.on(p) == Some(&crate::ribbon::Page::App(window.clone()))).or_else(|| self.space.element_location(&window).and_then(|l| layout::panel_at(l.to_f64() + Point::from((1.0, 1.0)))));
+        tracing::info!("keyboard: under {} on the {} panel", app_id(&window), match panel { Some(0) => "left", Some(_) => "right", None => "no" });
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+        self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+        self.kbd_window = Some(window);
+        self.kbd.show(panel, Some(layer));
+        self.follow_keyboard();
+        self.needs_redraw = true;
+    }
+
+    /// The power key: item's keyboard shown under the window with the
+    /// focus, or hidden; stevia's when the phone uses stevia (kbd::choice).
+    pub fn toggle_keyboard(&mut self) {
+        if crate::kbd::choice() == crate::kbd::Choice::Stevia {
+            crate::input::toggle_stevia();
+            return;
+        }
+        self.kbd_auto = false;
+        self.field_left_at = None;
+        if self.kbd.out() {
+            tracing::info!("power key: keyboard hidden");
+            self.kbd.show(None, None);
+        } else {
+            let focused = self.seat.get_keyboard().unwrap().current_focus();
+            let window = self.space.elements().find(|w| focused.as_ref() == Some(w.toplevel().unwrap().wl_surface())).cloned().or_else(|| self.top_window(1).or_else(|| self.top_window(0)));
+            tracing::info!("power key: keyboard shown");
+            match window {
+                Some(window) => {
+                    let layer = if crate::kbd::is_terminal(&app_id(&window)) { crate::kbd::Layer::Vibe } else { crate::kbd::Layer::Letters };
+                    self.keyboard_for(window, layer);
+                }
+                // No window: on the right panel, as stevia came.
+                None => self.kbd.show(Some(1), Some(crate::kbd::Layer::Letters)),
+            }
+        }
+        self.follow_keyboard();
+        self.needs_redraw = true;
+    }
+
+    /// A window gone (closed, put away): the keyboard under it goes when
+    /// nothing is left on its panel.
+    fn keyboard_gone_with(&mut self, window: &Window) {
+        if self.kbd_window.as_ref() == Some(window) {
+            self.kbd_window = None;
+        }
+        if let Some(p) = self.kbd.panel() {
+            let left = self.space.elements().filter(|w| w != &window).any(|w| self.space.element_location(w).is_some_and(|l| layout::panel_at(l.to_f64() + Point::from((1.0, 1.0))) == Some(p)));
+            if !left {
+                self.kbd.show(None, None);
+                self.follow_keyboard();
+            }
+        }
+    }
+
+    /// A text field of the window with the focus took the cursor (a
+    /// text-input v3 enable committed, protocols.rs) or let it go: item's
+    /// keyboard comes up by itself under the window, in its letters, when
+    /// a finger put the cursor there (not a page focusing a field as it
+    /// loads), and goes half a second after the field is left - unless a
+    /// hand raised it (the power key, the Agent), which keeps it. A
+    /// terminal's field is its whole screen: no keyboard by itself there.
+    pub fn text_field(&mut self, on: bool, from: &smithay::reexports::wayland_server::backend::ObjectId) {
+        if crate::kbd::choice() == crate::kbd::Choice::Stevia {
+            return;
+        }
+        let focused = self.seat.get_keyboard().unwrap().current_focus();
+        let Some(window) = focused.as_ref().and_then(|f| self.space.elements().find(|w| w.toplevel().unwrap().wl_surface() == f).cloned()) else {
+            return;
+        };
+        if !from.same_client_as(&window.toplevel().unwrap().wl_surface().id()) {
+            return;
+        }
+        let now = hybris_hwc::now_ns();
+        if on {
+            self.field_left_at = None;
+            if self.kbd.out() || crate::kbd::is_terminal(&app_id(&window)) || !self.prefs.auto {
+                return;
+            }
+            if now.saturating_sub(self.window_touched_at) > 2_000_000_000 {
+                tracing::debug!("keyboard: a field in {} took the cursor by itself, left down", app_id(&window));
+                return;
+            }
+            tracing::debug!("keyboard: a field in {} took the cursor", app_id(&window));
+            self.keyboard_for(window, crate::kbd::Layer::Letters);
+            self.kbd_auto = true;
+        } else if self.kbd_auto && self.kbd.out() {
+            self.field_left_at = Some(now);
+        }
+    }
+
+    /// The keyboard that came up by itself goes half a second after its
+    /// field was left (main.rs's tick).
+    pub fn settle_field(&mut self, now: u64) {
+        if self.field_left_at.is_some_and(|t| now.saturating_sub(t) >= 500_000_000) {
+            self.field_left_at = None;
+            // On the deck (the frame turned) the keyboard is at home: it
+            // stays up across windows, down only by hand.
+            if self.kbd_auto && self.kbd.out() && !layout::turned() {
+                tracing::debug!("keyboard: the field was left, down");
+                self.kbd.show(None, None);
+                self.follow_keyboard();
+                self.needs_redraw = true;
+            }
+            self.kbd_auto = false;
+        }
+    }
+
+    /// What the keyboard asks (kbd.rs).
+    pub fn keyboard_ask(&mut self, ask: crate::kbd::Ask) {
+        match ask {
+            crate::kbd::Ask::Key(k) => self.send_keys(&[k]),
+            crate::kbd::Ask::Text(text) => self.type_text(&text),
+        }
+        self.needs_redraw = true;
+    }
+
+    /// The window the keyboard types into: the one with the focus, else
+    /// the one on top of its panel.
+    fn keyboard_window(&self) -> Option<Window> {
+        let focused = self.seat.get_keyboard().unwrap().current_focus();
+        // Turned (layout.rs), the window is the screen's whether or not the
+        // keyboard is up: the agent's strip on the deck follows it.
+        self.space.elements().find(|w| focused.as_ref() == Some(w.toplevel().unwrap().wl_surface())).cloned().or_else(|| self.kbd.panel().or(layout::turned().then_some(0)).and_then(|p| self.top_window(p)))
+    }
+
+    /// Keys pressed on the window above the keyboard, from the compositor's
+    /// own keyboard, as go_back sends Alt+Left: each with its modifiers
+    /// held round it, in the keymap's group it is read in.
+    pub fn send_keys(&mut self, keys: &[crate::typing::Key]) {
+        let Some(window) = self.keyboard_window() else {
+            tracing::info!("keyboard: no window to type into");
+            return;
+        };
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+        use smithay::backend::input::KeyState;
+        use smithay::input::keyboard::{FilterResult, Keycode, Layout};
+        let mut time = (hybris_hwc::now_ns() / 1_000_000) as u32;
+        let mut group = 0u8;
+        for k in keys {
+            if k.group != group {
+                group = k.group;
+                keyboard.with_xkb_state(self, |mut ctx| ctx.set_layout(Layout(group as u32)));
+            }
+            let mut seq = Vec::with_capacity(8);
+            if k.ctrl {
+                seq.push((crate::typing::LEFT_CTRL, KeyState::Pressed));
+            }
+            if k.alt {
+                seq.push((crate::typing::LEFT_ALT, KeyState::Pressed));
+            }
+            if k.shift {
+                seq.push((crate::typing::LEFT_SHIFT, KeyState::Pressed));
+            }
+            seq.push((k.code, KeyState::Pressed));
+            seq.push((k.code, KeyState::Released));
+            if k.shift {
+                seq.push((crate::typing::LEFT_SHIFT, KeyState::Released));
+            }
+            if k.alt {
+                seq.push((crate::typing::LEFT_ALT, KeyState::Released));
+            }
+            if k.ctrl {
+                seq.push((crate::typing::LEFT_CTRL, KeyState::Released));
+            }
+            for (code, state) in seq {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                keyboard.input::<(), _>(self, Keycode::new(code + 8), state, serial, time, |_, _, _| FilterResult::Forward);
+            }
+            time = time.wrapping_add(1);
+        }
+        if group != 0 {
+            keyboard.with_xkb_state(self, |mut ctx| ctx.set_layout(Layout(0)));
+        }
+    }
+
+    /// Words typed into the window above the keyboard.
+    pub fn type_text(&mut self, text: &str) {
+        let keys = crate::typing::keys_for(text);
+        tracing::debug!("keyboard: typing {} keys", keys.len());
+        self.send_keys(&keys);
+    }
+
     /// Back on a panel: its window gets the focus and Alt+Left (back.rs).
     pub fn go_back(&mut self, panel: usize) {
         let Some(window) = self.top_window(panel) else { return };
@@ -816,7 +1348,8 @@ impl State {
         };
         let (window, _) = self.put_away.remove(i);
         let rect = layout::panels()[panel];
-        window.toplevel().unwrap().with_pending_state(|s| s.size = Some(rect.size));
+        let band = self.dock_band(panel);
+        window.toplevel().unwrap().with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - band).into()));
         window.toplevel().unwrap().send_pending_configure();
         self.ribbon.open(window.clone(), panel);
         self.opened_onto(&window, panel);
@@ -832,7 +1365,11 @@ impl State {
     /// The windows' height on the keyboard's panel follows the keyboard:
     /// shorter by its height while it is up, whole again after.
     pub fn follow_keyboard(&mut self) {
-        let now = if std::env::var_os("NO_OSK_RESIZE").is_some() { None } else { self.layers.keyboard_height() };
+        // The keyboard's bottom row for the window typed into.
+        let (web, terminal) = self.keyboard_window().map(|w| (crate::kbd::is_browser(&app_id(&w)), crate::kbd::is_terminal(&app_id(&w)))).unwrap_or((false, false));
+        self.kbd.set_window(web, terminal);
+        // item's keyboard takes its half; stevia's height when it is stevia.
+        let now = if std::env::var_os("NO_OSK_RESIZE").is_some() { None } else { self.kbd.cut().or_else(|| self.layers.keyboard_height()) };
         if now == self.osk_applied {
             return;
         }
@@ -851,7 +1388,7 @@ impl State {
             }
             for window in self.space.elements().filter(|w| self.space.element_location(w).is_some_and(|l| rect.contains(l))) {
                 let t = window.toplevel().unwrap();
-                t.with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - cut).into()));
+                t.with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - cut - self.dock_band(p)).into()));
                 t.send_pending_configure();
             }
         }
@@ -959,17 +1496,30 @@ impl CompositorHandler for State {
                 self.touch_answered.get_or_insert(touched);
             }
         }
+        if let Some(sent) = self.key_sent.take() {
+            let waited = hybris_hwc::now_ns().saturating_sub(sent);
+            if waited < 500_000_000 {
+                tracing::debug!("keyboard: the client answered the key in {:.1} ms", waited as f64 / 1e6);
+                self.key_answered.get_or_insert(sent);
+            }
+        }
         let kind = with_renderer_surface_state(surface, |rs| rs.buffer().map(|b| format!("{:?}", buffer_type(b))))
             .flatten();
         // The launched app's window drew: the curtain over it lifts.
         if kind.is_some() && self.curtain.drawn(surface, hybris_hwc::now_ns()) {
             self.needs_redraw = true;
         }
+        if kind.is_some() {
+            if let Some(i) = self.warm_pending.iter().position(|(w, _)| w.toplevel().unwrap().wl_surface() == surface) {
+                let (window, pi) = self.warm_pending.remove(i);
+                self.warm_or_show(window, pi);
+            }
+        }
         if let Some(kind) = kind {
             let id = format!("{:?}", surface.id());
             if self.buffer_kinds.insert(id.clone(), kind.clone()).as_ref() != Some(&kind) {
                 let app = self.space.elements().find(|w| w.toplevel().unwrap().wl_surface() == surface).map(app_id);
-                tracing::info!("surface {id}: buffer {kind}{}", app.map(|a| format!(", app id {a}")).unwrap_or_default());
+                tracing::debug!("surface {id}: buffer {kind}{}", app.map(|a| format!(", app id {a}")).unwrap_or_default());
             }
         }
 
@@ -983,8 +1533,10 @@ impl CompositorHandler for State {
             }
         }
 
-        // A toplevel's first commit gets its first configure.
-        if let Some(window) = self.space.elements().find(|w| w.toplevel().unwrap().wl_surface() == surface).cloned() {
+        // A toplevel's first commit gets its first configure (a window
+        // waiting for its app id too, draft 49: it is in no space yet).
+        let shown = self.space.elements().find(|w| w.toplevel().unwrap().wl_surface() == surface).cloned();
+        if let Some(window) = shown.or_else(|| self.warm_pending.iter().find(|(w, _)| w.toplevel().unwrap().wl_surface() == surface).map(|(w, _)| w.clone())) {
             let sent = with_states(surface, |states| {
                 states.data_map.get::<XdgToplevelSurfaceData>().unwrap().lock().unwrap().initial_configure_sent
             });
@@ -995,7 +1547,9 @@ impl CompositorHandler for State {
         self.popups.commit(surface);
         if let Some(PopupKind::Xdg(ref xdg)) = self.popups.find_popup(surface) {
             if !xdg.is_initial_configure_sent() {
-                xdg.send_configure().expect("initial configure failed");
+                if let Err(e) = xdg.send_configure() {
+                    tracing::warn!("popup: its first configure: {e}");
+                }
             }
         }
     }
@@ -1023,18 +1577,40 @@ impl XdgShellHandler for State {
         // The panel a launch from the dock asked for, if it was lately;
         // else the next in turn.
         let asked = self.launch_to.take().filter(|&(_, at)| hybris_hwc::now_ns() - at < 10_000_000_000).map(|(p, _)| p);
-        let panel = match asked {
-            Some(p) => panels[p],
+        // Not asked for (opened by another app): a free panel, so what is
+        // shown stays where it is; none free, the next in turn.
+        let free = (0..2).find(|&p| matches!(self.ribbon.on(p), Some(crate::ribbon::Page::Desk(_))));
+        let mut pi = match asked.or(free) {
+            Some(p) => p,
             None => {
                 self.next_panel += 1;
-                panels[(self.next_panel - 1) % panels.len()]
+                (self.next_panel - 1) % panels.len()
             }
         };
+        // The frame turned (layout.rs): every window is the screen's; the
+        // deck takes none.
+        if layout::turned() {
+            pi = 0;
+        }
+        let panel = panels[pi];
+        let band = self.dock_band(pi);
         surface.with_pending_state(|state| {
-            state.size = Some(panel.size);
+            state.size = Some((panel.size.w, panel.size.h - band).into());
             state.states.set(xdg_toplevel::State::Maximized);
             state.states.set(xdg_toplevel::State::Activated);
         });
+        // A warm launch pending (draft 49) and no launch asked for: the
+        // window waits unshown until its first buffer tells its app id -
+        // a warming app's goes straight to the windows put away, any
+        // other's is shown then (warm_or_show).
+        if asked.is_none() && !self.warming.is_empty() {
+            let window = Window::new_wayland_window(surface);
+            self.warm_pending.push((window, pi));
+            if self.next_panel > 0 && free.is_none() {
+                self.next_panel -= 1;
+            }
+            return;
+        }
         if asked.is_some() {
             let p = panels.iter().position(|r| *r == panel).unwrap_or(0);
             self.curtain.adopt(p, surface.wl_surface());
@@ -1043,9 +1619,17 @@ impl XdgShellHandler for State {
         // The pages move for it: the clocks up before they do.
         self.boost.kick(hybris_hwc::now_ns());
         let p = panels.iter().position(|r| *r == panel).unwrap_or(0);
-        self.ribbon.open(window.clone(), p);
+        if asked.is_none() && free == Some(p) {
+            self.ribbon.open_free(window.clone(), p);
+        } else {
+            self.ribbon.open(window.clone(), p);
+        }
         self.opened_onto(&window, p);
         self.space.map_element(window.clone(), panel.loc, true);
+        if self.kbd_wanted.take_if(|t| hybris_hwc::now_ns().saturating_sub(*t) < 10_000_000_000).is_some() {
+            self.keyboard_for(window.clone(), crate::kbd::Layer::Vibe);
+            self.kbd_auto = false;
+        }
         self.needs_redraw = true;
         tracing::info!(
             "window mapped on the {} panel, {:.1} s after start",
@@ -1067,8 +1651,10 @@ impl XdgShellHandler for State {
         });
         if let Some(w) = page {
             self.ribbon.remove(&w);
+            self.keyboard_gone_with(&w);
         }
         self.put_away.retain(|(w, _)| w.toplevel().unwrap().wl_surface() != surface.wl_surface());
+        self.warm_pending.retain(|(w, _)| w.toplevel().unwrap().wl_surface() != surface.wl_surface());
         self.needs_redraw = true;
     }
 
@@ -1100,15 +1686,41 @@ impl SeatHandler for State {
         // The keyboard goes to the panel of the window that takes the focus.
         if let Some(f) = focused {
             let panels = layout::panels();
-            if let Some(p) = self
+            let panel = self
                 .space
                 .elements()
                 .find(|w| w.toplevel().unwrap().wl_surface() == f)
                 .and_then(|w| self.space.element_location(w))
-                .and_then(|l| panels.iter().position(|r| r.contains(l)))
-            {
+                .and_then(|l| panels.iter().position(|r| r.contains(l)));
+            if let Some(p) = panel {
                 self.layers.panel = p;
             }
+        }
+        // The text inputs of the window losing the focus told `leave`, the
+        // new one's `enter`: without an input method bound smithay tells
+        // them nothing, and a client enables a field only after enter
+        // (Chromium; GTK does without). The handle speaks to the surface
+        // it holds, so the old one is put back for its leave.
+        if crate::kbd::choice() == crate::kbd::Choice::Item {
+            use smithay::wayland::text_input::TextInputSeat;
+            let ti = self.seat.text_input();
+            if self.text_entered.as_ref() != focused {
+                if let Some(old) = self.text_entered.take().filter(|s| s.is_alive()) {
+                    ti.set_focus(Some(old));
+                    ti.leave();
+                }
+                ti.set_focus(focused.cloned());
+                if focused.is_some() {
+                    ti.enter();
+                    self.text_entered = focused.cloned();
+                }
+            }
+        }
+        // The focus gone from the window a field raised the keyboard for:
+        // the field is left (text_field), unless the next window's field
+        // takes the cursor within the half second.
+        if self.kbd_auto && self.kbd.out() && self.kbd_window.as_ref().is_some_and(|w| Some(w.toplevel().unwrap().wl_surface()) != focused) {
+            self.field_left_at.get_or_insert(hybris_hwc::now_ns());
         }
         let client = focused.and_then(|s| self.display_handle.get_client(s.id()).ok());
         set_data_device_focus(&self.display_handle, seat, client);
@@ -1169,12 +1781,39 @@ impl OutputHandler for State {}
 delegate_compositor!(State);
 delegate_shm!(State);
 delegate_xdg_shell!(State);
+
+/// xdg-activation (GTK's gtk_window_present, an app told to show itself by
+/// its second instance or a call coming in): a window of the app's that
+/// is put away comes back onto its panel; a shown one takes the keyboard.
+/// Only the token's own client reaches its surfaces, as the protocol has it.
+impl XdgActivationHandler for State {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.xdg_activation_state
+    }
+
+    fn request_activation(&mut self, token: XdgActivationToken, _token_data: XdgActivationTokenData, surface: WlSurface) {
+        self.xdg_activation_state.remove_token(&token);
+        if let Some((window, panel)) = self.put_away.iter().find(|(w, _)| w.toplevel().unwrap().wl_surface() == &surface).cloned() {
+            let panel = if layout::turned() { 0 } else { panel };
+            tracing::info!("activation: {} asks to be shown, brought back", app_id(&window));
+            let ids = [app_id(&window)];
+            self.bring_back(&ids, panel);
+            return;
+        }
+        let shown = self.space.elements().find(|w| w.toplevel().unwrap().wl_surface() == &surface).map(app_id);
+        if let Some(id) = shown {
+            let keyboard = self.seat.get_keyboard().unwrap();
+            keyboard.set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
+            tracing::info!("activation: {id} asks to be shown, has the keyboard");
+        }
+    }
+}
+delegate_xdg_activation!(State);
 delegate_seat!(State);
 delegate_data_device!(State);
 delegate_output!(State);
 delegate_layer_shell!(State);
 delegate_input_method_manager!(State);
-delegate_text_input_manager!(State);
 delegate_virtual_keyboard_manager!(State);
 smithay::delegate_data_control!(State);
 
@@ -1193,3 +1832,42 @@ impl smithay::wayland::idle_inhibit::IdleInhibitHandler for State {
 }
 smithay::delegate_idle_inhibit!(State);
 smithay::delegate_presentation!(State);
+
+/// `s` as one word for sh: in single quotes, its own quotes closed, escaped
+/// and reopened. For anything that goes into a `sh -c` line and came from
+/// outside (a session's path, a name from another device).
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// A window asked of the Chromium kept resident (session/item-chromium.service,
+/// `--no-startup-window --keep-alive-for-test`) over its singleton socket:
+/// "START\0<cwd>\0<argv>..." with no delimiter after the last, the write
+/// side shut, "ACK" back (chrome/browser/process_singleton_posix.cc). A
+/// second chromium process would load its 300 MB only to do the same: 0.67 s
+/// to the window this way against 1.5-1.8 (2026-10-23). `exec` is the
+/// desktop entry's command, its arguments handed on. Whether it answered.
+fn resident_chromium(exec: &str) -> bool {
+    use std::io::{Read, Write};
+    use std::os::unix::ffi::OsStrExt;
+    let Some(home) = std::env::var_os("HOME") else { return false };
+    let socket = std::path::Path::new(&home).join(".config/chromium/SingletonSocket");
+    let Ok(mut s) = std::os::unix::net::UnixStream::connect(&socket) else { return false };
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(500)));
+    let mut message = b"START\0".to_vec();
+    message.extend_from_slice(home.as_bytes());
+    message.extend_from_slice(b"\0chromium\0--new-window");
+    for arg in exec.split_whitespace().skip(1) {
+        message.push(0);
+        message.extend_from_slice(arg.as_bytes());
+    }
+    if s.write_all(&message).is_err() {
+        return false;
+    }
+    let _ = s.shutdown(std::net::Shutdown::Write);
+    let mut reply = [0u8; 8];
+    let n = s.read(&mut reply).unwrap_or(0);
+    &reply[..n] == b"ACK"
+}
+

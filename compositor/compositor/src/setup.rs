@@ -129,7 +129,7 @@ enum Step {
 }
 
 fn marker() -> std::path::PathBuf {
-    std::path::Path::new(&std::env::var("HOME").unwrap_or_default()).join(".config/item/setup-done")
+    crate::prefs::path("setup-done")
 }
 
 /// Whether the first setup is to be shown.
@@ -141,7 +141,7 @@ pub fn wanted() -> bool {
 /// ChangeWithMasterPassword, secrets in a plain session).
 fn change_keyring(old: &str, new: &str) -> Result<(), String> {
     use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
-    let conn = zbus::blocking::Connection::session().map_err(|e| e.to_string())?;
+    let conn = crate::bus::session().map_err(|e| e.to_string())?;
     let (_, session): (zbus::zvariant::OwnedValue, OwnedObjectPath) = conn
         .call_method(Some("org.freedesktop.secrets"), "/org/freedesktop/secrets", Some("org.freedesktop.Secret.Service"), "OpenSession", &("plain", Value::from("")))
         .and_then(|r| r.body().deserialize())
@@ -1054,7 +1054,7 @@ impl Setup {
 
         // The wallpaper through, darkened, over everything else (the output
         // puts the wallpaper under it).
-        let (lw, lh) = layout::LAYOUT;
+        let (lw, lh) = layout::size();
         let rect = Rectangle::<i32, Physical>::from_size((lw * SCALE, lh * SCALE).into());
         out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, CommitCounter::from((fade * 1000.0) as usize), [0.0, 0.0, 0.0, SHADE * fade as f32], Kind::Unspecified)));
         out

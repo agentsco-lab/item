@@ -92,12 +92,11 @@ impl Follow {
             .filter_map(|l| l.split_once(' ').map(|(a, b)| (a.to_owned(), b.to_owned())))
             .collect();
         let shared = Arc::new(Mutex::new(Shared { follows, present: Vec::new() }));
-        let conn = zbus::blocking::connection::Builder::session()
-            .and_then(|b| b.name("org.sfduo.Dock"))
-            .and_then(|b| b.name("org.sfduo.Phoc"))
-            .and_then(|b| b.serve_at("/org/sfduo/Dock", Dock { shared: shared.clone(), wake: wake.clone() }))
-            .and_then(|b| b.serve_at("/org/sfduo/Phoc", Phoc { shared: shared.clone(), wake }))
-            .and_then(|b| b.build());
+        let conn = crate::bus::session().and_then(|c| {
+            crate::bus::serve(&c, &[], "/org/sfduo/Dock", Dock { shared: shared.clone(), wake: wake.clone() })?;
+            crate::bus::serve(&c, &["org.sfduo.Dock", "org.sfduo.Phoc"], "/org/sfduo/Phoc", Phoc { shared: shared.clone(), wake })?;
+            Ok(c)
+        });
         match &conn {
             Ok(_) => tracing::info!("follow: org.sfduo.Dock and org.sfduo.Phoc"),
             Err(e) => tracing::warn!("follow: not on the bus: {e}"),

@@ -108,24 +108,46 @@ pub struct Grid {
 impl Grid {
     pub fn new() -> Grid {
         let entries = apps::all();
-        let (w, h) = (layout::panels()[0].size.w as f64, layout::LAYOUT.1 as f64);
-        let cell_w = (w - 2.0 * PAD_X) / COLUMNS as f64;
+        let (cells, texture, highlight) = Self::lay(&entries);
+        tracing::info!("grid: {} apps", entries.len());
+        Grid { entries, cells, texture, highlight, dot: running_dot(), panel: 0, p: 0.0, pending: None, grab: None, run: None, pressed: None }
+    }
+
+    /// The cells and the picture for a panel as it is: the book's 675 x 900
+    /// in five columns, the turned frame's 900 x 675 in seven.
+    fn lay(entries: &[Entry]) -> (Vec<Rectangle<f64, Logical>>, Option<MemoryRenderBuffer>, MemoryRenderBuffer) {
+        let panel = layout::panels()[0];
+        let (w, h) = (panel.size.w as f64, panel.size.h as f64);
+        let columns = if layout::turned() { 7 } else { COLUMNS };
+        let cell_w = (w - 2.0 * PAD_X) / columns as f64;
         let cell_h = CELL_PAD + ICON + LABEL_GAP + LABEL_H + CELL_PAD;
         let cells: Vec<Rectangle<f64, Logical>> = (0..entries.len())
             .map(|i| {
-                let (col, row) = ((i % COLUMNS) as f64, (i / COLUMNS) as f64);
+                let (col, row) = ((i % columns) as f64, (i / columns) as f64);
                 Rectangle::new((PAD_X + col * cell_w, TOP + row * (cell_h + SPACING)).into(), (cell_w, cell_h).into())
             })
             .collect();
-        let texture = draw(&entries, &cells, w, h);
-        tracing::info!("grid: {} apps", entries.len());
+        let texture = draw(entries, &cells, w, h);
         let highlight = rounded(cell_w, cell_h, 16.0, [255, 255, 255, 31]);
-        Grid { entries, cells, texture, highlight, dot: running_dot(), panel: 0, p: 0.0, pending: None, grab: None, run: None, pressed: None }
+        (cells, texture, highlight)
+    }
+
+    /// The frame turned (layout.rs): laid again for the screen's shape.
+    pub fn relay(&mut self) {
+        let (cells, texture, highlight) = Self::lay(&self.entries);
+        self.cells = cells;
+        self.texture = texture;
+        self.highlight = highlight;
+        self.panel = 0;
+        self.p = 0.0;
+        self.run = None;
+        self.grab = None;
+        self.pending = None;
     }
 
     fn at(&self, frame_ns: u64) -> f64 {
         if let Some(g) = &self.grab {
-            return (g.from - (g.last.1 - g.start_y) / (layout::LAYOUT.1 as f64 * TRAVEL)).clamp(0.0, 1.0);
+            return (g.from - (g.last.1 - g.start_y) / (layout::panels()[0].size.h as f64 * TRAVEL)).clamp(0.0, 1.0);
         }
         match &self.run {
             Some(r) => {
@@ -326,8 +348,9 @@ impl Grid {
             return Vec::new();
         }
         let panel = layout::panels()[self.panel];
-        // It slides up whole, not scaled (item's bottom margin).
-        let y = ((layout::LAYOUT.1 as f64 * (1.0 - p)) * SCALE as f64).round();
+        // It slides up whole, not scaled (item's bottom margin), from its
+        // panel's bottom to its top.
+        let y = ((panel.loc.y as f64 + panel.size.h as f64 * (1.0 - p)) * SCALE as f64).round();
         let x = (panel.loc.x * SCALE) as f64;
         let mut out = Vec::new();
         // A dot under each running app's name.
@@ -349,8 +372,16 @@ impl Grid {
                 out.push(ShellElement::Text(e));
             }
         }
-        if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (x, y), texture, None, None, None, Kind::Unspecified) {
+        // Only the part within its panel: rising, the rest is below it (the
+        // deck, when the frame is turned), not to be seen.
+        let bottom = ((panel.loc.y + panel.size.h) * SCALE) as f64;
+        let visible = ((bottom - y) / SCALE as f64).floor().max(0.0);
+        let src = Rectangle::<f64, Logical>::new((0.0, 0.0).into(), (panel.size.w as f64, visible).into());
+        let size = smithay::utils::Size::<i32, Logical>::from((panel.size.w, visible as i32));
+        if visible >= 1.0 {
+        if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (x, y), texture, None, Some(src), Some(size), Kind::Unspecified) {
             out.push(ShellElement::Text(e));
+        }
         }
         out
     }

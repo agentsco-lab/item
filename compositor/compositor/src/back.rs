@@ -48,7 +48,18 @@ impl Back {
     /// Whether a point is on a panel's back strip.
     pub fn strip_at(pos: Point<f64, Logical>) -> Option<usize> {
         let panels = layout::panels();
-        let bottom = layout::LAYOUT.1 as f64 - crate::gesture::EDGE;
+        // The frame turned (layout.rs): the screen's two sides are both its
+        // back strips; the deck has none.
+        if layout::turned() {
+            let p = panels[0];
+            let (top, bottom) = (p.loc.y as f64 + TOP, (p.loc.y + p.size.h) as f64 - crate::gesture::EDGE);
+            if pos.y < top || pos.y >= bottom {
+                return None;
+            }
+            let (left, right) = (p.loc.x as f64, (p.loc.x + p.size.w) as f64);
+            return (pos.x < left + STRIP || pos.x >= right - STRIP).then_some(0);
+        }
+        let bottom = layout::size().1 as f64 - crate::gesture::EDGE;
         if pos.y < TOP || pos.y >= bottom {
             return None;
         }

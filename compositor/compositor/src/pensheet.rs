@@ -310,7 +310,7 @@ impl PenSheet {
 
     fn canvas(&mut self) -> &mut MemoryRenderBuffer {
         if self.canvas.is_none() {
-            let (w, h) = (layout::LAYOUT.0 * SCALE, layout::LAYOUT.1 * SCALE);
+            let (w, h) = (layout::size().0 * SCALE, layout::size().1 * SCALE);
             let mut data = vec![0u8; (w * h * 4) as usize];
             for px in data.chunks_exact_mut(4) {
                 px.copy_from_slice(&PAPER);
@@ -338,6 +338,12 @@ impl PenSheet {
     fn strip_rect(spread: f64) -> Rectangle<f64, Logical> {
         let left = layout::panels()[0];
         let h = BUTTONS.len() as f64 * (BUTTON + BUTTON_GAP) - BUTTON_GAP + 2.0 * STRIP_PAD;
+        // Turned (layout.rs): the sheet is the lower panel, the strip at its
+        // left edge, not spreading.
+        if layout::turned() {
+            let low = layout::panels()[1];
+            return Rectangle::new((low.loc.x as f64 + STRIP_EDGE, low.loc.y as f64 + (low.size.h as f64 - h) / 2.0).into(), (STRIP_W, h).into());
+        }
         let closed = (left.loc.x + left.size.w) as f64 - STRIP_W - STRIP_EDGE;
         let x = closed - Self::spread_span() * spread;
         Rectangle::new((x, (left.size.h as f64 - h) / 2.0).into(), (STRIP_W, h).into())
@@ -508,7 +514,7 @@ impl PenSheet {
     }
 
     fn fill_paper(&mut self) {
-        let (w, h) = (layout::LAYOUT.0 * SCALE, layout::LAYOUT.1 * SCALE);
+        let (w, h) = (layout::size().0 * SCALE, layout::size().1 * SCALE);
         let Some(c) = &mut self.canvas else { return };
         let mut ctx = c.render();
         let _ = ctx.draw(|mem| {
@@ -524,7 +530,7 @@ impl PenSheet {
     fn save(&mut self) {
         let [left, right] = layout::panels();
         let s = SCALE;
-        let (cw, h) = ((layout::LAYOUT.0 * s) as usize, (right.size.h * s) as usize);
+        let (cw, h) = ((layout::size().0 * s) as usize, (right.size.h * s) as usize);
         let parts: Vec<(usize, usize)> = if self.spread > 0.0 {
             vec![((left.loc.x * s) as usize, (left.size.w * s) as usize), ((right.loc.x * s) as usize, (right.size.w * s) as usize)]
         } else {
@@ -766,7 +772,7 @@ impl PenSheet {
         if at > 0 {
             let long = (hybris_hwc::now_ns() - at) as f64 / 1e9;
             let (frames, ens, emax) = self.elements_cost.take();
-            tracing::info!("pen: a stroke: {events} events ({:.0}/s), {pieces} pieces, drawing {:.1} ms in all, {:.2} ms the longest; the sheet's elements {:.2} ms a frame, {:.2} the most ({frames} frames)", events as f64 / long.max(1e-3), ns as f64 / 1e6, worst as f64 / 1e6, ens as f64 / 1e6 / frames.max(1) as f64, emax as f64 / 1e6);
+            tracing::debug!("pen: a stroke: {events} events ({:.0}/s), {pieces} pieces, drawing {:.1} ms in all, {:.2} ms the longest; the sheet's elements {:.2} ms a frame, {:.2} the most ({frames} frames)", events as f64 / long.max(1e-3), ns as f64 / 1e6, worst as f64 / 1e6, ens as f64 / 1e6 / frames.max(1) as f64, emax as f64 / 1e6);
         }
         if let Some((pts, erase)) = self.stroke.take() {
             let n = pts.len();
@@ -821,7 +827,7 @@ impl PenSheet {
     /// width between its ends', round-capped so they join; only their
     /// bounds are damage.
     fn ink_now(&mut self, pts: &[(f32, f32, f32)], erase: bool, ink: [u8; 4]) {
-        let (w, h) = ((layout::LAYOUT.0 * SCALE) as u32, (layout::LAYOUT.1 * SCALE) as u32);
+        let (w, h) = ((layout::size().0 * SCALE) as u32, (layout::size().1 * SCALE) as u32);
         let canvas = self.canvas();
         let mut ctx = canvas.render();
         let _ = ctx.draw(|mem| {
@@ -953,9 +959,12 @@ impl PenSheet {
             if x1 - x0 < 1.0 {
                 return None;
             }
-            let src = Rectangle::<f64, Logical>::new((x0, 0.0).into(), (x1 - x0, right.size.h as f64).into());
+            // The sheet's panel's rows of the canvas (the lower panel's when
+            // the frame is turned), at the panel.
+            let y = right.loc.y as f64;
+            let src = Rectangle::<f64, Logical>::new((x0, y).into(), (x1 - x0, right.size.h as f64).into());
             let size = Size::<i32, Logical>::from(((x1 - x0).round() as i32, right.size.h));
-            MemoryRenderBufferRenderElement::from_buffer(renderer, (((x0 + dx) * s).round(), 0.0), canvas, None, Some(src), Some(size), Kind::Unspecified).ok().map(ShellElement::Text)
+            MemoryRenderBufferRenderElement::from_buffer(renderer, (((x0 + dx) * s).round(), (y * s).round()), canvas, None, Some(src), Some(size), Kind::Unspecified).ok().map(ShellElement::Text)
         };
         let strip = Self::strip_rect(spread);
         let put = |out: &mut Vec<ShellElement>, renderer: &mut GlesRenderer, b: &MemoryRenderBuffer, x: f64, y: f64| {
@@ -1002,7 +1011,8 @@ impl PenSheet {
         if let Some(e) = part(renderer, right.loc.x as f64, (right.loc.x + right.size.w) as f64) {
             out.push(e);
         }
-        if spread > 0.0 {
+        // Turned, the sheet is the deck alone: nothing spreads onto the upper panel.
+        if spread > 0.0 && !layout::turned() {
             if let Some(e) = part(renderer, strip.loc.x + STRIP_W + STRIP_EDGE, (left.loc.x + left.size.w) as f64) {
                 out.push(e);
             }

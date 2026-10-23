@@ -29,7 +29,7 @@
 //! back.
 //! A tap on an icon launches the app onto the panel it was tapped on.
 //!
-//! The apps are item's: `~/.config/sfduo/dock.json` (`{"left": [...],
+//! The apps are item's: `~/.config/item/dock.json` (`{"left": [...],
 //! "right": [...]}`, desktop file names), else a default. Icons come from the
 //! hicolor theme, SVG through resvg or PNG, rasterized once at start at the
 //! output's scale.
@@ -65,6 +65,10 @@ const SLAB: [u8; 4] = [37, 46, 42, 255];
 /// How long a move takes (item's MOVE_CROSS_MS was 440 ms; drops of water
 /// go slower).
 const MOVE_NS: u64 = 640_000_000;
+/// A move carried over a turn of the frame (output.rs's turn is 300 ms).
+const CARRY_NS: u64 = 300_000_000;
+/// The halves' way between the screen and the deck (draft 46: quicker than a mode move).
+const DECK_NS: u64 = 400_000_000;
 /// A paced scrub's fastest: this much of the way in MOVE_NS - about the
 /// dock's own eased move at its quickest.
 const PACE: f64 = 1.4;
@@ -93,7 +97,7 @@ const TAP: f64 = 12.0;
 
 const DEFAULT: [&[&str]; 2] = [
     &["org.gnome.Calls.desktop", "sm.puri.Chatty.desktop"],
-    &["org.gnome.Epiphany.desktop", "org.gnome.Settings.desktop", "org.gnome.Weather.desktop"],
+    &["chromium.desktop", "lab.agentsco.item.Settings.desktop", "org.gnome.Weather.desktop"],
 ];
 
 #[derive(Clone)]
@@ -173,6 +177,12 @@ struct Move {
     from: Mode,
     to: Mode,
     start_ns: u64,
+    /// Where the halves set off from, when not `from`'s targets: their
+    /// places carried over a turn of the frame (`carry`), or where they
+    /// stood when the deck called them (`set_on_deck`).
+    from_places: Option<[Place; 2]>,
+    /// Its own length (ns), else MOVE_NS (and the bump).
+    ns: Option<u64>,
 }
 
 /// At the hinge: how far a part reaches into it (unseen, so it ends straight
@@ -266,6 +276,9 @@ const BIRTH_ICONS_NS: u64 = 350_000_000;
 pub struct Dock {
     /// When the halves start coming in from the sides (an unlock).
     rise: Option<u64>,
+    /// The frame turned and a window on the screen: the halves at the top
+    /// of the deck instead of the screen's bottom (state.rs tells it).
+    on_deck: std::cell::Cell<bool>,
     /// Born of a drop (`born`): when, where it was (its middle) and how
     /// big (its radius), logical px.
     birth: Option<(u64, (f64, f64), f64)>,
@@ -394,15 +407,24 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, paced: None, behind: false, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        Dock { rise: None, on_deck: Default::default(), birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, paced: None, behind: false, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
     fn targets(&self, mode: Mode) -> [Place; 2] {
         let (lw, h) = self.halves[0].size;
         let rw = self.halves[1].size.0;
-        let (width, height) = (layout::LAYOUT.0 as f64, layout::LAYOUT.1 as f64);
-        let y = height - (MARGIN + h) as f64;
+        let (width, height) = (layout::size().0 as f64, layout::size().1 as f64);
+        // Turned (layout.rs): along the bottom of the screen (the upper
+        // panel) as a laptop's taskbar while it is the desk; with a window
+        // there, at the top of the deck, out of the window's way (state.rs
+        // says which).
+        let y = if layout::turned() {
+            let [screen, deck] = layout::panels();
+            if self.on_deck.get() { (deck.loc.y + MARGIN) as f64 } else { (screen.loc.y + screen.size.h - MARGIN - h) as f64 }
+        } else {
+            height - (MARGIN + h) as f64
+        };
         let place = |x: f64, tuck: f64, joined: bool| Place { x, y, tuck, radius: if joined { 0.0 } else { RADIUS as f64 }, scale: 1.0, anchor: 0.0 };
         // Folded like a book, each piece goes from the screen's edge towards
         // its panel's middle: apart, BOOK_REACH of the way at 90 degrees;
@@ -444,6 +466,9 @@ impl Dock {
     /// How long a move takes: the crossing, and the bump when the halves
     /// meet from apart.
     fn duration(m: &Move) -> u64 {
+        if let Some(ns) = m.ns {
+            return ns;
+        }
         MOVE_NS + if Self::bumps(m) { SPRING_NS } else { 0 }
     }
 
@@ -471,7 +496,7 @@ impl Dock {
         self.mode = Mode::Both;
         self.shown = Mode::Both;
         let landed = at + BIRTH_FALL_NS;
-        self.moving = Some(Move { from: Mode::On(0), to: Mode::Both, start_ns: landed + BIRTH_SPREAD_NS });
+        self.moving = Some(Move { from: Mode::On(0), to: Mode::Both, start_ns: landed + BIRTH_SPREAD_NS, from_places: None, ns: None });
         // It lands with a splash: a wobble from then.
         self.popped.set([landed, landed]);
     }
@@ -533,7 +558,7 @@ impl Dock {
             let k = (frame_ns.saturating_sub(at) as f64 / RISE_NS as f64).clamp(0.0, 1.0);
             let off = 1.0 - (1.0 - (1.0 - k).powi(3));
             let (w0, w1) = (self.halves[0].size.0 as f64, self.halves[1].size.0 as f64);
-            let width = layout::LAYOUT.0 as f64;
+            let width = layout::size().0 as f64;
             p[0].x -= (p[0].x + w0 + 10.0) * off;
             p[1].x += (width - p[1].x + 10.0) * off;
             p[0].anchor = p[0].x;
@@ -550,16 +575,40 @@ impl Dock {
         }
         let Some(m) = &self.moving else { return self.targets(self.mode) };
         let all = (frame_ns.saturating_sub(m.start_ns) as f64 / Self::duration(m) as f64).clamp(0.0, 1.0);
-        let travel = MOVE_NS as f64 / Self::duration(m) as f64;
+        let travel = if m.ns.is_some() { 1.0 } else { MOVE_NS as f64 / Self::duration(m) as f64 };
         let (k, bump) = if all >= travel && Self::bumps(m) { (1.0, Some((all - travel) / (1.0 - travel))) } else { ((all / travel).min(1.0), None) };
-        self.between(m.from, m.to, k, bump, false)
+        self.between_from(m.from_places, m.from, m.to, k, bump, false)
+    }
+
+    /// The halves' places now, for carrying them over a turn of the frame.
+    pub fn places_now(&self, now_ns: u64) -> [(f64, f64); 2] {
+        let places = self.places(now_ns);
+        [0, 1].map(|i| (places[i].x + self.halves[i].size.0 as f64 / 2.0, places[i].y + self.halves[i].size.1 as f64 / 2.0))
+    }
+
+    /// The frame turned (layout.rs): the halves set off from where they
+    /// were - their centres `map`ped into the new frame - to their places
+    /// in it, at the dock's own pace.
+    pub fn carry(&mut self, centres: [(f64, f64); 2], map: impl Fn((f64, f64)) -> (f64, f64), now_ns: u64) {
+        let places = self.targets(self.mode);
+        let from = [0, 1].map(|i| {
+            let (cx, cy) = map(centres[i]);
+            Place { x: cx - self.halves[i].size.0 as f64 / 2.0, y: cy - self.halves[i].size.1 as f64 / 2.0, ..places[i] }
+        });
+        self.scrub = None;
+        self.moving = Some(Move { from: self.mode, to: self.mode, start_ns: now_ns, from_places: Some(from), ns: Some(CARRY_NS) });
     }
 
     /// The halves `k` of the way from `from` to `to`, eased as item's path
     /// (`linear`: as the finger has it, the contact's slowing only), and the
     /// bump after arriving.
     fn between(&self, from: Mode, to: Mode, k: f64, bump: Option<f64>, linear: bool) -> [Place; 2] {
-        let (a, b) = (self.targets(from), self.targets(to));
+        self.between_from(None, from, to, k, bump, linear)
+    }
+
+    /// As `between`, setting off from `a_from` when given (carried places).
+    fn between_from(&self, a_from: Option<[Place; 2]>, from: Mode, to: Mode, k: f64, bump: Option<f64>, linear: bool) -> [Place; 2] {
+        let (a, b) = (a_from.unwrap_or_else(|| self.targets(from)), self.targets(to));
         let joined = |mode: Mode| matches!(mode, Mode::On(_));
         let meeting = joined(from) != joined(to) && from != Mode::Hidden && to != Mode::Hidden;
         let e = if meeting {
@@ -645,6 +694,22 @@ impl Dock {
         self.book.set(book);
     }
 
+    /// Whether the halves stand on the deck (the frame turned, a window on
+    /// the screen): their move there is the dock's own (follow's mode move
+    /// does not run for it; the places just change, carried by `carry` at a
+    /// turn, else at once).
+    pub fn set_on_deck(&mut self, on: bool, now_ns: u64) {
+        if self.on_deck.get() == on {
+            return;
+        }
+        // From where they stand, at the dock's pace, through the hinge.
+        let from = self.places(now_ns);
+        self.on_deck.set(on);
+        self.scrub = None;
+        self.moving = Some(Move { from: self.mode, to: self.mode, start_ns: now_ns, from_places: Some(from), ns: Some(DECK_NS) });
+        tracing::debug!("dock: {}", if on { "to the deck" } else { "to the screen" });
+    }
+
     /// The middle of the panel the clock stands on (the home panel), on its
     /// way with the dock: during a move from one home panel to the other it
     /// goes along, eased as the halves are (or as the ribbon's finger has
@@ -663,7 +728,7 @@ impl Dock {
             (from, to, k, true)
         } else if let Some(m) = &self.moving {
             let all = (frame_ns.saturating_sub(m.start_ns) as f64 / Self::duration(m) as f64).clamp(0.0, 1.0);
-            let travel = MOVE_NS as f64 / Self::duration(m) as f64;
+            let travel = if m.ns.is_some() { 1.0 } else { MOVE_NS as f64 / Self::duration(m) as f64 };
             (m.from, m.to, (all / travel).min(1.0), false)
         } else {
             return middle(self.mode).map(|x| (x, false));
@@ -694,7 +759,7 @@ impl Dock {
             if let Some((a, b, at)) = way.filter(|(a, b, _)| a != b) {
                 self.scrub = None;
                 let u = self.time_at(a, b, at);
-                self.moving = Some(Move { from: a, to: b, start_ns: now_ns.saturating_sub((u * MOVE_NS as f64) as u64) });
+                self.moving = Some(Move { from: a, to: b, start_ns: now_ns.saturating_sub((u * MOVE_NS as f64) as u64), from_places: None, ns: None });
                 if b != Mode::Hidden {
                     self.shown = b;
                 }
@@ -717,7 +782,11 @@ impl Dock {
             self.shown = from;
         }
         tracing::debug!("dock: {from:?} -> {mode:?}");
-        self.moving = Some(Move { from, to: mode, start_ns: now_ns });
+        // Carried over a turn of the frame this same moment: the move keeps
+        // setting off from the carried places, now towards the new mode.
+        let carried = self.moving.as_ref().filter(|m| m.from_places.is_some() && now_ns.saturating_sub(m.start_ns) < 100_000_000);
+        let (start_ns, from_places, ns) = carried.map(|m| (m.start_ns, m.from_places, m.ns)).unwrap_or((now_ns, None, None));
+        self.moving = Some(Move { from, to: mode, start_ns, from_places, ns });
         self.mode = mode;
         for half in &mut self.halves {
             half.pressed = None;
@@ -1036,7 +1105,7 @@ impl Dock {
             let w = half_width(half.len().max(1)) as f64;
             let (x0, x1) = (p.x - TAKE_SIDE, p.x + w + TAKE_SIDE);
             let (y0, y1) = (p.y - TAKE_ABOVE, p.y + half.size.1 as f64 + 20.0);
-            if pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1 && p.y < layout::LAYOUT.1 as f64 {
+            if pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1 && p.y < layout::size().1 as f64 {
                 let at = ((pos.x - p.x - PAD as f64 + (ICON + GAP) as f64 / 2.0) / (ICON + GAP) as f64).floor().max(0.0) as usize;
                 if half.apps.len() < MAX_PER_HALF || c.from.is_some_and(|(fh, _)| fh == h) {
                     over = Some((h, at.min(half.apps.len())));
@@ -1147,7 +1216,7 @@ impl Dock {
             .map(ShellElement::Shaded)
             .collect();
         let places = self.places(frame_ns);
-        let bottom = layout::LAYOUT.1 as f64;
+        let bottom = layout::size().1 as f64;
         // Whole physical px, so a slab at rest is sharp.
         let px = |v: f64| (v * SCALE as f64).round();
         let mut push = |out: &mut Vec<ShellElement>, buffer: &MemoryRenderBuffer, x: f64, y: f64, dst: Option<(f64, f64)>, src: Option<Rectangle<f64, Logical>>, alpha: f32| {
@@ -1224,7 +1293,7 @@ impl Dock {
     /// at the hinge in two, its tail clinging to the edge it leaves until it
     /// lets go, its head coming out round on the other side.
     fn shape(&self, places: &[Place; 2], frame_ns: u64) -> Shape {
-        let bottom = layout::LAYOUT.1 as f64;
+        let bottom = layout::size().1 as f64;
         let mut boxes: [(f64, f64, f64, f64); 2] = [0, 1].map(|h| {
             let p = places[h];
             let (w, ht) = (self.halves[h].size.0 as f64, self.halves[h].size.1 as f64);
@@ -1386,8 +1455,65 @@ impl Dock {
         let (h0, h1) = ((panels[0].loc.x + panels[0].size.w) as f64, panels[1].loc.x as f64);
         let mut drops: Vec<([f64; 4], (f64, f64))> = Vec::new();
         let mut clinging = self.clinging.get();
+        // The frame turned (layout.rs): the hinge lies across, between the
+        // screen and the deck, and the halves cross it downwards or up - the
+        // same water, along y: the head comes out round and spreads to the
+        // drop's width, the tail clings to the edge with the drop's whole
+        // width, lets go with the jolt and the wet spot.
+        let turned = layout::turned();
+        let (v0, v1) = ((panels[0].loc.y + panels[0].size.h) as f64, panels[1].loc.y as f64);
+        let dir_y: [f64; 2] = self.moving.as_ref().and_then(|m| m.from_places).map(|fp| [0, 1].map(|h| (places[h].y - fp[h].y).signum())).unwrap_or([0.0; 2]);
         for h in 0..2 {
             if !shown[h] {
+                continue;
+            }
+            if turned {
+                let (bx, by, bw, bh) = boxes[h];
+                let (sx, sy) = squash[h];
+                let (mid, midy) = (bx + bw / 2.0, by + bh / 2.0);
+                let (w, ht) = (bw * sx, bh * sy);
+                let (y0, y1) = (midy - ht / 2.0, midy + ht / 2.0);
+                if y1 <= v0 || y0 >= v1 {
+                    let front = if dir_y[h] > 0.0 && y1 <= v0 { v0 - y1 } else if dir_y[h] < 0.0 && y0 >= v1 { y0 - v1 } else { f64::MAX };
+                    let k = smooth(1.0 - front / APPROACH);
+                    drops.push(([bx, by, bw, bh], (sx * (1.0 + HELD_FULL * k), sy * (1.0 - HELD_SHORT * k))));
+                    clinging[h] = false;
+                    continue;
+                }
+                let (above, below) = ((v0 - y0).max(0.0), (y1 - v1).max(0.0));
+                let over = if above + below > 0.0 { below / (above + below) } else { 0.5 };
+                let area = w * ht;
+                // A part of the area: round while small, then wide.
+                let part = |a: f64| {
+                    let d = a.max(0.0).sqrt();
+                    if d <= bh { (d, d) } else { (a / bh, bh) }
+                };
+                let tail_above = dir_y[h] > 0.0;
+                let (mut top, mut bottom) = (1.0 - over, over);
+                if dir_y[h] != 0.0 {
+                    let tail = if tail_above { top } else { bottom };
+                    let held = if tail < LET_GO_SHARE { 0.0 } else { tail.max(LINGER) };
+                    if clinging[h] && held == 0.0 {
+                        let (tw, th) = part(LINGER * area);
+                        self.snap.set(Some((tail_above, tw, th, mid, frame_ns)));
+                        let edge = if tail_above { v0 - SPOT } else { v1 };
+                        self.trail.set(Some(([mid - 0.3 * bw, edge, 0.6 * bw, SPOT], frame_ns)));
+                        popped[h] = frame_ns;
+                    }
+                    clinging[h] = held > 0.0;
+                    if tail_above {
+                        top = held;
+                    } else {
+                        bottom = held;
+                    }
+                }
+                let ((tw, th), (lw, lh)) = (part(top * area), part(bottom * area));
+                if tw > 0.5 {
+                    drops.push(([mid - tw / 2.0, v0 - th, tw, th + INTO], (1.0, 1.0)));
+                }
+                if lw > 0.5 {
+                    drops.push(([mid - lw / 2.0, v1 - INTO, lw, lh + INTO], (1.0, 1.0)));
+                }
                 continue;
             }
             let (bx, by, bw, bh) = boxes[h];
@@ -1448,7 +1574,14 @@ impl Dock {
             if k < 1.0 {
                 let s = 1.0 - smooth(k);
                 let (w, ht) = (tw * s, th * (0.5 + 0.5 * s));
-                if on_left {
+                if turned {
+                    // Along y: `middle` is the drop's x, `on_left` means above.
+                    if on_left {
+                        drops.push(([middle - w / 2.0, v0 - ht, w, ht + INTO], (1.0, 1.0)));
+                    } else {
+                        drops.push(([middle - w / 2.0, v1 - INTO, w, ht + INTO], (1.0, 1.0)));
+                    }
+                } else if on_left {
                     drops.push(([h0 - w, middle - ht / 2.0, w + INTO, ht], (1.0, 1.0)));
                 } else {
                     drops.push(([h1 - INTO, middle - ht / 2.0, w + INTO, ht], (1.0, 1.0)));
@@ -1634,7 +1767,7 @@ impl Dock {
                 }
             }
         }
-        let (width, height) = layout::LAYOUT;
+        let (width, height) = layout::size();
         // Drawn over as little as it can: the drops, the wet spot, and room
         // round them for the shadow, the thread, the ripple and the breath;
         // in whole steps, so the area moves less often than the drops.
@@ -1858,10 +1991,20 @@ pub fn lerp_x(x0: f64, x1: f64, e: f64) -> f64 {
     unsqueeze(c0 + (c1 - c0) * e)
 }
 
+/// The dock's apps' desktop files, both halves, left first (the warm
+/// launches after boot, state.rs's warm_tick).
+pub fn configured_desktops() -> Vec<String> {
+    config().concat()
+}
+
 /// The dock's apps: item's configuration, else the default.
 fn config() -> [Vec<String>; 2] {
-    let path = std::env::var("HOME").map(|h| format!("{h}/.config/sfduo/dock.json")).unwrap_or_default();
-    let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
+    // item's own file; the one the port's dock kept (~/.config/sfduo) read
+    // when there is none yet, for a phone that came from the port's shell.
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!("{home}/.config/item/dock.json");
+    let text = std::fs::read_to_string(&path).or_else(|_| std::fs::read_to_string(format!("{home}/.config/sfduo/dock.json"))).ok();
+    let parsed = text.and_then(|text| {
         // {"left": [...], "right": [...]}: two lists of quoted names, without
         // a JSON parser.
         let list = |key: &str| -> Option<Vec<String>> {
@@ -1881,12 +2024,12 @@ fn config() -> [Vec<String>; 2] {
     }
 }
 
-/// The halves' apps to `~/.config/sfduo/dock.json`, as config() reads it.
+/// The halves' apps to `~/.config/item/dock.json`, as config() reads it.
 fn save_config(halves: &[Half]) {
     let Ok(home) = std::env::var("HOME") else { return };
     let list = |h: &Half| h.apps.iter().map(|a| format!("  \"{}.desktop\"", a.ids.first().cloned().unwrap_or_default())).collect::<Vec<_>>().join(",\n");
     let text = format!("{{\n \"left\": [\n{}\n ],\n \"right\": [\n{}\n ]\n}}\n", list(&halves[0]), list(&halves[1]));
-    let dir = format!("{home}/.config/sfduo");
+    let dir = format!("{home}/.config/item");
     let _ = std::fs::create_dir_all(&dir);
     match std::fs::write(format!("{dir}/dock.json"), text) {
         Ok(()) => tracing::info!("dock: its apps kept"),

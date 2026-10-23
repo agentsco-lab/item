@@ -294,7 +294,7 @@ fn label(size: f32, alpha: f32, text: &str) -> Label {
 
 impl Picker {
     pub fn new() -> Picker {
-        let width = layout::LAYOUT.0 as f64 - 2.0 * SIDE;
+        let width = layout::size().0 as f64 - 2.0 * SIDE;
         Picker {
             open: false,
             since: 0,
@@ -375,7 +375,7 @@ impl Picker {
     /// The strip's rect, logical px, open.
     /// The strip's rect, logical px, open: over the panel's card, if any.
     fn strip(&self) -> Rectangle<f64, Logical> {
-        let (w, h) = (layout::LAYOUT.0 as f64, layout::LAYOUT.1 as f64);
+        let (w, h) = (layout::size().0 as f64, layout::size().1 as f64);
         let card = self.card_there() * (self.card_last_h.get() + 14.0);
         Rectangle::new((SIDE, h - STRIP_BOTTOM - STRIP_H - card).into(), (w - 2.0 * SIDE, STRIP_H).into())
     }
@@ -453,7 +453,7 @@ impl Picker {
 
     fn max_scroll(count: usize) -> f64 {
         let content = 2.0 * (SIDE + 20.0) + count as f64 * (THUMB_W + GAP) - GAP;
-        (content - layout::LAYOUT.0 as f64).max(0.0)
+        (content - layout::size().0 as f64).max(0.0)
     }
 
     /// The panel the panel's card is on.
@@ -497,7 +497,7 @@ impl Picker {
         let h = self.panel_card_h()?;
         // Under the strip, at the panel's foot: the top is the clock's.
         let p = layout::panels()[self.card_panel()].to_f64();
-        Some(Rectangle::new((p.loc.x + (p.size.w - PANEL_CARD_W) / 2.0, layout::LAYOUT.1 as f64 - STRIP_BOTTOM - h).into(), (PANEL_CARD_W, h).into()))
+        Some(Rectangle::new((p.loc.x + (p.size.w - PANEL_CARD_W) / 2.0, layout::size().1 as f64 - STRIP_BOTTOM - h).into(), (PANEL_CARD_W, h).into()))
     }
 
     /// A slider's track on its card, logical px.
@@ -534,7 +534,7 @@ impl Picker {
         let n = self.font_samples.len() as f64;
         let w = CARD_PAD * 2.0 + n * CHIP_W + (n - 1.0) * CHIP_GAP;
         let h = CARD_PAD * 2.0 + CHIP_H + 10.0 + ROW_H;
-        let whole = Rectangle::new((0.0, 0.0).into(), (layout::LAYOUT.0 as f64, layout::LAYOUT.1 as f64).into());
+        let whole = Rectangle::new((0.0, 0.0).into(), (layout::size().0 as f64, layout::size().1 as f64).into());
         let p = layout::panel_at(c.loc).or_else(|| layout::panel_at((c.loc.x + c.size.w - 1.0, c.loc.y).into())).map(|i| layout::panels()[i].to_f64()).unwrap_or(whole);
         let x = (c.loc.x + c.size.w - w).clamp(p.loc.x + 12.0, (p.loc.x + p.size.w - w - 12.0).max(p.loc.x + 12.0));
         let below = c.loc.y + c.size.h + 14.0;
@@ -731,7 +731,7 @@ impl Picker {
 
     /// The one on in the middle of the strip, as far as it goes.
     pub fn recenter(&mut self, current: usize, count: usize) {
-        let width = layout::LAYOUT.0 as f64;
+        let width = layout::size().0 as f64;
         let at = SIDE + 20.0 + current as f64 * (THUMB_W + GAP) + THUMB_W / 2.0;
         self.scroll = (at - width / 2.0).clamp(0.0, Self::max_scroll(count));
         self.run = None;
@@ -1147,7 +1147,7 @@ impl Picker {
         }
         let strip = self.strip();
         let scroll = self.scroll_at(frame_ns, thumbs.len());
-        let width = layout::LAYOUT.0 as f64;
+        let width = layout::size().0 as f64;
         for (i, t) in thumbs.iter().enumerate() {
             let r = self.thumb(i, scroll);
             if r.loc.x + r.size.w < 0.0 || r.loc.x > width {

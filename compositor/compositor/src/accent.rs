@@ -44,7 +44,7 @@ static VERSION: AtomicU64 = AtomicU64::new(1);
 static KEPT: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 fn kept() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config/item/accent")
+    crate::prefs::path("accent")
 }
 
 /// The accent now.

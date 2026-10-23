@@ -113,12 +113,34 @@ impl Ribbon {
     }
 
     fn max_view(&self) -> usize {
-        self.pages.len().saturating_sub(2)
+        self.pages.len().saturating_sub(if crate::layout::turned() { 1 } else { 2 })
     }
 
-    /// The page on a panel, as things stand.
+    /// The page on a panel, as things stand. The frame turned (layout.rs),
+    /// the upper panel shows one page and the lower is the deck: no page.
     pub fn on(&self, panel: usize) -> Option<&Page> {
+        if panel == 1 && crate::layout::turned() {
+            return None;
+        }
         self.pages.get(self.view + panel)
+    }
+
+    /// The frame turned or back: turned, the window the user was on comes
+    /// up (a desk on the first panel and a window on the second: the row on
+    /// by one); back, the row within its pairs again.
+    pub fn turned(&mut self, on: bool) {
+        if on {
+            let desk = matches!(self.pages.get(self.view), Some(Page::Desk(_)));
+            let window = matches!(self.pages.get(self.view + 1), Some(Page::App(_) | Page::Wide(_)));
+            if desk && window {
+                self.view += 1;
+                tracing::info!("ribbon: the window up, page {}", self.view);
+            }
+        } else {
+            self.view = self.view.min(self.max_view());
+        }
+        self.run = None;
+        self.drag = None;
     }
 
     pub fn find(&self, window: &Window) -> Option<usize> {
@@ -188,7 +210,7 @@ impl Ribbon {
 
     /// The pages on the panels with the window onto the row at `view`.
     pub fn at(&self, view: usize) -> [Option<&Page>; 2] {
-        [self.pages.get(view), self.pages.get(view + 1)]
+        [self.pages.get(view), if crate::layout::turned() { None } else { self.pages.get(view + 1) }]
     }
 
     /// While the row only moves along (a finger on it, or its let go): the
@@ -293,6 +315,25 @@ impl Ribbon {
 
     /// The row run to its end: the pen's sheet on the right panel (for
     /// tests: the pen's bench, tools/pen-bench.sh).
+    /// The row run to `page` as the view (the flow's choice, flow.rs).
+    pub fn go_to(&mut self, page: usize) {
+        self.go_to_in(page, RUN_MAX_NS as u64);
+    }
+
+    /// As `go_to`, taking `ns` (the flow's run alongside, flow.rs).
+    pub fn go_to_in(&mut self, page: usize, ns: u64) {
+        let target = page.min(self.max_view());
+        if target == self.view && self.run.is_none() {
+            return;
+        }
+        let now = hybris_hwc::now_ns();
+        let pos = self.pos();
+        let from: Vec<(Page, f64)> = self.pages.iter().enumerate().map(|(i, p)| (p.clone(), (i as f64 - pos) * PAGE)).collect();
+        self.view = target;
+        self.run = Some(Run { from, start_ns: now, duration_ns: ns, v0: 0.0, scroll: true });
+        self.unsettled = true;
+    }
+
     pub fn to_end(&mut self) {
         let now = hybris_hwc::now_ns();
         let pos = self.pos();
@@ -346,6 +387,33 @@ impl Ribbon {
         // It shows where it was asked for, or as near as it can.
         self.view = i.saturating_sub(panel).min(self.max_view());
         tracing::info!("ribbon: a window on page {i}, the left panel on {}", self.view);
+        self.rearranged(before);
+    }
+
+    /// A window onto a free panel while the other panel shows a window:
+    /// beside that one, both shown, nothing pushed along (a window opened
+    /// by another app, state.rs). The other panel a desk: as `open`.
+    pub fn open_free(&mut self, window: Window, panel: usize) {
+        let other = self.on(1 - panel).cloned();
+        if !matches!(other, Some(Page::App(_)) | Some(Page::Wide(_))) {
+            self.open(window, panel);
+            return;
+        }
+        let before = self.xs(hybris_hwc::now_ns());
+        if let Some(i) = self.find(&window) {
+            self.pages.remove(i);
+            if i < self.view {
+                self.view -= 1;
+            }
+        }
+        // The other's index; the new one before it (the free panel the
+        // left) or after it (the right), and the left panel's page set so
+        // both are shown.
+        let k = self.view + (1 - panel);
+        let (at, view) = if panel == 0 { (k, k) } else { (k + 1, k) };
+        self.pages.insert(at.min(self.pages.len()), Page::App(window));
+        self.view = view.min(self.max_view());
+        tracing::info!("ribbon: a window on page {at} beside the one shown, the left panel on {}", self.view);
         self.rearranged(before);
     }
 

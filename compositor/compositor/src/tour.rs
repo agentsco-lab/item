@@ -81,11 +81,11 @@ pub struct Tour {
 }
 
 fn marker() -> std::path::PathBuf {
-    std::path::Path::new(&std::env::var("HOME").unwrap_or_default()).join(".config/item/tour-done")
+    crate::prefs::path("tour-done")
 }
 
 fn app_marker() -> std::path::PathBuf {
-    std::path::Path::new(&std::env::var("HOME").unwrap_or_default()).join(".config/item/app-hint-done")
+    crate::prefs::path("app-hint-done")
 }
 
 fn mark(path: &std::path::Path) {
