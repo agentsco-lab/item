@@ -44,7 +44,14 @@ pub fn system() -> zbus::Result<Connection> {
 pub fn serve<I: zbus::object_server::Interface>(conn: &Connection, names: &[&str], path: &str, iface: I) -> zbus::Result<()> {
     conn.object_server().at(path, iface)?;
     for name in names {
-        if let Err(e) = conn.request_name(*name) {
+        // Not queued behind an owner: taken now or not at all (the port's
+        // daemon, another prompter or screen saver may hold it).
+        let taken = match conn.request_name_with_flags(*name, zbus::fdo::RequestNameFlags::DoNotQueue.into()) {
+            Ok(zbus::fdo::RequestNameReply::PrimaryOwner) | Ok(zbus::fdo::RequestNameReply::AlreadyOwner) => Ok(()),
+            Ok(reply) => Err(zbus::Error::Failure(format!("{name}: {reply:?}, another owner has it"))),
+            Err(e) => Err(e),
+        };
+        if let Err(e) = taken {
             let _ = conn.object_server().remove::<I, _>(path);
             return Err(e);
         }

@@ -11,17 +11,20 @@
 //!
 //! While the display is dark the sensors are stopped (main.rs says), and
 //! started again as it lights; the first hinge reading then is where the
-//! hinge is, not a place to glide to.
+//! hinge is, not a place to glide to. A sensor sensorfw cannot give yet
+//! (still starting, a load past the bus's timeout, a socket gone) is asked
+//! for again, 2 s on and doubling to 30 s, on this thread's clock.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use smithay::reexports::calloop::ping::Ping;
 use zbus::zvariant::{OwnedValue, Value};
 
-use crate::posture::Told;
+use crate::posture::{Said, Told};
 
 const SENSORFW: &str = "com.nokia.SensorService";
 const MANAGER: &str = "/SensorManager";
@@ -57,6 +60,13 @@ const ROLL_GRAVITY_MAX_Z: f64 = 0.85;
 const STILL_DEG_S: f64 = 8.0;
 const STILL_AFTER_S: f64 = 0.12;
 
+/// A sensor sensorfw could not give is asked for again after RETRY,
+/// doubling with each refusal to RETRY_MAX.
+const RETRY: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+/// The system bus asked for this many times at start, a second apart.
+const BUS_TRIES: u32 = 5;
+
 /// What a sensor's socket brings.
 enum Reading {
     Hinge(u32),
@@ -77,6 +87,9 @@ struct Sensor {
     iface: &'static str,
     interval_ms: Option<i32>,
     session: Option<i32>,
+    /// When to ask sensorfw for it again, and how long after that.
+    retry_at: Option<Instant>,
+    backoff: Duration,
 }
 
 /// The values as told last, for the bus's properties.
@@ -140,9 +153,9 @@ pub struct Sensors {
 
 impl Sensors {
     /// Starts the sensors; what they say comes on the receiver returned.
-    pub fn start(wake: Ping) -> (Sensors, Receiver<Told>) {
+    pub fn start(wake: Ping) -> (Sensors, Receiver<Said>) {
         let (events_tx, events_rx) = channel::<Event>();
-        let (told_tx, told_rx) = channel::<Told>();
+        let (told_tx, told_rx) = channel::<Said>();
         let cmds = events_tx.clone();
         let _ = std::thread::Builder::new().name("sensors".into()).spawn(move || run(events_tx, events_rx, told_tx, wake));
         (Sensors { cmds }, told_rx)
@@ -167,9 +180,18 @@ fn posture_for(angle: f64, current: &str) -> &'static str {
 
 /// The thread: the sessions set up, each socket read on a thread of its
 /// own, the readings turned into the posture's values here.
-fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>, wake: Ping) {
-    let Ok(system) = crate::bus::system() else {
-        tracing::warn!("sensors: no system bus");
+fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>, wake: Ping) {
+    // The system bus, which may not be up as item starts.
+    let mut system = crate::bus::system();
+    for _ in 1..BUS_TRIES {
+        if system.is_ok() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        system = crate::bus::system();
+    }
+    let Ok(system) = system else {
+        tracing::warn!("sensors: no system bus after {BUS_TRIES} tries");
         return;
     };
     let shared = Arc::new(Mutex::new(Values { angle: 180.0, posture: "between".into(), gravity: [0.0, 0.0, 1.0], still: true, ..Default::default() }));
@@ -186,15 +208,16 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
         }
     };
 
+    let sensor = |name, iface, interval_ms| Sensor { name, iface, interval_ms, session: None, retry_at: None, backoff: RETRY };
     let mut sensors = [
-        Sensor { name: "hingesensor", iface: "local.HingeSensor", interval_ms: None, session: None },
-        Sensor { name: "accelerometersensor", iface: "local.AccelerometerSensor", interval_ms: Some(ACCEL_INTERVAL_MS), session: None },
-        Sensor { name: "gyroscopesensor", iface: "local.GyroscopeSensor", interval_ms: Some(GYRO_INTERVAL_MS), session: None },
+        sensor("hingesensor", "local.HingeSensor", None),
+        sensor("accelerometersensor", "local.AccelerometerSensor", Some(ACCEL_INTERVAL_MS)),
+        sensor("gyroscopesensor", "local.GyroscopeSensor", Some(GYRO_INTERVAL_MS)),
     ];
     let mut dark = false;
+    let now = Instant::now();
     for s in sensors.iter_mut() {
-        open(&system, s, &events_tx);
-        call(&system, s, "start");
+        attempt(&system, s, &events_tx, dark, now);
     }
     // The hinge's value now: the socket brings only changes.
     if let Some(h) = read_hinge(&system) {
@@ -204,31 +227,45 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
     // The state, as the daemon kept it.
     let mut v = shared.lock().unwrap().clone();
     let mut raw: Option<u32> = None;
-    let mut raw_at = std::time::Instant::now();
+    let mut raw_at = now;
     let mut angle: Option<f64> = None;
     let mut fresh = true;
     let mut gliding = false;
-    let mut last_tick = std::time::Instant::now();
+    let mut last_tick = now;
     let mut candidate: (&'static str, u32) = ("between", 0);
     let mut gravity_told: Option<[f64; 3]> = None;
     let mut roll: Option<f64> = None;
     let mut roll_told: Option<f64> = None;
-    let mut gyro_at: Option<std::time::Instant> = None;
-    let mut moved_at = std::time::Instant::now() - std::time::Duration::from_secs(10);
+    let mut gyro_at: Option<Instant> = None;
+    // When the gyroscope last saw motion; None before it has.
+    let mut moved_at: Option<Instant> = None;
 
-    let tell = |v: &Values, told: &Sender<Told>, wake: &Ping| {
-        let _ = told.send(Told { angle: v.angle, gravity: v.gravity, moving: v.moving, roll: v.roll, still: v.still });
+    let tell = |v: &Values, told: &Sender<Said>, wake: &Ping| {
+        let _ = told.send(Said::Told(Told { angle: v.angle, gravity: v.gravity, moving: v.moving, roll: v.roll, still: v.still }));
         wake.ping();
     };
 
     loop {
-        let timeout = if gliding { std::time::Duration::from_millis(FRAME_MS) } else { std::time::Duration::from_secs(5) };
-        let event = match events_rx.recv_timeout(timeout) {
-            Ok(e) => Some(e),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+        // Woken by the readings, and by the clock only while the hinge
+        // glides or a sensor is due to be asked for again: dark and not
+        // gliding, the thread sleeps until the display lights.
+        let now = Instant::now();
+        let mut due: Option<Instant> = (gliding && !dark).then(|| now + Duration::from_millis(FRAME_MS));
+        for at in sensors.iter().filter_map(|s| s.retry_at) {
+            due = Some(due.map_or(at, |d| d.min(at)));
+        }
+        let event = match due {
+            Some(at) => match events_rx.recv_timeout(at.saturating_duration_since(now)) {
+                Ok(e) => Some(e),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            },
+            None => match events_rx.recv() {
+                Ok(e) => Some(e),
+                Err(_) => return,
+            },
         };
-        let now = std::time::Instant::now();
+        let now = Instant::now();
         let mut changed: HashMap<&str, Value<'_>> = HashMap::new();
         match event {
             Some(Event::Dark(d)) => {
@@ -237,7 +274,21 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
                     for s in sensors.iter() {
                         call(&system, s, if dark { "stop" } else { "start" });
                     }
-                    if !dark {
+                    if dark {
+                        // Nothing glides or is decided with the screen off;
+                        // gravity and the roll are read afresh as it lights.
+                        gliding = false;
+                        v.velocity = 0.0;
+                        if v.moving {
+                            v.moving = false;
+                            changed.insert("Moving", false.into());
+                            changed.insert("Velocity", 0.0f64.into());
+                        }
+                        gravity_told = None;
+                        roll = None;
+                        gyro_at = None;
+                        let _ = told.send(Said::Dark(true));
+                    } else {
                         fresh = true;
                         if let Some(h) = read_hinge(&system) {
                             let _ = events_tx.send(Event::Reading(Reading::Hinge(h)));
@@ -247,13 +298,11 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
                 }
             }
             Some(Event::Lost(name)) => {
+                // Asked for again on this loop's clock, not by sleeping here
+                // (three sockets dying together would serialize).
                 if let Some(s) = sensors.iter_mut().find(|s| s.name == name) {
                     s.session = None;
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    open(&system, s, &events_tx);
-                    if !dark {
-                        call(&system, s, "start");
-                    }
+                    s.retry_at = Some(now + s.backoff);
                 }
             }
             Some(Event::Reading(Reading::Hinge(deg))) if !dark => {
@@ -315,6 +364,11 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
             }
             Some(Event::Reading(Reading::Accel(xyz))) if !dark => {
                 let g = xyz.map(|x| x / 1000.0);
+                if gravity_told.is_none() {
+                    // Gravity read afresh (at start, the display lit again):
+                    // posture.rs decides from the reading told next on.
+                    let _ = told.send(Said::Dark(false));
+                }
                 v.gravity = match gravity_told {
                     None => g,
                     Some(_) => [0, 1, 2].map(|i| v.gravity[i] + (g[i] - v.gravity[i]) * GRAVITY_SMOOTH),
@@ -336,9 +390,9 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
                 let [wx, wy, wz] = xyz.map(|x| x / 1000.0);
                 let moving = wx.abs().max(wy.abs()).max(wz.abs()) >= STILL_DEG_S;
                 if moving {
-                    moved_at = now;
+                    moved_at = Some(now);
                 }
-                let still = !moving && now.duration_since(moved_at).as_secs_f64() >= STILL_AFTER_S;
+                let still = !moving && moved_at.is_none_or(|at| now.duration_since(at).as_secs_f64() >= STILL_AFTER_S);
                 if still != v.still {
                     v.still = still;
                     changed.insert("Still", still.into());
@@ -353,6 +407,17 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
             }
             Some(Event::Reading(_)) => {}
             None => {}
+        }
+        // The sensors due to be asked for again.
+        for s in sensors.iter_mut() {
+            if s.retry_at.is_some_and(|at| at <= now) && attempt(&system, s, &events_tx, dark, now) && s.name == "hingesensor" {
+                // Its socket brings only changes: the value now, where the
+                // hinge is rather than a place to glide to.
+                fresh = true;
+                if let Some(h) = read_hinge(&system) {
+                    let _ = events_tx.send(Event::Reading(Reading::Hinge(h)));
+                }
+            }
         }
         // The hinge gliding to its last reading.
         if gliding && !dark {
@@ -394,8 +459,27 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Told>,
     }
 }
 
-/// A session asked of sensorfw for `s`, its socket read on a thread.
-fn open(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<Event>) {
+/// `s` asked of sensorfw and started unless dark; refused (sensorfw not up
+/// yet, a load past the bus's timeout), asked for again after its backoff.
+fn attempt(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<Event>, dark: bool, now: Instant) -> bool {
+    if open(system, s, events) {
+        s.retry_at = None;
+        s.backoff = RETRY;
+        if !dark {
+            call(system, s, "start");
+        }
+        true
+    } else {
+        tracing::info!("sensors: {} asked for again in {} s", s.name, s.backoff.as_secs());
+        s.retry_at = Some(now + s.backoff);
+        s.backoff = (s.backoff * 2).min(RETRY_MAX);
+        false
+    }
+}
+
+/// A session asked of sensorfw for `s`, its socket read on a thread:
+/// whether it was given.
+fn open(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<Event>) -> bool {
     let r = system
         .call_method(Some(SENSORFW), MANAGER, Some(MANAGER_IFACE), "loadPlugin", &(s.name,))
         .and_then(|_| system.call_method(Some(SENSORFW), MANAGER, Some(MANAGER_IFACE), "requestSensor", &(s.name, 0i64)))
@@ -404,7 +488,7 @@ fn open(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<Eve
         Ok(id) => id,
         Err(e) => {
             tracing::warn!("sensors: no {}: {e}", s.name);
-            return;
+            return false;
         }
     };
     s.session = Some(session);
@@ -419,6 +503,7 @@ fn open(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<Eve
         }
         let _ = events.send(Event::Lost(name));
     });
+    true
 }
 
 fn call(system: &zbus::blocking::Connection, s: &Sensor, method: &str) {
@@ -448,7 +533,7 @@ fn read_hinge(system: &zbus::blocking::Connection) -> Option<u32> {
 /// three f32, 4 pad). The last reading of a frame is the one told.
 fn read_socket(session: i32, name: &'static str, events: &Sender<Event>) -> std::io::Result<()> {
     let mut sock = std::os::unix::net::UnixStream::connect(SOCKET)?;
-    sock.set_read_timeout(Some(std::time::Duration::from_secs(2)))?;
+    sock.set_read_timeout(Some(Duration::from_secs(2)))?;
     let mut greeting = [0u8; 1];
     sock.read_exact(&mut greeting)?;
     sock.write_all(&session.to_le_bytes())?;

@@ -109,7 +109,15 @@ pub struct Data {
     dim_was: bool,
     /// A call lit the dark screen: 0 while it lasts, then when it ended.
     call_lit: Option<u64>,
+    /// Frames a GL error skipped in a row, and the vsync the last aimed at:
+    /// drawn again at the next vsync, a few times, then left till the scene
+    /// changes.
+    failed_frames: u32,
+    failed_target_ns: u64,
     alert_was: bool,
+    /// Wayland dispatches failed in a row (the display's fd is level
+    /// triggered: an error that stays would spin the loop).
+    dispatch_failures: u32,
     /// Till when the face's camera stays warm after the lock screen went
     /// dark or shut (ns).
     face_warm_until: u64,
@@ -122,6 +130,14 @@ pub struct Data {
     /// Swapped frames' presentation feedback, with the vsync each shows at.
     feedback: Vec<(u64, smithay::desktop::utils::OutputPresentationFeedback)>,
 }
+
+/// Wayland dispatches failed in a row before item stops (20 ms apart: a
+/// second).
+const DISPATCH_FAILURES_TO_STOP: u32 = 50;
+
+/// How many frames in a row a GL error may skip and still be drawn again
+/// (one retry a vsync).
+const FAILED_RETRIES: u32 = 5;
 
 /// When in the frame to draw.
 ///
@@ -549,20 +565,9 @@ impl Data {
             self.dim_was = dim;
             self.state.needs_redraw = true;
         }
-        // The system screen samples the load only while the screen is lit;
-        // lit, the kernel does not sleep (sleep.rs).
-        let lit = !self.state.lock.blank;
-        if lit != self.lit_was {
-            self.lit_was = lit;
-            self.state.sleep.awake(lit);
-            // Lit while locked: a peek through the camera (camera.rs).
-            if lit && self.state.lock.locked {
-                self.state.camera_peek.start(now);
-            }
-            self.state.display_config.set_dark(!lit);
-            self.state.system.display(lit);
-            self.state.posture.dark(!lit);
-        }
+        // Lit or dark: told around (also from the paths that light it; here
+        // as the fallback, once a second while dark).
+        self.sync_lit(now);
         // A finger held still on a desk: the wallpaper's choosing.
         if !self.state.picker.is_open() && !self.state.lock.holds_screen() && !self.state.setup.holds_screen() {
             if let Some((slot, at)) = self.state.grid.long_press(now) {
@@ -641,6 +646,26 @@ impl Data {
         self.draw_if_needed();
     }
 
+    /// The screen lit or dark since last told: the system screen samples
+    /// the load only while it is lit; lit, the kernel does not sleep
+    /// (sleep.rs); the sensors stop dark and start lit (posture.rs). Called
+    /// where the screen is lit - the first frame after, a logind ask - so
+    /// the sensors do not wait for the watchdog (up to 1 s while dark).
+    fn sync_lit(&mut self, now: u64) {
+        let lit = !self.state.lock.blank;
+        if lit != self.lit_was {
+            self.lit_was = lit;
+            self.state.sleep.awake(lit);
+            // Lit while locked: a peek through the camera (camera.rs).
+            if lit && self.state.lock.locked {
+                self.state.camera_peek.start(now);
+            }
+            self.state.display_config.set_dark(!lit);
+            self.state.system.display(lit);
+            self.state.posture.dark(!lit);
+        }
+    }
+
     /// What logind and the screen saver's callers asked (logind.rs), done.
     fn take_logind_asks(&mut self) {
         for ask in self.state.logind.take_asks() {
@@ -655,6 +680,7 @@ impl Data {
                 logind::Ask::Blank(false) => lock.set_blank(false),
             }
             self.state.needs_redraw = true;
+            self.sync_lit(hybris_hwc::now_ns());
         }
         for event in self.state.fingerprint.take_events() {
             // The first setup's, while it is on.
@@ -750,6 +776,9 @@ impl Data {
         if !self.state.needs_redraw {
             return;
         }
+        // The screen lit (the power key, a touch: input.rs): the sensors
+        // start now, not at the watchdog's next look.
+        self.sync_lit(hybris_hwc::now_ns());
         // A dark screen draws nothing; it is drawn again when lit.
         if self.state.lock.blank {
             return;
@@ -758,6 +787,11 @@ impl Data {
             self.screen.reprime = 3;
         }
         if Pacing::pending() {
+            return;
+        }
+        // A frame a GL error skipped is drawn again at the next vsync, not
+        // in the same one.
+        if self.failed_frames > 0 && self.pacing.target_ns <= self.failed_target_ns {
             return;
         }
         self.state.needs_redraw = false;
@@ -781,6 +815,20 @@ impl Data {
             let _ = self.state.display_handle.flush_clients();
         }
         let cost = self.screen.render(&self.state, self.pacing.target_ns);
+        // A GL error skipped the frame: the scene is not on screen, and
+        // nothing else need change it; drawn again at the next vsync, a few
+        // times, then left till something does (the warning is the frame's).
+        if cost.failed {
+            self.failed_frames += 1;
+            self.failed_target_ns = self.pacing.target_ns;
+            if self.failed_frames <= FAILED_RETRIES {
+                self.state.needs_redraw = true;
+            } else if self.failed_frames == FAILED_RETRIES + 1 {
+                tracing::warn!("render: {FAILED_RETRIES} frames failed in a row: no more retries till the scene changes");
+            }
+            return;
+        }
+        self.failed_frames = 0;
         let (draw_ns, swap_ns) = (cost.draw_ns, cost.swap_ns);
         let took = draw_ns + swap_ns;
         *self.report.ages.entry(cost.age).or_default() += 1;
@@ -932,6 +980,11 @@ impl Data {
         keep.extend(self.state.space.elements().map(|w| smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())));
         // The flow's covers: every ribbon window's last frame kept (flow.rs).
         keep.extend(self.state.ribbon.pages.iter().filter_map(|p| if let crate::ribbon::Page::App(w) = p { Some(smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())) } else { None }));
+        // The put-away windows and the flow's own: a cover flying out after
+        // a swipe-up, or a window brought back before the ribbon rests, keeps
+        // its frame.
+        keep.extend(self.state.put_away.iter().map(|(w, _)| smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())));
+        keep.extend(self.state.flow.windows.iter().map(|w| smithay::reexports::wayland_server::Resource::id(w.toplevel().unwrap().wl_surface())));
         self.screen.forget(&keep);
         // The volume bar: frames while it fades, one more when it is gone.
         match self.state.shade.quick.volume_bar_state(now) {
@@ -1044,7 +1097,7 @@ impl Data {
     }
 
     fn log_report(&mut self) {
-        // The pen's budget's way, as /tmp/item-pen-tune says (for the bench).
+        // The pen's budget's way, as $XDG_RUNTIME_DIR/item-pen-tune says (for the bench).
         // `old`, or `floor` and the margin in ms (`floor 2`).
         let tune = std::fs::read_to_string(format!("{}/item-pen-tune", crate::prefs::runtime_dir())).unwrap_or_default();
         let mut words = tune.split_whitespace();
@@ -1184,8 +1237,21 @@ fn main() {
         .insert_source(Generic::new(display, Interest::READ, CalloopMode::Level), |_, display, data: &mut Data| {
             // SAFETY: get_mut is only unsafe because the source must keep its fd: the Display is
             // dispatched here, never replaced or closed.
-            if let Err(e) = unsafe { display.get_mut().dispatch_clients(&mut data.state) } {
-                tracing::warn!("wayland: dispatching clients: {e}");
+            match unsafe { display.get_mut().dispatch_clients(&mut data.state) } {
+                Ok(_) => data.dispatch_failures = 0,
+                Err(e) => {
+                    // Logged once, then the loop slowed; staying, the session
+                    // starts item again (a clean stop) rather than spin.
+                    data.dispatch_failures += 1;
+                    if data.dispatch_failures == 1 {
+                        tracing::warn!("wayland: dispatching clients: {e}");
+                    } else if data.dispatch_failures >= DISPATCH_FAILURES_TO_STOP {
+                        tracing::error!("wayland: dispatching clients failed {} times in a row ({e}): stopping", data.dispatch_failures);
+                        data.state.loop_signal.stop();
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
             }
             if std::mem::take(&mut data.state.client_frame) {
                 data.on_client_frame();
@@ -1235,9 +1301,9 @@ fn main() {
             if std::fs::remove_file(format!("{run}/item-frames")).is_ok() {
                 data.screen.frames_left = std::env::var("FRAMES_COUNT").ok().and_then(|n| n.parse().ok()).unwrap_or(40);
             }
-            // `touch /tmp/item-birth`: the dock born of a drop where the
+            // `touch $XDG_RUNTIME_DIR/item-birth`: the dock born of a drop where the
             // setup's last one stands, for tests.
-            if std::fs::remove_file("/tmp/item-birth").is_ok() {
+            if std::fs::remove_file(format!("{run}/item-birth")).is_ok() {
                 let left = crate::layout::panels()[0];
                 data.state.dock.born(hybris_hwc::now_ns(), (left.loc.x as f64 + left.size.w as f64 / 2.0, 250.0), 36.0);
                 data.state.needs_redraw = true;
@@ -1245,26 +1311,26 @@ fn main() {
             if data.state.shade.visible() && data.state.shade.refresh_text() {
                 data.state.needs_redraw = true;
             }
-            // For tests: `touch /tmp/item-rise` is the dock's rise after an
+            // For tests: `touch $XDG_RUNTIME_DIR/item-rise` is the dock's rise after an
             // unlock.
-            if std::fs::remove_file("/tmp/item-rise").is_ok() {
+            if std::fs::remove_file(format!("{run}/item-rise")).is_ok() {
                 data.state.dock.rise(hybris_hwc::now_ns());
                 data.state.needs_redraw = true;
             }
-            // `touch /tmp/item-stroke` draws a wave with the pen's pressure
+            // `touch $XDG_RUNTIME_DIR/item-stroke` draws a wave with the pen's pressure
             // rising along it on the open sheet, for tests.
-            // `touch /tmp/item-sheet`: the pen's sheet out, for the pen's
+            // `touch $XDG_RUNTIME_DIR/item-sheet`: the pen's sheet out, for the pen's
             // bench (tools/pen-bench.sh).
-            if std::fs::remove_file("/tmp/item-sheet").is_ok() {
+            if std::fs::remove_file(format!("{run}/item-sheet")).is_ok() {
                 data.state.ribbon.to_end();
                 data.state.needs_redraw = true;
             }
-            if std::fs::remove_file("/tmp/item-stroke").is_ok() {
+            if std::fs::remove_file(format!("{run}/item-stroke")).is_ok() {
                 data.state.pen.test_stroke();
                 data.state.needs_redraw = true;
             }
-            // `touch /tmp/item-power` is the power key, for tests.
-            if std::fs::remove_file("/tmp/item-power").is_ok() {
+            // `touch $XDG_RUNTIME_DIR/item-power` is the power key, for tests.
+            if std::fs::remove_file(format!("{run}/item-power")).is_ok() {
                 data.state.lock.power_key();
                 data.state.needs_redraw = true;
             }
@@ -1434,7 +1500,7 @@ fn main() {
         pacing.callbacks
     );
     let mut data = Data {
-        volume_bar_up: false, frames_dock_done: false, lit_was: false, dim_was: false, call_lit: None, alert_was: false, face_warm_until: 0, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
+        volume_bar_up: false, frames_dock_done: false, lit_was: false, dim_was: false, call_lit: None, failed_frames: 0, failed_target_ns: 0, dispatch_failures: 0, alert_was: false, face_warm_until: 0, state, screen, started: Instant::now(), report: Report::default(), handle: handle.clone(), pacing, feedback: Vec::new() };
     data.report.vsyncs_at_last = vsyncs();
     let _ = now_ns();
     // The shade's text goes to the GPU now, not at the first pull.

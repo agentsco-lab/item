@@ -41,6 +41,9 @@ pub struct FrameCost {
     pub damaged_px: i64,
     /// Whether a frame went to hwcomposer (nothing damaged: no).
     pub swapped: bool,
+    /// A GL error skipped the frame: the scene is not on screen yet (main.rs
+    /// draws it again).
+    pub failed: bool,
 }
 
 render_elements! {
@@ -117,13 +120,15 @@ struct CoverPic {
 }
 
 /// The turn (draft 44): the frame before the decision, going out turned
-/// and blurred while the new one comes in from blur; since when, which way
-/// the content turns on the glass (1 clockwise, -1 counter), which of its
-/// panels held a picture (fill) rather than a window (fit).
+/// and blurred while the new one comes in from blur; since when, how far
+/// the content turns on the glass (radians: a quarter turn clockwise when
+/// positive, counter when negative, a half turn between the two turned
+/// ways), which of the screen's panels (layout.rs's `screen_panels`) held a
+/// picture (fill) rather than a window (fit).
 struct Turning {
     before: smithay::backend::renderer::gles::GlesTexture,
     start_ns: u64,
-    dir: f64,
+    angle: f64,
     fills: [bool; 2],
     /// The snapshot's blur taken (once; it does not change).
     blurred: bool,
@@ -145,14 +150,17 @@ fn bezier(x1: f64, y1: f64, x2: f64, y2: f64, t: f64) -> f64 {
 
 /// Where a span of the turn stands: 0 before `from`, 1 after `to` (ms).
 fn span(t_ms: f64, from: f64, to: f64) -> f64 {
+    // A span of no length (TURN_MS of 80 or 100): over at once, not NaN.
+    if to <= from {
+        return if t_ms >= to { 1.0 } else { 0.0 };
+    }
     ((t_ms - from) / (to - from)).clamp(0.0, 1.0)
 }
 
 /// The scale for a panel's content turned by `angle` (radians): fit keeps
 /// it whole (documents), fill covers the panel (pictures).
 fn turned_scale(angle: f64, fill: bool) -> f64 {
-    let (w, h) = (crate::layout::LANDSCAPE.1 as f64, crate::layout::LANDSCAPE.0 as f64 / 2.0);
-    let (w, h) = (h.min(w), h.max(w));
+    let (w, h) = (crate::layout::PANEL as f64, crate::layout::LANDSCAPE.1 as f64);
     let (c, si) = (angle.cos().abs(), angle.sin().abs());
     let (bw, bh) = (w * c + h * si, w * si + h * c);
     if fill { (bw / w).max(bh / h) } else { (w / bw).min(h / bh) }
@@ -205,8 +213,12 @@ pub struct Screen {
     turning: Option<Turning>,
     /// The blur for the turn: one glass for the snapshot, one for the live frame.
     turn_glass: Option<[crate::glass::Glass; 2]>,
-    /// Which panels held a picture in the frame last drawn (the snapshot's fills).
+    /// Which of the frame's panels held a picture in the frame last drawn
+    /// (the snapshot's fills).
     fills_shown: [bool; 2],
+    /// When the last turn ended (ns): the stage and the glasses (some 20 MB)
+    /// are dropped a few seconds after it.
+    turn_done_ns: Option<u64>,
     /// What the screen shows while a transition runs: the canvas composed
     /// through the transition's shader; blitted to the window instead of it.
     stage: Option<smithay::backend::renderer::gles::GlesTexture>,
@@ -344,7 +356,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, more_frames: false, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, turn: 0, turning: None, turn_glass: None, fills_shown: [true, true], stage: None, turn_program: None, covers: Default::default(), card_id: smithay::backend::renderer::element::Id::new(), cover_program: None, turn_ns: std::env::var("TURN_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300) * 1_000_000, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), scene_damage: smithay::backend::renderer::utils::DamageBag::new(8), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), deck_dark_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_first: None, setup_dark_id: smithay::backend::renderer::element::Id::new(), wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, previews: Default::default(), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, more_frames: false, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, turn: 0, turning: None, turn_glass: None, fills_shown: [true, true], turn_done_ns: None, stage: None, turn_program: None, covers: Default::default(), card_id: smithay::backend::renderer::element::Id::new(), cover_program: None, turn_ns: std::env::var("TURN_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300) * 1_000_000, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), scene_damage: smithay::backend::renderer::utils::DamageBag::new(8), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), deck_dark_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_first: None, setup_dark_id: smithay::backend::renderer::element::Id::new(), wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, previews: Default::default(), _hwc: hwc }
     }
 
     /// Whether the content is on the move on the glass (following the hand,
@@ -377,17 +389,22 @@ impl Screen {
         if crate::layout::turn() != self.turn {
             let size = self.output.current_mode().unwrap().size;
             // The frame as it stood, for the turn's animation: the content
-            // on the glass turns clockwise when the right panel goes up,
-            // counter-clockwise when the left does, and back the other way.
-            let dir = match (self.turn, crate::layout::turn()) {
-                (0, 1) | (2, 0) => 1.0,
-                (0, 2) | (1, 0) => -1.0,
+            // on the glass turns a quarter clockwise when the right panel
+            // goes up, counter-clockwise when the left does, and back the
+            // other way; from one panel up to the other, a half turn (the
+            // way the quarters add up).
+            let quarter = std::f64::consts::FRAC_PI_2;
+            let angle = match (self.turn, crate::layout::turn()) {
+                (0, 1) | (2, 0) => quarter,
+                (0, 2) | (1, 0) => -quarter,
+                (2, 1) => 2.0 * quarter,
+                (1, 2) => -2.0 * quarter,
                 _ => 0.0,
             };
             // Interrupted (a turn still running): what is on screen now - the
             // stage - is the frame before, so the new turn starts from it.
             let mid_turn = self.turning.take().is_some();
-            if dir != 0.0 && self.canvas_ready && !state.lock.locked {
+            if angle != 0.0 && self.canvas_ready && !state.lock.locked {
                 if let Some(canvas) = self.canvas.as_mut() {
                     let whole = smithay::utils::Rectangle::from_size((size.w, size.h).into());
                     let before: Result<smithay::backend::renderer::gles::GlesTexture, _> = self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into());
@@ -418,7 +435,10 @@ impl Screen {
                                 }
                             }
                             if self.turn_program.is_some() && self.turn_glass.is_some() {
-                                self.turning = Some(Turning { before, start_ns: frame_ns, dir, fills: self.fills_shown, blurred: false });
+                                // The fills by the screen's panels, as the frame before had them.
+                                let fills = [0, 1].map(|i| self.fills_shown[crate::layout::frame_panel(self.turn, i)]);
+                                self.turning = Some(Turning { before, start_ns: frame_ns, angle, fills, blurred: false });
+                                // Touches are dropped till the turn ends (input.rs): set here, once.
                                 crate::layout::set_turning_until(frame_ns + self.turn_ns);
                                 crate::haptic::tick(crate::haptic::Tick::Light);
                             }
@@ -995,18 +1015,24 @@ impl Screen {
             if let Some(scene) = self.scene.as_mut() {
                 let age = if self.scene_ready { 1 } else { 0 };
                 // A GL error here (a lost context) is a frame skipped, not the session.
+                // Failed, the scene is drawn whole next time (what its buffer
+                // holds is anyone's guess), and the frame with it.
                 let mut target = match self.renderer.bind(&mut scene.buffer) {
                     Ok(t) => t,
                     Err(e) => {
                         tracing::warn!("render: the scene's buffer: {e}");
-                        return FrameCost::default();
+                        self.scene_ready = false;
+                        self.reprime = self.reprime.max(1);
+                        return FrameCost { failed: true, ..Default::default() };
                     }
                 };
                 let result = match scene.tracker.render_output(&mut self.renderer, &mut target, age, &scene_elements, [0.08, 0.1, 0.14, 1.0]) {
                     Ok(r) => r,
                     Err(e) => {
                         tracing::warn!("render: the scene: {e}");
-                        return FrameCost::default();
+                        self.scene_ready = false;
+                        self.reprime = self.reprime.max(1);
+                        return FrameCost { failed: true, ..Default::default() };
                     }
                 };
                 drop(target);
@@ -1087,11 +1113,14 @@ impl Screen {
             let night_now = night;
             let tb = hybris_hwc::now_ns();
             let cb = cpu_ns();
+            // Failed, the canvas is drawn whole next time: the tracker may
+            // count what it did not draw as drawn.
             let mut target = match self.renderer.bind(&mut canvas.buffer) {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!("render: the canvas: {e}");
-                    return FrameCost::default();
+                    self.canvas_ready = false;
+                    return FrameCost { failed: true, ..Default::default() };
                 }
             };
             let tbound = hybris_hwc::now_ns();
@@ -1100,7 +1129,8 @@ impl Screen {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("render: the frame: {e}");
-                    return FrameCost::default();
+                    self.canvas_ready = false;
+                    return FrameCost { failed: true, ..Default::default() };
                 }
             };
             self.canvas_ready = true;
@@ -1110,7 +1140,7 @@ impl Screen {
             // hwcomposer's buffers still need a frame each after a start or a
             // power-on, changed or not.
             if damaged == 0 && primed && self.shot.is_none() && !changed_night && !self.mirror_now && self.turning.is_none() {
-                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age, damaged_px: 0, swapped: false };
+                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age, damaged_px: 0, swapped: false, failed: false };
             }
             // Screenshots come from our buffer, copied before the swap (a read
             // makes the context current without the window's surface, and
@@ -1119,9 +1149,6 @@ impl Screen {
             let tr = hybris_hwc::now_ns();
             let cr = cpu_ns();
             let turning = self.turning.as_ref().is_some_and(|t| frame_ns < t.start_ns + self.turn_ns);
-            if turning {
-                crate::layout::set_turning_until(frame_ns + 120_000_000);
-            }
             let mut shot = if turning { None } else { Self::take_shot(&mut self.renderer, &mut self.shot, &mut self.frames_left, self.frames_drawn, size, &target, damaged) };
             self.mirror_now = false;
             drop(target);
@@ -1130,21 +1157,35 @@ impl Screen {
             // panel's content before the decision going out turned, blurring
             // and fading; the live frame coming in turned from the other way,
             // from blur to sharp. Android's timeline and curves.
-            let staged = if turning && self.turn_program.is_some() {
+            // A GL error making the stage: the turn snaps, the live frame goes
+            // out as it is (a warning, not a panic: a frame skipped at worst).
+            if turning && self.turn_program.is_some() && self.turn_glass.is_some() && self.stage.is_none() {
+                match self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()) {
+                    Ok(b) => self.stage = Some(b),
+                    Err(e) => {
+                        tracing::warn!("turn: the stage: {e}: the turn snaps");
+                        self.turning = None;
+                        self.turn_done_ns = Some(frame_ns);
+                        crate::layout::set_turning_until(0);
+                    }
+                }
+            }
+            let turning = turning && self.turning.is_some();
+            let staged = if turning && self.turn_program.is_some() && self.turn_glass.is_some() && self.stage.is_some() {
                 use smithay::backend::renderer::Frame;
                 let program = self.turn_program.clone().unwrap();
                 let t = self.turning.as_mut().unwrap();
                 let glass = self.turn_glass.as_mut().unwrap();
+                let stage = self.stage.as_mut().unwrap();
                 let ms = frame_ns.saturating_sub(t.start_ns) as f64 / 1e6;
                 let total = self.turn_ns as f64 / 1e6;
-                let quarter = std::f64::consts::FRAC_PI_2;
                 let turn = bezier(0.2, 0.0, 0.0, 1.0, ms / total);
                 // The frame before: turning away, blurring, gone before half way.
-                let a_old = t.dir * quarter * turn;
+                let a_old = t.angle * turn;
                 let blur_old = bezier(0.0, 0.0, 0.58, 1.0, span(ms, 0.0, 150.0));
                 let alpha_old = 1.0 - bezier(0.57, 0.0, 0.71, 0.43, span(ms, 0.0, 140.0));
                 // The live frame: turning in, sharpening, arriving nearly upright.
-                let a_new = -t.dir * quarter * (1.0 - turn);
+                let a_new = -t.angle * (1.0 - turn);
                 let blur_new = 1.0 - bezier(0.0, 0.0, 0.58, 1.0, span(ms, 80.0, total));
                 let alpha_new = bezier(0.15, 0.45, 0.33, 1.0, span(ms, 80.0, total - 20.0));
                 // Behind them: black to the frame's own dark over 200 ms.
@@ -1153,7 +1194,6 @@ impl Screen {
                     t.blurred = glass[0].take(&mut self.renderer, &mut t.before, size).is_ok();
                 }
                 let live_blur = blur_new > 0.01 && glass[1].take(&mut self.renderer, &mut canvas.buffer, size).is_ok();
-                let stage = self.stage.get_or_insert_with(|| self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).expect("the stage"));
                 let mut ok = false;
                 if let Ok(mut to) = self.renderer.bind(stage) {
                     if let Ok(mut frame) = self.renderer.render(&mut to, size, Transform::Normal) {
@@ -1189,11 +1229,13 @@ impl Screen {
                                     let _ = frame.render_texture_from_to(tex, src, panel, &[all], &[], Transform::Normal, sharp as f32, Some(&program), &uniforms(full.0, full.1, angle, scale));
                                 }
                             };
-                            // Pictures fill, documents fit (the owner's rule).
+                            // Pictures fill, documents fit (the owner's rule). `i` is the
+                            // screen's panel: the live frame's fills are by the frame's.
                             let g_old = t.blurred.then_some(&glass[0]);
                             layer(&mut frame, &t.before, g_old, a_old, turned_scale(a_old, t.fills[i]), alpha_old, blur_old);
                             let g_new = live_blur.then_some(&glass[1]);
-                            layer(&mut frame, &canvas.buffer, g_new, a_new, turned_scale(a_new, fills[i]), alpha_new, blur_new);
+                            let fill_new = fills[crate::layout::frame_panel(self.turn, i)];
+                            layer(&mut frame, &canvas.buffer, g_new, a_new, turned_scale(a_new, fill_new), alpha_new, blur_new);
                         }
                         ok = frame.finish().is_ok();
                     }
@@ -1205,10 +1247,19 @@ impl Screen {
             } else {
                 if self.turning.take().is_some() {
                     tracing::info!("turn: done");
+                    self.turn_done_ns = Some(frame_ns);
                 }
                 false
             };
+            // The stage and the glasses a few seconds after a turn: dropped
+            // till the next one (made again then).
+            if self.turning.is_none() && self.turn_done_ns.is_some_and(|t| frame_ns > t + 3_000_000_000) {
+                self.turn_done_ns = None;
+                self.stage = None;
+                self.turn_glass = None;
+            }
             self.fills_shown = fills;
+            let mut failed = false;
             let source: &mut smithay::backend::renderer::gles::GlesTexture = if staged { self.stage.as_mut().unwrap() } else { &mut canvas.buffer };
             // Not while locked: the lock screen and its PIN pad are nobody's to watch.
             let mirrored = if !state.lock.locked && self.mirror.due(hybris_hwc::now_ns()) { Self::take_mirror(&mut self.renderer, &mut self.mirror_tex, source, size) } else { None };
@@ -1227,6 +1278,7 @@ impl Screen {
                     })();
                     if let Err(e) = shown {
                         tracing::warn!("render: the night light: {e}");
+                        failed = true;
                     }
                 }
                 _ => {
@@ -1237,8 +1289,15 @@ impl Screen {
                     })();
                     if let Err(e) = shown {
                         tracing::warn!("render: the canvas to the window: {e}");
+                        failed = true;
                     }
                 }
+            }
+            // The window's buffer not drawn: no swap (hybris would show what
+            // it holds), the canvas copied whole next time, changed or not.
+            if failed {
+                self.reprime = self.reprime.max(1);
+                return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age, damaged_px: 0, swapped: false, failed: true };
             }
             if std::env::var_os("LOG_TIMES").is_some() {
                 let ms = |a: u64, b: u64| b.saturating_sub(a) as f64 / 1e6;
@@ -1257,22 +1316,25 @@ impl Screen {
             if primed && self.shot.is_none() {
                 let changed = self.damage_tracker.damage_output(1, &elements).map(|(d, _)| d.is_some()).unwrap_or(true);
                 if !changed {
-                    return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age: 0, damaged_px: 0, swapped: false };
+                    return FrameCost { draw_ns: hybris_hwc::now_ns() - t0, elements_ns, swap_ns: 0, age: 0, damaged_px: 0, swapped: false, failed: false };
                 }
             }
             let size = self.output.current_mode().unwrap().size;
+            // Failed, the next frame is drawn whatever the tracker says changed.
             let mut target = match self.renderer.bind(&mut self.surface) {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!("render: the window: {e}");
-                    return FrameCost::default();
+                    self.reprime = self.reprime.max(1);
+                    return FrameCost { failed: true, ..Default::default() };
                 }
             };
             let result = match self.damage_tracker.render_output(&mut self.renderer, &mut target, 0, &elements, [0.08, 0.1, 0.14, 1.0]) {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("render: the frame: {e}");
-                    return FrameCost::default();
+                    self.reprime = self.reprime.max(1);
+                    return FrameCost { failed: true, ..Default::default() };
                 }
             };
             let damaged: i64 = result.damage.map(|rects| rects.iter().map(|r| r.size.w as i64 * r.size.h as i64).sum()).unwrap_or(0);
@@ -1280,17 +1342,24 @@ impl Screen {
             (damaged, 0, (shot, None))
         };
         let t1 = hybris_hwc::now_ns();
-        let swapped = damaged_px > 0;
+        let mut swapped = damaged_px > 0;
+        let mut failed = false;
         if swapped {
             let cs = cpu_ns();
             if let Err(e) = self.surface.swap_buffers(None) {
+                // Nothing went to hwcomposer: no buffer used, no frame shown;
+                // the canvas is copied whole next time.
                 tracing::warn!("render: swap: {e}");
+                swapped = false;
+                failed = true;
+                self.reprime = self.reprime.max(1);
+            } else {
+                // Only a swapped frame uses up a buffer.
+                self.frames_drawn += 1;
             }
             if std::env::var_os("LOG_TIMES").is_some() {
                 tracing::info!("times: swap {:.2} (cpu {:.2}) ms", (hybris_hwc::now_ns() - t1) as f64 / 1e6, (cpu_ns() - cs) as f64 / 1e6);
             }
-            // Only a swapped frame uses up a buffer.
-            self.frames_drawn += 1;
         }
         if std::env::var_os("LOG_BUFFERS").is_some() && swapped {
             let order = hybris_hwc::presented_buffers(12);
@@ -1327,6 +1396,7 @@ impl Screen {
             age,
             damaged_px,
             swapped,
+            failed,
         }
     }
 

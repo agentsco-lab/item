@@ -8,7 +8,7 @@
 # rastered on the GPU through ANGLE on hybris now and then stayed stale
 # after a backspace (the glyph gone from the field, still drawn); disable
 # wins over Debian's enable. WebGL still goes through the GPU process.
-export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3 --enable-features=OverlayScrollbar --disable-gpu-rasterization"
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3 --enable-features=OverlayScrollbar --disable-gpu-rasterization --no-first-run"
 # No Mesa for Chromium (2026-10-23): it draws through ANGLE on hybris's EGL
 # (the session's __EGL_VENDOR_LIBRARY_FILENAMES), yet its Wayland side
 # opens a GBM device, which loads Mesa's zink (a Vulkan probe that fails,

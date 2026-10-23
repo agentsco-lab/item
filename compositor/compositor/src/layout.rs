@@ -21,7 +21,8 @@ pub const SCALE: i32 = 2;
 
 /// The screen as hwcomposer and the touchscreen have it: the hinge vertical.
 pub const LANDSCAPE: (i32, i32) = (1392, 900);
-const PANEL: i32 = 675;
+/// One panel's width (the book), or its height turned.
+pub const PANEL: i32 = 675;
 const HINGE: i32 = 42;
 
 /// How the frame is turned: 0 the book (the hinge vertical), 1 the right
@@ -123,8 +124,15 @@ pub fn screen_panels() -> [Rectangle<i32, smithay::utils::Physical>; 2] {
     ]
 }
 
-/// Until when (ns) the turn's animation runs (output.rs sets it): touches
-/// are dropped meanwhile (input.rs).
+/// The frame's panel (0 first: left, or upper) shown on a screen panel
+/// (`screen_panels`' index) under `turn`: with the right panel up the
+/// screen's left panel is the frame's lower one.
+pub fn frame_panel(turn: u8, screen_panel: usize) -> usize {
+    if turn == 1 { 1 - screen_panel } else { screen_panel }
+}
+
+/// Until when (ns) the turn's animation runs (output.rs sets it once, at
+/// the turn's start, to its end): touches are dropped meanwhile (input.rs).
 static TURNING_UNTIL: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_turning_until(ns: u64) {

@@ -100,7 +100,7 @@ impl Tile {
             Tile::Airplane => "Airplane Mode",
             Tile::Night => "Night Light",
             Tile::Haptic => "Vibration",
-            Tile::Face => "Face Unlock",
+            Tile::Face => "CV ID",
             Tile::Settings => "Settings",
         }
     }

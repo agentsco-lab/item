@@ -79,6 +79,9 @@ struct Grab {
 struct Run {
     from: f64,
     to: f64,
+    /// The window of the cover it runs to: the row may change under the
+    /// run (a window opened or closed), and the cover's index with it.
+    window: Option<Window>,
     start_ns: u64,
 }
 
@@ -91,11 +94,13 @@ pub struct Flow {
     run: Option<Run>,
     /// The windows in the row, as the ribbon has them.
     pub windows: Vec<Window>,
-    /// The cover the row last settled on, for the screen to page to.
+    /// The cover the screen is on, as of the last sync or settle: a run
+    /// ending on it has nothing to page to.
     settled: Option<usize>,
-    /// A cover swiped up: its index and since when, flying out while its
-    /// window closes.
-    closing: Option<(usize, u64)>,
+    /// A cover swiped up: its window and since when, flying out while the
+    /// window is put away. Its window, not its index: the put-away is at
+    /// once, the row's sync only after the ribbon's run.
+    closing: Option<(Window, u64)>,
     /// The cover a run just set off to, for the screen to page alongside.
     heading: Option<usize>,
     /// The windows' names by app id, and their labels (text.rs).
@@ -126,9 +131,18 @@ impl Flow {
     /// The row's windows and the one the screen shows, as the ribbon has
     /// them (state.rs, when the ribbon applies).
     pub fn sync(&mut self, windows: Vec<Window>, shown: Option<usize>) {
-        if let Some((i, _)) = self.closing {
-            if self.windows.get(i).is_some_and(|w| !windows.contains(w)) {
-                self.closing = None;
+        // The cover flying out is done with once its window left the row
+        // (brought back meanwhile, it is let go of in `settle`).
+        if self.closing.as_ref().is_some_and(|(w, _)| !windows.contains(w)) {
+            self.closing = None;
+        }
+        // A run's cover is where the row now has its window: the run's ends
+        // move with it, so what is in the middle stays in the middle.
+        if let Some(r) = self.run.as_mut() {
+            if let Some(j) = r.window.as_ref().and_then(|w| windows.iter().position(|x| x == w)) {
+                let shift = j as f64 - r.to;
+                r.from += shift;
+                r.to = j as f64;
             }
         }
         self.windows = windows;
@@ -137,6 +151,7 @@ impl Flow {
                 self.pos = i as f64;
             }
         }
+        self.settled = shown;
         self.pos = self.pos.clamp(0.0, self.windows.len().saturating_sub(1) as f64);
     }
 
@@ -197,6 +212,9 @@ impl Flow {
         let pos = if pending && self.windows.is_empty() { 0.0 } else { self.position(now_ns) };
         let cx = room.loc.x + room.size.w / 2.0;
         let cy = room.loc.y + (room.size.h - NAME_H) / 2.0;
+        // The cover in the middle, the one a swipe up lifts: the nearest to
+        // the row's position, as `up` takes it.
+        let middle = pos.round().max(0.0) as usize;
         let mut out = Vec::new();
         let n = self.windows.len() + if pending { 1 } else { 0 };
         for i in 0..n {
@@ -216,13 +234,13 @@ impl Flow {
             let (_, fnear) = project(0.5 * tilt.sin().signum(), tilt);
             let centre_x = cx + d * w * STEP;
             // Lifted by the finger, or flying out while its window closes.
-            let (lift, alpha) = match (&self.grab, self.closing) {
-                (_, Some((ci, at))) if ci == i => {
-                    let k = (now_ns.saturating_sub(at) as f64 / CLOSE_NS).clamp(0.0, 1.0);
+            let (lift, alpha) = match (&self.grab, &self.closing) {
+                (_, Some((cw, at))) if self.windows.get(i) == Some(cw) => {
+                    let k = (now_ns.saturating_sub(*at) as f64 / CLOSE_NS).clamp(0.0, 1.0);
                     let e = 1.0 - (1.0 - k).powi(2);
                     (CLOSE_PX + CLOSE_FLY * e, (1.0 - e) as f32)
                 }
-                (Some(g), _) if g.lift > 0.0 && (i as f64 - pos).abs() < 0.5 => (g.lift, (1.0 - (g.lift / (CLOSE_PX * 2.5)).min(0.5)) as f32),
+                (Some(g), _) if g.lift > 0.0 && i == middle => (g.lift, (1.0 - (g.lift / (CLOSE_PX * 2.5)).min(0.5)) as f32),
                 _ => (0.0, 1.0),
             };
             let rect = Rectangle::new((centre_x + x0 * cw, cy - lift - ch * fnear / 2.0).into(), ((x1 - x0) * cw, ch * fnear).into());
@@ -314,7 +332,7 @@ impl Flow {
             if g.lift >= CLOSE_PX && self.closing.is_none() {
                 let i = self.pos.round().max(0.0) as usize;
                 if let Some(w) = self.windows.get(i).cloned() {
-                    self.closing = Some((i, now_ns));
+                    self.closing = Some((w.clone(), now_ns));
                     return Some(w);
                 }
             }
@@ -330,8 +348,9 @@ impl Flow {
             (self.pos - g.velocity * CARRY_MS / step).round()
         }
         .clamp(0.0, n);
-        self.run = Some(Run { from: self.pos, to, start_ns: now_ns });
-        self.heading = Some(to.round().max(0.0) as usize);
+        let i = to.round().max(0.0) as usize;
+        self.run = Some(Run { from: self.pos, to, window: self.windows.get(i).cloned(), start_ns: now_ns });
+        self.heading = Some(i);
         None
     }
 
@@ -342,14 +361,21 @@ impl Flow {
     /// The run settled: the cover it stopped on, once; whether a frame is
     /// still wanted.
     pub fn settle(&mut self, now_ns: u64) -> (Option<usize>, bool) {
-        let Some(r) = &self.run else { return (None, false) };
+        // The cover flown out is done with, whether or not its window is
+        // back in the row by now (a dock tap within the ribbon's run).
+        if self.closing.as_ref().is_some_and(|(_, at)| now_ns >= at + CLOSE_NS as u64) {
+            self.closing = None;
+        }
+        let Some(r) = &self.run else { return (None, self.closing.is_some()) };
         if now_ns < r.start_ns + RUN_NS as u64 {
             return (None, true);
         }
-        let to = r.to;
-        self.pos = to;
+        // The cover it ran to, where the row has its window now; the index
+        // it set off for, within the row, if the window went.
+        let last = self.windows.len().saturating_sub(1);
+        let i = r.window.as_ref().and_then(|w| self.windows.iter().position(|x| x == w)).unwrap_or(r.to.round().max(0.0) as usize).min(last);
+        self.pos = i as f64;
         self.run = None;
-        let i = to.round().max(0.0) as usize;
         let changed = self.settled != Some(i);
         self.settled = Some(i);
         (changed.then_some(i), true)

@@ -11,7 +11,7 @@ You are Claude Code at home on a Microsoft Surface Duo 1: Droidian (Debian arm64
 
 ## What you have
 - Whatever `sudo` the owner set up on this phone (the port's Droidian gives its user sudo). Use it for what the owner asks and nothing else.
-- Tools as installed: btop, htop, lsof, iotop, jq, rg, fdfind, git, tmux, rsync, curl, python3, nmcli, mmcli, upower, journalctl.
+- Tools the package brings or Droidian has: git, tmux, curl, wget, python3, lsof, nmcli, mmcli, upower, journalctl; others (btop, jq, rg) only if the owner installed them.
 - item's own: `item-switch item|phosh|status`, `item-switch keyboard item|stevia`; the compositor's log `journalctl -u item.service -f`; its state in `~/.config/item/`; `item-agents list|devices` (the agents here and on the owner's other devices, `~/.config/item/devices`), `item-secret get|set NAME` (the keyring: keys by name, never written to a file or a log).
 - The port's: `/usr/local/sbin/sfduo-*`, the adaptation package `adaptation-droidian-surfaceduo`.
 
@@ -21,5 +21,5 @@ You are Claude Code at home on a Microsoft Surface Duo 1: Droidian (Debian arm64
 - Builds of item happen on the computer (a cross build); here you can read, change, test what runs on the phone, and commit.
 
 ## Where things are on this phone
-- item's docs come with the package: `/usr/share/doc/item/` and the repository `agentsco-lab/item` (docs/); the port's SAFETY.md first of all.
+- item's docs are in the repository `agentsco-lab/item` (README, docs/); the port's SAFETY.md first of all, in `agentsco-lab/surfaceduo-droidian`.
 - The user is `droidian` (uid 32011), home `/home/droidian`. The system image is `/userdata/rootfs.img`, mounted as `/`.

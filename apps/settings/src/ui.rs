@@ -22,10 +22,10 @@ pub fn group(title: &str) -> adw::PreferencesGroup {
 }
 
 /// A section not made yet: what it will hold, and its ticket.
-pub fn coming(what: &str, ticket: u32) -> gtk::Widget {
+pub fn coming(what: &str, _ticket: u32) -> gtk::Widget {
     let page = adw::PreferencesPage::new();
     let g = group("");
-    g.add(&adw::StatusPage::builder().title("Coming").description(format!("{what}\n\nTracker #{ticket}.")).icon_name("preferences-system-symbolic").build());
+    g.add(&adw::StatusPage::builder().title("Coming").description(what).icon_name("preferences-system-symbolic").build());
     page.add(&g);
     page.upcast()
 }

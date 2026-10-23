@@ -137,7 +137,7 @@ impl Ribbon {
                 tracing::info!("ribbon: the window up, page {}", self.view);
             }
         } else {
-            self.view = self.view.min(self.max_view());
+            self.keep_view();
         }
         self.run = None;
         self.drag = None;
@@ -313,31 +313,33 @@ impl Ribbon {
         tracing::info!("ribbon: to page {} of {} ({:?} | {:?})", self.view, self.pages.len(), self.on(0), self.on(1));
     }
 
-    /// The row run to its end: the pen's sheet on the right panel (for
-    /// tests: the pen's bench, tools/pen-bench.sh).
     /// The row run to `page` as the view (the flow's choice, flow.rs).
     pub fn go_to(&mut self, page: usize) {
         self.go_to_in(page, RUN_MAX_NS as u64);
     }
 
-    /// As `go_to`, taking `ns` (the flow's run alongside, flow.rs).
+    /// As `go_to`, taking `ns` (the flow's run alongside, flow.rs). From
+    /// where the pages are drawn now, not where the last run was going: a
+    /// second flick within the first's run goes on from mid-way.
     pub fn go_to_in(&mut self, page: usize, ns: u64) {
         let target = page.min(self.max_view());
         if target == self.view && self.run.is_none() {
             return;
         }
         let now = hybris_hwc::now_ns();
-        let pos = self.pos();
-        let from: Vec<(Page, f64)> = self.pages.iter().enumerate().map(|(i, p)| (p.clone(), (i as f64 - pos) * PAGE)).collect();
+        self.begin(now);
+        let from = self.xs(now);
         self.view = target;
         self.run = Some(Run { from, start_ns: now, duration_ns: ns, v0: 0.0, scroll: true });
         self.unsettled = true;
     }
 
+    /// The row run to its end: the pen's sheet on the right panel (for
+    /// tests: the pen's bench, tools/pen-bench.sh).
     pub fn to_end(&mut self) {
         let now = hybris_hwc::now_ns();
-        let pos = self.pos();
-        let from: Vec<(Page, f64)> = self.pages.iter().enumerate().map(|(i, p)| (p.clone(), (i as f64 - pos) * PAGE)).collect();
+        self.begin(now);
+        let from = self.xs(now);
         self.view = self.max_view();
         self.run = Some(Run { from, start_ns: now, duration_ns: RUN_MAX_NS as u64, v0: 0.0, scroll: true });
         self.unsettled = true;
@@ -366,7 +368,10 @@ impl Ribbon {
         if self.view == 0 && self.pages.len() > 3 && self.pages[0] == Page::System {
             self.view = 1;
         }
-        if self.pages.get(self.view + 1) == Some(&Page::Pen) && self.view > 1 {
+        // Two pages shown, the pen's sheet on the right one: back by one.
+        // The frame turned, one page shows, and the page before the sheet
+        // is a window to keep up.
+        if !crate::layout::turned() && self.pages.get(self.view + 1) == Some(&Page::Pen) && self.view > 1 {
             self.view -= 1;
         }
     }

@@ -588,6 +588,11 @@ impl State {
         let msec = |t: u64| (t / 1000) as u32;
         match contact {
             Contact::Down(slot, pos, time) => {
+                // The slot's travel on the deck from before: this finger's
+                // begins afresh below, or not at all.
+                if self.deck_swipe.is_some_and(|(s, ..)| s == slot) {
+                    self.deck_swipe = None;
+                }
                 // A tap on a notification's banner: its action.
                 if let Some((rect, id)) = self.shade.quick.banner_at.get() {
                     if rect.contains(pos) {
@@ -807,6 +812,10 @@ impl State {
                 touch.motion(self, under, &MotionEvent { slot, location: pos, time: msec(time) });
             }
             Contact::Up(slot, time) => {
+                // The slot's travel on the deck, taken whatever takes the
+                // lift: left behind, it would be read on a later lift of
+                // the slot and keep the ribbon from it (ribbon_grab).
+                let deck_swipe = self.deck_swipe.take_if(|(s, ..)| *s == slot);
                 if self.carrying.as_ref().is_some_and(|c| c.0 == slot) {
                     self.carry_window_up();
                     return;
@@ -836,7 +845,7 @@ impl State {
                     self.needs_redraw = true;
                     return;
                 }
-                if let Some((_, x0, x1, y0, y1)) = self.deck_swipe.take_if(|(s, ..)| *s == slot) {
+                if let Some((_, x0, x1, y0, y1)) = deck_swipe {
                     self.deck_swiped(x1 - x0, y1 - y0);
                 }
                 if self.bottom_start.is_some_and(|(s, _)| s == slot) {
@@ -912,6 +921,7 @@ impl State {
                 self.kbd.cancel();
                 self.ribbon.cancel();
                 self.bottom_start = None;
+                self.deck_swipe = None;
                 self.carrying = None;
                 self.needs_redraw = true;
                 touch.cancel(self)

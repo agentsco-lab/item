@@ -166,8 +166,18 @@ pub struct State {
     /// Windows put away, and the panel each was on.
     pub put_away: Vec<(Window, usize)>,
     /// The dock's apps kept warm (draft 49): launched after boot, their
-    /// windows put away before a frame shows them. By app id, since when.
-    warming: HashMap<String, u64>,
+    /// windows put away before a frame shows them. By app id: since when,
+    /// and when its first window came (its others for a while after are
+    /// warm too: a first-run dialog, a second toplevel).
+    warming: HashMap<String, Warming>,
+    /// Every app id warmed this boot: a late window of one of them (its
+    /// launch forgotten, a dialog after its first window) is still put away.
+    warm_known: std::collections::HashSet<String>,
+    /// Apps to spawn from the tick: the resident Chromium's thread asks for
+    /// a plain launch when the resident could not be reached (exec, id).
+    spawn_later: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    /// The loop woken from a thread.
+    wake: smithay::reexports::calloop::ping::Ping,
     /// Windows that came while a warm launch was pending, not yet shown nor
     /// put away: told apart by app id at their first buffer.
     warm_pending: Vec<(Window, usize)>,
@@ -343,6 +353,9 @@ impl State {
             paces: Default::default(),
             put_away: Vec::new(),
             warming: HashMap::new(),
+            warm_known: Default::default(),
+            spawn_later: Default::default(),
+            wake: wake.clone(),
             warm_pending: Vec::new(),
             warm_queue: Vec::new(),
             warm_next_ns: 0,
@@ -531,7 +544,7 @@ impl State {
             let leader = self.follow.leader(&id);
             let panel = (0..2)
                 .find(|&p| matches!(self.ribbon.on(p), Some(crate::ribbon::Page::App(w)) if leader.as_deref() == Some(app_id(w).as_str())))
-                .unwrap_or(1);
+                .unwrap_or(if layout::turned() { 0 } else { 1 });
             if self.bring_back(&[id.clone()], panel) {
                 tracing::info!("follow: {id} presented");
                 changed = true;
@@ -968,18 +981,50 @@ impl State {
     fn warm_or_show(&mut self, window: Window, pi: usize) {
         let id = app_id(&window);
         let now = hybris_hwc::now_ns();
-        if let Some(since) = self.warming.remove(&id) {
-            // The launch's other ids (the desktop file's name beside the
-            // window's class) go with it.
-            self.warming.retain(|_, s| *s != since);
-            tracing::info!("warm: {id} ready in {:.2} s, put away unshown", now.saturating_sub(since) as f64 / 1e9);
+        let asked = self.launch_to.filter(|&(_, at)| now.saturating_sub(at) < 10_000_000_000).map(|(p, _)| p);
+        let warm = self.warming.get(&id).copied();
+        // A warming app's first window, or one of its later ones (a dialog,
+        // a second toplevel), or a window of an app warmed earlier whose
+        // launch was forgotten: put away unshown - unless the dock asked for
+        // it meanwhile (claimed), or a launch is waiting and this is not a
+        // warming app's window.
+        let claimed = warm.is_some_and(|w| w.claimed);
+        if !claimed && (warm.is_some() || (asked.is_none() && self.warm_known.contains(&id))) {
+            match warm {
+                Some(w) if w.arrived.is_none() => tracing::info!("warm: {id} ready in {:.2} s, put away unshown", now.saturating_sub(w.since) as f64 / 1e9),
+                _ => tracing::info!("warm: {id}: another window, put away unshown"),
+            }
+            if let Some(w) = warm {
+                for v in self.warming.values_mut().filter(|v| v.since == w.since) {
+                    v.arrived.get_or_insert(now);
+                }
+            }
             self.put_away.push((window, pi));
             return;
         }
+        // Shown: on the panel asked for, under the curtain raised for it.
+        let pi = match asked {
+            Some(p) => {
+                self.launch_to = None;
+                p
+            }
+            None if layout::turned() => 0,
+            None => pi,
+        };
+        if let Some(w) = warm {
+            self.warming.retain(|_, v| v.since != w.since);
+        }
         let panel = layout::panels()[pi];
+        let band = self.dock_band(pi);
+        window.toplevel().unwrap().with_pending_state(|s| s.size = Some((panel.size.w, panel.size.h - band).into()));
+        window.toplevel().unwrap().send_pending_configure();
+        self.curtain.adopt(pi, window.toplevel().unwrap().wl_surface());
+        self.curtain.drawn(window.toplevel().unwrap().wl_surface(), now);
         self.ribbon.open(window.clone(), pi);
         self.opened_onto(&window, pi);
         self.space.map_element(window.clone(), panel.loc, true);
+        let surface = window.toplevel().unwrap().wl_surface().clone();
+        self.seat.get_keyboard().unwrap().set_focus(self, Some(surface), smithay::utils::SERIAL_COUNTER.next_serial());
         self.needs_redraw = true;
         tracing::info!("window mapped on the {} panel after a warm wait", if pi == 0 { "left" } else { "right" });
     }
@@ -987,7 +1032,7 @@ impl State {
     /// Whether a window of one of `ids` is about: shown, put away or waiting.
     fn app_about(&self, ids: &[String]) -> bool {
         let is = |w: &Window| ids.iter().any(|id| *id == app_id(w));
-        self.space.elements().any(is) || self.put_away.iter().any(|(w, _)| is(w)) || self.warm_pending.iter().any(|(w, _)| is(w))
+        self.windows().iter().any(is) || self.put_away.iter().any(|(w, _)| is(w)) || self.warm_pending.iter().any(|(w, _)| is(w))
     }
 
     /// The dock's apps warmed after boot (draft 49): from 30 s after the
@@ -999,24 +1044,43 @@ impl State {
         const START_S: f64 = 30.0;
         const GAP_NS: u64 = 3_000_000_000;
         const FORGET_NS: u64 = 60_000_000_000;
+        /// An arrived app's later windows are warm for this long.
+        const MORE_NS: u64 = 15_000_000_000;
         const MEM_FLOOR_KB: u64 = 1_500_000;
+        // Launches asked from a thread (the resident Chromium's, when the
+        // resident could not be reached): plain ones, now.
+        let later: Vec<(String, String)> = std::mem::take(&mut *self.spawn_later.lock().unwrap());
+        for (exec, id) in later {
+            tracing::info!("chromium: no resident instance answered, launched as a process");
+            self.spawn_app_plain(&exec, &id);
+        }
+        // Not while the first setup or the tour has the screen: their
+        // minutes are the owner's, and a dialog of an app would land in them.
+        if self.setup.active || self.tour.active() {
+            return;
+        }
         if !self.warm_begun {
             if self.started.elapsed().as_secs_f64() < START_S {
                 return;
             }
             self.warm_begun = true;
-            self.warm_queue = crate::dock::configured_desktops().into_iter().filter(|d| d != "chromium.desktop").collect();
+            // Chromium is resident on its own (item-chromium.service), known by its ids.
+            self.warm_queue = crate::dock::configured_desktops().into_iter().filter(|d| !crate::apps::entry(d).is_some_and(|e| e.ids.iter().any(|i| crate::kbd::is_browser(i)))).collect();
             self.warm_next_ns = now;
         }
-        // A warming app that never came: forgotten.
-        self.warming.retain(|id, since| {
-            let kept = now.saturating_sub(*since) < FORGET_NS;
-            if !kept {
-                tracing::info!("warm: {id} never came, forgotten");
+        // A warming app that never came is forgotten; an arrived one is
+        // remembered a while, for its later windows.
+        self.warming.retain(|id, w| match w.arrived {
+            None => {
+                let kept = now.saturating_sub(w.since) < FORGET_NS;
+                if !kept {
+                    tracing::info!("warm: {id} never came, forgotten");
+                }
+                kept
             }
-            kept
+            Some(at) => now.saturating_sub(at) < MORE_NS,
         });
-        if self.warm_queue.is_empty() || now < self.warm_next_ns || !self.warming.is_empty() {
+        if self.warm_queue.is_empty() || now < self.warm_next_ns || self.warming.values().any(|w| w.arrived.is_none()) {
             return;
         }
         let desktop = self.warm_queue.remove(0);
@@ -1032,7 +1096,8 @@ impl State {
             return;
         }
         for id in &entry.ids {
-            self.warming.insert(id.clone(), now);
+            self.warming.insert(id.clone(), Warming { since: now, arrived: None, claimed: false });
+            self.warm_known.insert(id.clone());
         }
         tracing::info!("warm: launching {desktop}");
         self.spawn_app(&entry.exec, entry.ids.first().map(String::as_str).unwrap_or("app"));
@@ -1047,6 +1112,25 @@ impl State {
         // The Agent entry: the keyboard comes under its window, the agent's
         // keys up (kbd.rs).
         let agent = ids.iter().any(|id| id == "item-agent");
+        // On its way warm already (warm_tick): claimed - its window is shown
+        // under the curtain when it comes, no second process.
+        let warming = ids.iter().any(|id| self.warming.get(id).is_some_and(|w| w.arrived.is_none()));
+        if warming {
+            let now = hybris_hwc::now_ns();
+            for id in ids {
+                if let Some(w) = self.warming.get_mut(id) {
+                    w.claimed = true;
+                }
+            }
+            if agent {
+                self.kbd_wanted = Some(now);
+            }
+            self.launch_to = Some((panel, now));
+            self.curtain.raise(panel, icon, ids.first().map(String::as_str).unwrap_or("app"), now);
+            self.needs_redraw = true;
+            tracing::info!("launch: {} is on its way warm, waited for", ids.first().map(String::as_str).unwrap_or("app"));
+            return;
+        }
         if self.bring_back(ids, panel) || self.call_over(ids, panel) {
             if agent {
                 if let Some(w) = self.top_window(panel) {
@@ -1072,12 +1156,28 @@ impl State {
     /// cannot be made (no user manager: found once, at the first launch's
     /// start, SCOPES), the app starts as before.
     pub fn spawn_app(&self, exec: &str, id: &str) {
-        // Chromium kept resident (session/item-chromium.service): its
-        // window asked of it, no second process.
-        if id == "chromium" && resident_chromium(exec) {
-            tracing::info!("chromium: a window asked of the resident instance");
+        // Chromium kept resident (session/item-chromium.service): its window
+        // asked of it over its socket, on a thread (the answer takes the
+        // time of a window); the resident absent, the service is started
+        // and asked again for a few seconds, and failing that the plain
+        // launch is asked of the tick (spawn_later).
+        if crate::kbd::is_browser(id) {
+            let (exec, id, later, wake) = (exec.to_owned(), id.to_owned(), self.spawn_later.clone(), self.wake.clone());
+            let _ = std::thread::Builder::new().name("chromium ask".into()).spawn(move || {
+                if resident_chromium(&exec) {
+                    tracing::info!("chromium: a window asked of the resident instance");
+                } else {
+                    later.lock().unwrap().push((exec, id));
+                    wake.ping();
+                }
+            });
             return;
         }
+        self.spawn_app_plain(exec, id);
+    }
+
+    /// `exec` started as a process of its own, in a scope.
+    fn spawn_app_plain(&self, exec: &str, id: &str) {
         if !SCOPES.load(std::sync::atomic::Ordering::Relaxed) {
             self.spawn(exec);
             return;
@@ -1599,14 +1699,18 @@ impl XdgShellHandler for State {
             state.states.set(xdg_toplevel::State::Maximized);
             state.states.set(xdg_toplevel::State::Activated);
         });
-        // A warm launch pending (draft 49) and no launch asked for: the
-        // window waits unshown until its first buffer tells its app id -
-        // a warming app's goes straight to the windows put away, any
-        // other's is shown then (warm_or_show).
-        if asked.is_none() && !self.warming.is_empty() {
+        // A warm launch pending (draft 49): every window waits unshown until
+        // its first buffer tells its app id - a warming app's goes straight
+        // to the windows put away, any other's is shown then (warm_or_show),
+        // on the panel a launch asked for, under its curtain.
+        if self.warming.values().any(|w| w.arrived.is_none()) {
+            if let Some(p) = asked {
+                // Not taken: warm_or_show reads it for the window shown.
+                self.launch_to = Some((p, hybris_hwc::now_ns()));
+            }
             let window = Window::new_wayland_window(surface);
             self.warm_pending.push((window, pi));
-            if self.next_panel > 0 && free.is_none() {
+            if asked.is_none() && self.next_panel > 0 && free.is_none() {
                 self.next_panel -= 1;
             }
             return;
@@ -1793,6 +1897,11 @@ impl XdgActivationHandler for State {
 
     fn request_activation(&mut self, token: XdgActivationToken, _token_data: XdgActivationTokenData, surface: WlSurface) {
         self.xdg_activation_state.remove_token(&token);
+        // Locked: nothing comes up under the lock screen for a window's own
+        // asking (a call lights the screen by calls.rs, not by this).
+        if self.lock.locked {
+            return;
+        }
         if let Some((window, panel)) = self.put_away.iter().find(|(w, _)| w.toplevel().unwrap().wl_surface() == &surface).cloned() {
             let panel = if layout::turned() { 0 } else { panel };
             tracing::info!("activation: {} asks to be shown, brought back", app_id(&window));
@@ -1833,6 +1942,16 @@ impl smithay::wayland::idle_inhibit::IdleInhibitHandler for State {
 smithay::delegate_idle_inhibit!(State);
 smithay::delegate_presentation!(State);
 
+/// A warm launch (draft 49): when it was spawned, and when its first
+/// window came.
+#[derive(Clone, Copy)]
+struct Warming {
+    since: u64,
+    arrived: Option<u64>,
+    /// The dock asked for it meanwhile (launch): its window is shown, not put away.
+    claimed: bool,
+}
+
 /// `s` as one word for sh: in single quotes, its own quotes closed, escaped
 /// and reopened. For anything that goes into a `sh -c` line and came from
 /// outside (a session's path, a name from another device).
@@ -1851,9 +1970,23 @@ fn resident_chromium(exec: &str) -> bool {
     use std::io::{Read, Write};
     use std::os::unix::ffi::OsStrExt;
     let Some(home) = std::env::var_os("HOME") else { return false };
-    let socket = std::path::Path::new(&home).join(".config/chromium/SingletonSocket");
-    let Ok(mut s) = std::os::unix::net::UnixStream::connect(&socket) else { return false };
-    let _ = s.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    let config = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).unwrap_or_else(|| std::path::Path::new(&home).join(".config"));
+    let socket = config.join("chromium/SingletonSocket");
+    // The resident answers at once; absent (the seconds after login, its
+    // restart), its service is started and the socket tried for 6 s.
+    let mut stream = std::os::unix::net::UnixStream::connect(&socket);
+    if stream.is_err() {
+        let _ = std::process::Command::new("systemctl").args(["--user", "start", "item-chromium.service"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status();
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            stream = std::os::unix::net::UnixStream::connect(&socket);
+            if stream.is_ok() {
+                break;
+            }
+        }
+    }
+    let Ok(mut s) = stream else { return false };
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
     let _ = s.set_write_timeout(Some(std::time::Duration::from_millis(500)));
     let mut message = b"START\0".to_vec();
     message.extend_from_slice(home.as_bytes());
@@ -1866,8 +1999,10 @@ fn resident_chromium(exec: &str) -> bool {
         return false;
     }
     let _ = s.shutdown(std::net::Shutdown::Write);
+    // Written and taken: asked. The ACK comes once the window is made
+    // (half a second); SHUTDOWN means the resident is going.
     let mut reply = [0u8; 8];
     let n = s.read(&mut reply).unwrap_or(0);
-    &reply[..n] == b"ACK"
+    &reply[..n] != b"SHUTDOWN"
 }
 

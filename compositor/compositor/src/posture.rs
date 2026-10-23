@@ -8,8 +8,9 @@
 //! from the hinge to the outer edge, y along the long side (up when the
 //! book stands), z out of the screen. Thresholds carry 0.1 g (5°) of
 //! hysteresis; a candidate is taken once the readings have been still for a
-//! while, never while the hinge moves, never within 300 ms of a touch. The
-//! frame turns with it (layout.rs, output.rs's turn through blur, draft 44).
+//! while, never while the hinge moves, never while a finger is down or
+//! within 300 ms of its lift, never with the display dark. The frame turns
+//! with it (layout.rs, output.rs's turn through blur, draft 44).
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -87,6 +88,14 @@ pub struct Told {
     pub roll: f64,
     /// Still: the gyroscope quiet for a while.
     pub still: bool,
+}
+
+/// What sensors.rs says on its channel: a reading, or the display dark
+/// (nothing is decided) and lit again - said once gravity has been read
+/// afresh, so the reading after is never stale gravity with a new angle.
+pub enum Said {
+    Told(Told),
+    Dark(bool),
 }
 
 /// `value` past `on` turns it on; on, it stays until `value` drops under `off`.
@@ -185,21 +194,20 @@ const HINGE_STILL: f64 = 5.0;
 
 /// The screen touched: no decision while a finger is down or within
 /// TOUCH_GAP_NS of its lift (Android's PROPOSAL_MIN_TIME_SINCE_TOUCH_END).
-static TOUCHING: AtomicBool = AtomicBool::new(false);
 static TOUCH_END_NS: AtomicU64 = AtomicU64::new(0);
 const TOUCH_GAP_NS: u64 = 300_000_000;
 
-/// input.rs tells of fingers down and lifted.
+/// input.rs tells of fingers lifted: a decision waits 300 ms after one.
+/// A finger resting (a thumb holding the Duo open) does not hold it - the
+/// owner's word, 2026-10-22: the turn must come while the phone is held.
 pub fn touched(down: bool, now_ns: u64) {
-    TOUCHING.store(down, Ordering::Relaxed);
     if !down {
         TOUCH_END_NS.store(now_ns, Ordering::Relaxed);
     }
 }
 
+/// A finger lifted just now (as Android holds its proposals).
 fn touched_lately(now_ns: u64) -> bool {
-    // A thumb resting on the glass (holding the Duo open) is not a touch
-    // that should hold the decision: only a lift just now is.
     now_ns.saturating_sub(TOUCH_END_NS.load(Ordering::Relaxed)) < TOUCH_GAP_NS
 }
 
@@ -278,18 +286,44 @@ impl Posture {
         let (sensors, rx) = crate::sensors::Sensors::start(wake.clone());
         let _ = std::thread::Builder::new().name("posture decide".into()).spawn(move || {
             let mut told: Option<Told> = None;
+            let mut dark = false;
             let mut decider = Decider::default();
             loop {
-                match rx.recv_timeout(std::time::Duration::from_millis(STEADY_MS / 2)) {
-                    Ok(t) => {
+                // Woken by what the sensors say; by the clock only while a
+                // candidate is maturing, which the clock alone ripens. Dark,
+                // or with nothing maturing, the thread sleeps.
+                let said = if decider.candidate.is_some() && !dark {
+                    match rx.recv_timeout(std::time::Duration::from_millis(STEADY_MS / 2)) {
+                        Ok(s) => Some(s),
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                } else {
+                    match rx.recv() {
+                        Ok(s) => Some(s),
+                        Err(_) => return,
+                    }
+                };
+                match said {
+                    Some(Said::Told(t)) => {
                         if t.angle.is_finite() && t.angle.to_bits() != a.swap(t.angle.to_bits(), Ordering::Relaxed) {
                             c.store(true, Ordering::Relaxed);
                             wake.ping();
                         }
-                        told = Some(t);
+                        // Dark, the angle is still passed on (the hinge read
+                        // as the display lit) but nothing is decided from it.
+                        if !dark {
+                            told = Some(t);
+                        }
                     }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                    Some(Said::Dark(d)) => {
+                        // Dark: no stale reading to keep judging, no turn with
+                        // the screen off. Lit: decided afresh from the next.
+                        dark = d;
+                        told = None;
+                        decider.candidate = None;
+                    }
+                    None => {}
                 }
                 let Some(t) = told else { continue };
                 let says_other = decide(t, current()).is_some_and(|o| o != current());

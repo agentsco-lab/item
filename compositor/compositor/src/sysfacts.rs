@@ -334,6 +334,11 @@ fn agents(cache: &mut Option<(Instant, Vec<Device>)>) -> Vec<Device> {
     if let Some((_, d)) = cache.as_ref().filter(|(at, _)| at.elapsed() < AGENTS_EVERY) {
         return d.clone();
     }
+    // No devices file: nothing to ask, no python3 every 15 s.
+    if !crate::prefs::path("devices").exists() {
+        *cache = Some((Instant::now(), Vec::new()));
+        return Vec::new();
+    }
     let t = Instant::now();
     let out = std::process::Command::new("item-agents").arg("devices").output();
     let devices: Vec<Device> = match &out {

@@ -19,8 +19,10 @@
 //! Editing by the finger: a held backspace repeats, after a while by the
 //! word (Ctrl+W in a terminal, Ctrl+Backspace elsewhere); a swipe along the
 //! space bar walks the cursor; a letter held opens a row of what else it
-//! can be (the digit on the top row, the accents, ё and ъ in Russian),
-//! chosen by sliding along the row.
+//! can be (the digit on the top row, ё and ъ in Russian), chosen by
+//! sliding along the row. The keyboard types by key presses alone, so it
+//! offers only what typing.rs can send as one: no accents, no dashes or
+//! quotes of the printers (`every_key_and_alternative_has_a_key`).
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -171,7 +173,9 @@ fn chars(row: &str) -> Vec<Slot> {
 const EN: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 const RU: [&str; 3] = ["йцукенгшщзх", "фывапролджэ", "ячсмитьбю"];
 const SIGNS_0: [&str; 3] = ["1234567890", "-/:;()$&@\"", ".,?!'`"];
-const SIGNS_1: [&str; 3] = ["[]{}#%^*+=", "_\\|~<>€£¥·", ".,?!'`"];
+/// The second page is short of its row: the currency signs and the middle
+/// dot have no key on the US layout (typing.rs), so they are not offered.
+const SIGNS_1: [&str; 3] = ["[]{}#%^*+=", "_\\|~<>", ".,?!'`"];
 
 /// What the keyboard asks the state to do.
 pub enum Ask {
@@ -183,8 +187,11 @@ pub enum Ask {
 
 struct Touch {
     slot: TouchSlot,
-    /// The key under it (an index into `placed`), or the field's clear.
+    /// The key under it (an index into `placed`, checked at each use: the
+    /// rows may be laid again under it), or the field's clear.
     on: Option<usize>,
+    /// The recording is this finger's: its lift sends it to be heard.
+    mic: bool,
     start: Point<f64, Logical>,
     moved: bool,
     /// When it landed, and when a held backspace fires next.
@@ -199,25 +206,25 @@ struct Touch {
     alts: Option<(Vec<char>, usize)>,
 }
 
-/// What else a letter can be, held: the top row's digit first, then the
-/// accents; the Russian letters left off the rows. The shift makes them
-/// upper case on the way out.
+/// What else a letter can be, held: the top row's digit; the Russian
+/// letters left off the rows; the rest of the punctuation. Only what
+/// typing::key_of can send as a key press is here (the accents, the dashes
+/// and the printers' quotes are not: the compositor has no way to type
+/// them). Looked up by the lower case; the shift makes them upper case on
+/// the way out.
 fn alts_of(c: char, lang: Lang) -> Vec<char> {
+    let c = c.to_lowercase().next().unwrap_or(c);
     let s = match (lang, c) {
         (Lang::En, 'q') => "1",
         (Lang::En, 'w') => "2",
-        (Lang::En, 'e') => "3èéêë",
+        (Lang::En, 'e') => "3",
         (Lang::En, 'r') => "4",
         (Lang::En, 't') => "5",
-        (Lang::En, 'y') => "6ýÿ",
-        (Lang::En, 'u') => "7ùúûü",
-        (Lang::En, 'i') => "8ìíîï",
-        (Lang::En, 'o') => "9òóôöõø",
+        (Lang::En, 'y') => "6",
+        (Lang::En, 'u') => "7",
+        (Lang::En, 'i') => "8",
+        (Lang::En, 'o') => "9",
         (Lang::En, 'p') => "0",
-        (Lang::En, 'a') => "àáâäåæ",
-        (Lang::En, 's') => "ß",
-        (Lang::En, 'c') => "ç",
-        (Lang::En, 'n') => "ñ",
         (Lang::Ru, 'й') => "1",
         (Lang::Ru, 'ц') => "2",
         (Lang::Ru, 'у') => "3",
@@ -229,10 +236,9 @@ fn alts_of(c: char, lang: Lang) -> Vec<char> {
         (Lang::Ru, 'щ') => "9",
         (Lang::Ru, 'з') => "0",
         (Lang::Ru, 'ь') => "ъ",
-        (_, '.') => "…!?",
+        (_, '.') => "!?",
         (_, ',') => ";:",
-        (_, '-') => "–—",
-        (_, '\'') => "\"«»",
+        (_, '\'') => "\"",
         _ => "",
     };
     s.chars().collect()
@@ -278,7 +284,9 @@ pub struct Keyboard {
     field: String,
     status: String,
     status_at: u64,
-    touch: Option<Touch>,
+    /// The fingers down on it, one a slot: the split deck keyboard is for
+    /// two thumbs, the second down before the first is up.
+    touches: Vec<Touch>,
     placed: Vec<Placed>,
     recording: Option<crate::voice::Recording>,
     results: Receiver<Result<String, String>>,
@@ -319,7 +327,7 @@ impl Keyboard {
             field: String::new(),
             status: String::new(),
             status_at: 0,
-            touch: None,
+            touches: Vec::new(),
             placed: Vec::new(),
             recording: None,
             results,
@@ -359,9 +367,15 @@ impl Keyboard {
     }
 
     fn rows(&self) -> Vec<Vec<Slot>> {
-        let up = |s: &str| -> String { if self.shift { s.to_uppercase() } else { s.to_owned() } };
+        // Shifted, a letter's key stays its lower-case self (the
+        // alternatives are looked up by it, `up` makes the upper case, and
+        // the keys stay the same under a thumb when the other toggles the
+        // shift) and only its name is upper.
+        let keyed = |row: &str| -> Vec<Slot> {
+            row.chars().map(|c| slot(Key::Char(c), &if self.shift { c.to_uppercase().collect::<String>() } else { c.to_string() }, 1.0)).collect()
+        };
         let letters = |rows: &[&str; 3], ends: f64| -> Vec<Vec<Slot>> {
-            let mut r: Vec<Vec<Slot>> = rows.iter().map(|row| chars(&up(row))).collect();
+            let mut r: Vec<Vec<Slot>> = rows.iter().map(|row| keyed(row)).collect();
             r[2].insert(0, slot(Key::Shift, "shift", ends));
             r[2].push(slot(Key::Delete, "delete", ends));
             r
@@ -461,6 +475,23 @@ impl Keyboard {
                 x += kw + GAP;
             }
         }
+        // A finger down stays on its key where the key is the same in the
+        // new rows (the shift toggled under the other thumb, the frame
+        // turned), and is let go where the rows changed under it (the
+        // layer, the language, the languages): its index means nothing in
+        // the new rows. Let go of the microphone, the recording is dropped.
+        let same = |t: &Touch| t.on.is_none_or(|i| i == CLEAR || (i < placed.len() && self.placed.get(i).map(|p| p.key) == Some(placed[i].key)));
+        let mut mic_gone = false;
+        self.touches.retain(|t| {
+            let keep = same(t);
+            mic_gone |= !keep && t.mic;
+            keep
+        });
+        if mic_gone {
+            if let Some(r) = self.recording.take() {
+                let _ = r.stop();
+            }
+        }
         self.placed = placed;
     }
 
@@ -495,9 +526,16 @@ impl Keyboard {
                 }
             }
             None => {
-                self.touch = None;
+                self.touches.clear();
                 if let Some(r) = self.recording.take() {
                     let _ = r.stop();
+                }
+                // The modifiers stuck for the next key are not kept for
+                // the next time it is up.
+                if self.ctrl || self.alt {
+                    self.ctrl = false;
+                    self.alt = false;
+                    self.lay();
                 }
                 if self.up {
                     self.up = false;
@@ -602,31 +640,42 @@ impl Keyboard {
     pub fn down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, _time_us: u64) -> bool {
         let Some(panel) = self.panel.filter(|_| self.up && self.rise > 0.9) else { return false };
         let rect = Self::rect(panel);
-        if !rect.contains(pos) || self.touch.is_some() {
+        if !rect.contains(pos) {
             return false;
+        }
+        // The slot down already (its lift lost): the new finger takes it.
+        if let Some(old) = self.touches.iter().position(|t| t.slot == slot) {
+            if self.touches.remove(old).mic {
+                if let Some(r) = self.recording.take() {
+                    let _ = r.stop();
+                }
+            }
         }
         let local = pos - rect.loc;
         let on = self.placed.iter().position(|p| p.rect.contains(local)).or_else(|| {
             let f = Self::field_rect();
             (!self.field.is_empty() && f.contains(local) && local.x > f.loc.x + f.size.w - 80.0).then_some(CLEAR)
         });
-        if on.is_some_and(|i| i != CLEAR && self.placed[i].key == Key::Mic) && self.recording.is_none() {
+        let key = on.and_then(|i| self.placed.get(i)).map(|p| p.key);
+        let mut mic = false;
+        if key == Some(Key::Mic) && self.recording.is_none() {
             match crate::voice::record(&crate::voice::config()) {
                 Ok(r) => {
                     self.recording = Some(r);
+                    mic = true;
                     self.say("listening");
                 }
                 Err(e) => self.say(&e),
             }
         }
-        if let Some(i) = on.filter(|&i| i != CLEAR) {
-            crate::haptic::tick(match self.placed[i].key {
+        if let Some(key) = key {
+            crate::haptic::tick(match key {
                 Key::Enter | Key::Layer(_) | Key::Lang | Key::Shift | Key::Ctrl | Key::Alt => crate::haptic::Tick::Firm,
                 _ => crate::haptic::Tick::Light,
             });
         }
         let now = hybris_hwc::now_ns();
-        self.touch = Some(Touch { slot, on, start: pos, moved: false, at: now, next: now + REPEAT_AFTER_NS, fired: false, cursor: None, alts: None });
+        self.touches.push(Touch { slot, on, mic, start: pos, moved: false, at: now, next: now + REPEAT_AFTER_NS, fired: false, cursor: None, alts: None });
         true
     }
 
@@ -636,35 +685,38 @@ impl Keyboard {
         std::mem::take(&mut self.queue)
     }
 
-    /// The finger still down, time passing: a held backspace repeats, a
-    /// held letter opens its row (`asks` carries the keys out).
+    /// The fingers still down, time passing: a held backspace repeats, a
+    /// held letter opens its row (`asks` carries the keys out), each for
+    /// the finger that holds it.
     pub fn hold(&mut self, now: u64) {
         let terminal = self.terminal;
         let lang = self.lang;
-        let Some(t) = self.touch.as_mut() else { return };
-        let Some(i) = t.on.filter(|&i| i != CLEAR && !t.moved) else { return };
-        match self.placed[i].key {
-            Key::Delete => {
-                while now >= t.next {
-                    t.fired = true;
-                    if now.saturating_sub(t.at) >= HOLD_WORD_NS {
-                        self.queue.push(Ask::Key(if terminal { typing::CTRL_W } else { typing::CTRL_BACKSPACE }));
-                        crate::haptic::tick(crate::haptic::Tick::Light);
-                        t.next += WORD_NS;
-                    } else {
-                        self.queue.push(Ask::Key(typing::BACKSPACE_KEY));
-                        t.next += REPEAT_NS;
+        for t in self.touches.iter_mut() {
+            let Some(i) = t.on.filter(|&i| i != CLEAR && !t.moved) else { continue };
+            let Some(key) = self.placed.get(i).map(|p| p.key) else { continue };
+            match key {
+                Key::Delete => {
+                    while now >= t.next {
+                        t.fired = true;
+                        if now.saturating_sub(t.at) >= HOLD_WORD_NS {
+                            self.queue.push(Ask::Key(if terminal { typing::CTRL_W } else { typing::CTRL_BACKSPACE }));
+                            crate::haptic::tick(crate::haptic::Tick::Light);
+                            t.next += WORD_NS;
+                        } else {
+                            self.queue.push(Ask::Key(typing::BACKSPACE_KEY));
+                            t.next += REPEAT_NS;
+                        }
                     }
                 }
-            }
-            Key::Char(c) if t.alts.is_none() && now.saturating_sub(t.at) >= HOLD_ALTS_NS => {
-                let alts = alts_of(c, lang);
-                if !alts.is_empty() {
-                    t.alts = Some((alts, 0));
-                    crate::haptic::tick(crate::haptic::Tick::Firm);
+                Key::Char(c) if t.alts.is_none() && now.saturating_sub(t.at) >= HOLD_ALTS_NS => {
+                    let alts = alts_of(c, lang);
+                    if !alts.is_empty() {
+                        t.alts = Some((alts, 0));
+                        crate::haptic::tick(crate::haptic::Tick::Firm);
+                    }
                 }
+                _ => {}
             }
-            _ => {}
         }
     }
 
@@ -678,18 +730,19 @@ impl Keyboard {
     }
 
     pub fn holds(&self, slot: TouchSlot) -> bool {
-        self.touch.as_ref().is_some_and(|t| t.slot == slot)
+        self.touches.iter().any(|t| t.slot == slot)
     }
 
     pub fn motion(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, _time_us: u64) {
-        let Some(t) = self.touch.as_mut().filter(|t| t.slot == slot) else { return };
-        if t.on.is_some_and(|i| i != CLEAR && self.placed[i].key == Key::Mic) {
+        let Some(t) = self.touches.iter_mut().find(|t| t.slot == slot) else { return };
+        let key = t.on.and_then(|i| self.placed.get(i)).map(|p| p.key);
+        if key == Some(Key::Mic) {
             return;
         }
         let (dx, dy) = (pos.x - t.start.x, pos.y - t.start.y);
         // The row of alternatives open: the finger slides along it.
-        if let (Some(i), Some((alts, picked))) = (t.on, t.alts.as_mut()) {
-            let (x, cw) = Self::alts_row(&self.placed[i], alts.len());
+        if let (Some(p), Some((alts, picked))) = (t.on.and_then(|i| self.placed.get(i)), t.alts.as_mut()) {
+            let (x, cw) = Self::alts_row(p, alts.len());
             let local_x = pos.x - self.panel.map(|p| Self::rect(p).loc.x).unwrap_or(0.0);
             let now = (((local_x - x) / cw).floor().max(0.0) as usize).min(alts.len() - 1);
             if now != *picked {
@@ -699,7 +752,7 @@ impl Keyboard {
             return;
         }
         // Along the space bar: the cursor walks.
-        if t.on.is_some_and(|i| i != CLEAR && self.placed[i].key == Key::Space) && (t.cursor.is_some() || dx.abs() > MOVE) {
+        if key == Some(Key::Space) && (t.cursor.is_some() || dx.abs() > MOVE) {
             let steps = (dx / CURSOR_STEP).trunc() as i32;
             let sent = t.cursor.get_or_insert(0);
             while *sent < steps {
@@ -722,14 +775,20 @@ impl Keyboard {
 
     /// Let go: the key under the finger does its thing.
     pub fn up(&mut self, slot: TouchSlot) -> Option<Ask> {
-        let t = self.touch.take_if(|t| t.slot == slot)?;
+        let at = self.touches.iter().position(|t| t.slot == slot)?;
+        let t = self.touches.remove(at);
         let i = t.on?;
         if i == CLEAR {
             self.field.clear();
             return None;
         }
-        let key = self.placed[i].key;
+        // The rows laid again under the finger (lay): nothing.
+        let key = self.placed.get(i)?.key;
         if key == Key::Mic {
+            // Another finger's recording is not this one's to send.
+            if !t.mic {
+                return None;
+            }
             let r = self.recording.take()?;
             let secs = r.seconds();
             let pcm = r.stop();
@@ -821,9 +880,15 @@ impl Keyboard {
         ask
     }
 
+    /// The touches taken away (the turn's synthetic cancel, libinput's):
+    /// they do nothing - no key, no shift or layer or language toggled,
+    /// the field kept; a recording under way is dropped, not sent to be
+    /// heard.
     pub fn cancel(&mut self) {
-        if let Some(slot) = self.touch.as_ref().map(|t| t.slot) {
-            let _ = self.up(slot);
+        self.touches.clear();
+        if let Some(r) = self.recording.take() {
+            let _ = r.stop();
+            self.status.clear();
         }
     }
 
@@ -867,7 +932,7 @@ impl Keyboard {
                 self.panel = None;
             }
         }
-        !still || self.recording.is_some() || self.touch.as_ref().is_some_and(|t| t.on.is_some())
+        !still || self.recording.is_some() || self.touches.iter().any(|t| t.on.is_some())
     }
 
     // ---- drawing ----------------------------------------------------------------
@@ -939,33 +1004,34 @@ impl Keyboard {
                 out.push(ShellElement::Text(e));
             }
         };
-        // The first element is the topmost: the key under the finger big
+        // The first element is the topmost: the key under each finger big
         // above it, the field's words, each key's name over its slab (lit
-        // for Enter and what is on or stuck; brighter under the finger),
+        // for Enter and what is on or stuck; brighter under a finger),
         // the glass last.
-        let pressed_i = self.touch.as_ref().and_then(|t| t.on).filter(|&i| i != CLEAR);
-        let alts = self.touch.as_ref().and_then(|t| t.alts.as_ref());
-        if let (Some(p), Some((alts, picked))) = (pressed_i.map(|i| &self.placed[i]), alts) {
-            let (x, cw) = Self::alts_row(p, alts.len());
-            let w = cw * alts.len() as f64;
-            let py = p.rect.loc.y - POP_ABOVE - POP_H;
-            for (j, c) in alts.iter().enumerate() {
-                let c = if self.shift { c.to_uppercase().next().unwrap_or(*c) } else { *c };
-                if let Some(l) = self.label(&c.to_string(), 28) {
-                    put(&mut out, renderer, &l.buffer, x + cw * j as f64 + (cw - l.extent.w as f64) / 2.0, py + (POP_H - l.extent.h as f64) / 2.0, 1.0);
+        for t in &self.touches {
+            let Some(p) = t.on.and_then(|i| self.placed.get(i)) else { continue };
+            if let Some((alts, picked)) = t.alts.as_ref() {
+                let (x, cw) = Self::alts_row(p, alts.len());
+                let w = cw * alts.len() as f64;
+                let py = p.rect.loc.y - POP_ABOVE - POP_H;
+                for (j, c) in alts.iter().enumerate() {
+                    let c = if self.shift { c.to_uppercase().next().unwrap_or(*c) } else { *c };
+                    if let Some(l) = self.label(&c.to_string(), 28) {
+                        put(&mut out, renderer, &l.buffer, x + cw * j as f64 + (cw - l.extent.w as f64) / 2.0, py + (POP_H - l.extent.h as f64) / 2.0, 1.0);
+                    }
                 }
+                put(&mut out, renderer, &self.pick_slab(cw), x + cw * *picked as f64 + 3.0, py + 4.0, 1.0);
+                put(&mut out, renderer, &self.pop_slab(w), x, py, 1.0);
+            } else if matches!(p.key, Key::Char(_) | Key::Text(_)) {
+                let w = p.rect.size.w + POP_WIDER;
+                let px = (p.rect.loc.x - POP_WIDER / 2.0).clamp(SIDE / 2.0, rect.size.w - w - SIDE / 2.0);
+                let py = p.rect.loc.y - POP_ABOVE - POP_H;
+                let label = if let Key::Char(c) = p.key { if self.shift { c.to_uppercase().collect() } else { c.to_string() } } else { p.label.clone() };
+                if let Some(l) = self.label(&label, 32) {
+                    put(&mut out, renderer, &l.buffer, px + (w - l.extent.w as f64) / 2.0, py + (POP_H - l.extent.h as f64) / 2.0, 1.0);
+                }
+                put(&mut out, renderer, &self.pop_slab(w), px, py, 1.0);
             }
-            put(&mut out, renderer, &self.pick_slab(cw), x + cw * *picked as f64 + 3.0, py + 4.0, 1.0);
-            put(&mut out, renderer, &self.pop_slab(w), x, py, 1.0);
-        } else if let Some(p) = pressed_i.map(|i| &self.placed[i]).filter(|p| matches!(p.key, Key::Char(_) | Key::Text(_))) {
-            let w = p.rect.size.w + POP_WIDER;
-            let px = (p.rect.loc.x - POP_WIDER / 2.0).clamp(SIDE / 2.0, rect.size.w - w - SIDE / 2.0);
-            let py = p.rect.loc.y - POP_ABOVE - POP_H;
-            let label = if let Key::Char(c) = p.key { if self.shift { c.to_uppercase().collect() } else { c.to_string() } } else { p.label.clone() };
-            if let Some(l) = self.label(&label, 32) {
-                put(&mut out, renderer, &l.buffer, px + (w - l.extent.w as f64) / 2.0, py + (POP_H - l.extent.h as f64) / 2.0, 1.0);
-            }
-            put(&mut out, renderer, &self.pop_slab(w), px, py, 1.0);
         }
         let f = Self::field_rect();
         let field_text = if !self.field.is_empty() {
@@ -989,7 +1055,7 @@ impl Keyboard {
         }
         put(&mut out, renderer, &self.field_bg, f.loc.x, f.loc.y, 1.0);
         for (i, p) in self.placed.iter().enumerate() {
-            let pressed = pressed_i == Some(i);
+            let pressed = self.touches.iter().any(|t| t.on == Some(i));
             let size = if p.label.chars().count() == 1 { 24 } else { 16 };
             if let Some(l) = self.label(&p.label, size) {
                 put(&mut out, renderer, &l.buffer, p.rect.loc.x + (p.rect.size.w - l.extent.w as f64) / 2.0, p.rect.loc.y + (p.rect.size.h - l.extent.h as f64) / 2.0, 1.0);
@@ -1003,5 +1069,42 @@ impl Keyboard {
             out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), phys, CommitCounter::default(), GLASS, Kind::Unspecified)));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every character the rows and the rows of alternatives offer, in
+    /// both languages and in the upper case the shift makes, is one
+    /// typing.rs can send as a key press: the compositor types by key
+    /// presses alone, and a key without one would tick and type nothing.
+    #[test]
+    fn every_key_and_alternative_has_a_key() {
+        let typeable = |c: char| typing::key_of(c).is_some() && c.to_uppercase().all(|u| typing::key_of(u).is_some());
+        let rows = [(Lang::En, &EN), (Lang::Ru, &RU), (Lang::En, &SIGNS_0), (Lang::En, &SIGNS_1), (Lang::Ru, &SIGNS_0), (Lang::Ru, &SIGNS_1)];
+        for (lang, rows) in rows {
+            for c in rows.iter().flat_map(|r| r.chars()) {
+                assert!(typeable(c), "{c:?} on the rows has no key");
+                for a in alts_of(c, lang) {
+                    assert!(typeable(a), "{a:?}, an alternative of {c:?}, has no key");
+                }
+            }
+        }
+        // The bottom rows' own characters (rows()).
+        for c in ".,@-yn/".chars() {
+            assert!(typeable(c), "{c:?} on the bottom row has no key");
+            for a in alts_of(c, Lang::En).into_iter().chain(alts_of(c, Lang::Ru)) {
+                assert!(typeable(a), "{a:?}, an alternative of {c:?}, has no key");
+            }
+        }
+    }
+
+    #[test]
+    fn alternatives_are_found_by_the_lower_case() {
+        assert_eq!(alts_of('E', Lang::En), alts_of('e', Lang::En));
+        assert_eq!(alts_of('Е', Lang::Ru), vec!['5', 'ё']);
+        assert!(alts_of('e', Lang::En).contains(&'3'));
     }
 }

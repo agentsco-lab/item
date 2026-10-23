@@ -144,16 +144,17 @@ async fn is_keyring(conn: &zbus::Connection, sender: &str) -> bool {
 
 #[zbus::interface(name = "org.gnome.keyring.internal.Prompter")]
 impl Prompter {
-    async fn begin_prompting(&self, #[zbus(header)] header: zbus::message::Header<'_>, #[zbus(connection)] conn: &zbus::Connection, callback: OwnedObjectPath) {
-        let Some(sender) = header.sender().map(|s| s.to_string()) else { return };
+    async fn begin_prompting(&self, #[zbus(header)] header: zbus::message::Header<'_>, #[zbus(connection)] conn: &zbus::Connection, callback: OwnedObjectPath) -> zbus::fdo::Result<()> {
+        let Some(sender) = header.sender().map(|s| s.to_string()) else { return Err(zbus::fdo::Error::AccessDenied("no sender".into())) };
         if !is_keyring(conn, &sender).await {
             tracing::warn!("keyring: a prompt asked by {sender}, not the keyring: refused");
-            return;
+            return Err(zbus::fdo::Error::AccessDenied("prompts are the keyring's".into()));
         }
         let exchange = Exchange::new();
         let first = exchange.send(None);
         self.shared.lock().unwrap().prompts.push(Prompt { sender: sender.clone(), callback: callback.clone(), exchange, kind: None, tried_pin: false });
         let _ = self.calls.send(Call::Ready { sender, callback, reply: "", exchange: first });
+        Ok(())
     }
 
     fn perform_prompt(

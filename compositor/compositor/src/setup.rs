@@ -1,4 +1,4 @@
-//! The first setup, once (docs/LOCK-AND-SETUP.md): welcome, the PIN, a
+//! The first setup, once: welcome, the PIN (the face taken as it is typed), a
 //! finger, all set. The left panel says what and why, the right one is where
 //! you act.
 //!
@@ -177,7 +177,15 @@ fn set_pin(old: &str, new: &str) -> Result<(), String> {
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
     }
-    change_keyring(old, new).map_err(|e| format!("the keyring: {e}"))
+    // The password is set: the step is done whatever the keyring says. The
+    // login keyring takes the new PIN with the old one, or with none (the
+    // port's sfduo-keyring-open makes it without a password on a fresh
+    // phone); refusing both, it keeps what it had and is said so - the
+    // prompter (keyring.rs) answers its prompts with the PIN that unlocks.
+    if let Err(e) = change_keyring(old, new).or_else(|_| change_keyring("", new)) {
+        tracing::warn!("setup: the PIN is set; the keyring kept its own ({e})");
+    }
+    Ok(())
 }
 
 /// The circle: where it is and what it looks like (orb.frag's uniforms),

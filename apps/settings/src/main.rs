@@ -43,14 +43,14 @@ struct Section {
 }
 
 const SECTIONS: &[Section] = &[
-    Section { key: "wifi", title: "Wi-Fi", icon: "network-wireless-symbolic", make: || ui::coming("Networks, passwords, hidden ones; forget one.", 161) },
-    Section { key: "bluetooth", title: "Bluetooth", icon: "bluetooth-symbolic", make: || ui::coming("Pair, connect, forget.", 161) },
-    Section { key: "mobile", title: "Mobile network", icon: "network-cellular-symbolic", make: || ui::coming("Mobile data, roaming, the network's type.", 161) },
-    Section { key: "display", title: "Display", icon: "video-display-symbolic", make: || ui::coming("Brightness, night light, the screen's timeout.", 162) },
-    Section { key: "sound", title: "Sound", icon: "audio-speakers-symbolic", make: || ui::coming("Outputs and volumes.", 162) },
+    Section { key: "wifi", title: "Wi-Fi", icon: "network-wireless-symbolic", make: || ui::coming("Not made yet. Wi-Fi is switched from the left shade, and a password is asked when a network wants one.", 0) },
+    Section { key: "bluetooth", title: "Bluetooth", icon: "bluetooth-symbolic", make: || ui::coming("Not made yet. Bluetooth is switched from the left shade.", 0) },
+    Section { key: "mobile", title: "Mobile network", icon: "network-cellular-symbolic", make: || ui::coming("Not made yet. Mobile data is switched from the left shade.", 0) },
+    Section { key: "display", title: "Display", icon: "video-display-symbolic", make: || ui::coming("Not made yet. Brightness and night light are in the left shade.", 0) },
+    Section { key: "sound", title: "Sound", icon: "audio-speakers-symbolic", make: || ui::coming("Not made yet. The volume is in the left shade and beside the keys.", 0) },
     Section { key: "keyboard", title: "Keyboard", icon: "input-keyboard-symbolic", make: keyboard::page },
     Section { key: "online", title: "Online", icon: "network-transmit-receive-symbolic", make: online::page },
-    Section { key: "lock", title: "Lock", icon: "system-lock-screen-symbolic", make: || ui::coming("The PIN, fingers, CV ID.", 163) },
+    Section { key: "lock", title: "Lock", icon: "system-lock-screen-symbolic", make: || ui::coming("Not made yet. The PIN, a finger and the face are set in the first setup.", 0) },
     Section { key: "battery", title: "Battery", icon: "battery-good-symbolic", make: battery::page },
     Section { key: "time", title: "Date & time", icon: "preferences-system-time-symbolic", make: datetime::page },
     Section { key: "about", title: "About", icon: "help-about-symbolic", make: about::page },
@@ -85,7 +85,7 @@ fn window(app: &adw::Application) -> adw::ApplicationWindow {
         listing.append(&r);
     }
     let more = gtk::Label::builder()
-        .label("More in item/grid, on your computer: the agent and its key, wallpapers, the look, updates and backups.")
+        .label("More in item/grid, on your computer: the agent and its keys, your own wallpapers, the look, updates and backups.")
         .wrap(true)
         .xalign(0.0)
         .css_classes(["dim-label", "caption"])

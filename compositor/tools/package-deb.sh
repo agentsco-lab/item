@@ -61,6 +61,8 @@ install -m755 session/item-agent "$S/usr/bin/item-agent"
 install -m755 session/item-agents "$S/usr/bin/item-agents"
 install -m755 session/item-sync "$S/usr/bin/item-sync"
 install -Dm644 session/item-agent-home.service "$S/usr/lib/systemd/user/item-agent-home.service"
+install -d "$S/usr/lib/systemd/user/default.target.wants"
+ln -s ../item-agent-home.service "$S/usr/lib/systemd/user/default.target.wants/item-agent-home.service"
 # The dock's apps read into the page cache after boot (session/item-warm),
 # on by default for every user through the wants link.
 install -m755 session/item-warm "$S/usr/bin/item-warm"
@@ -90,6 +92,11 @@ aarch64-linux-gnu-strip -o "$S/usr/bin/item-settings" "$SETTINGS/target/$TARGET/
 install -Dm644 "$SETTINGS/lab.agentsco.item.Settings.desktop" "$S/usr/share/applications/lab.agentsco.item.Settings.desktop"
 install -Dm644 "$SETTINGS/lab.agentsco.item.Settings.svg" "$S/usr/share/icons/hicolor/scalable/apps/lab.agentsco.item.Settings.svg"
 install -m644 crates/cvid/models/*.onnx "$S/usr/share/item/cvid/"
+# Debian's copyright and changelog for the package (lintian: a copyright
+# file, a changelog): the repository's LICENSE as the copyright, the tag's
+# version as the changelog's one entry.
+install -Dm644 ../LICENSE "$S/usr/share/doc/item/copyright"
+printf 'item (%s) unstable; urgency=medium\n\n  * See https://github.com/agentsco-lab/item/releases for what is in it.\n\n -- Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>  %s\n' "$VERSION" "$(date -R)" | gzip -9n > "$S/usr/share/doc/item/changelog.gz"
 # The wallpapers with their credits (notes/drafts/30): the owner's set from
 # WALLS (NAME.jpg with NAME.txt beside it, Unsplash's "Photo by ..." lines),
 # each brought to 12 Mpx at most (walls.rs's SOURCE_PX: the picker's zoom
@@ -139,7 +146,7 @@ cat > "$S/etc/systemd/system/android-service@hwcomposer.service.d/20-phosh.conf"
 [Unit]
 Before=phosh.service item.service
 CONF
-echo /etc/systemd/system/android-service@hwcomposer.service.d/20-phosh.conf > "$S/DEBIAN/conffiles"
+printf '%s\n' /etc/systemd/system/android-service@hwcomposer.service.d/20-phosh.conf /etc/xdg/item-mimeapps.list /etc/chromium.d/item > "$S/DEBIAN/conffiles"
 
 INSTALLED=$(du -sk "$S" --exclude=DEBIAN | cut -f1)
 cat > "$S/DEBIAN/control" <<CONTROL
@@ -150,8 +157,9 @@ Maintainer: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Section: x11
 Priority: optional
 Installed-Size: $INSTALLED
-Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, chromium, adaptation-droidian-surfaceduo (>= 0.21)
-Recommends: phosh
+Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, phosh, chromium, gnome-console, tmux, sudo, python3, wget, curl, pulseaudio-utils, libglib2.0-bin, adaptation-droidian-surfaceduo (>= 0.21)
+Recommends: rsync, openssh-client, gnome-calls, chatty, gnome-weather
+Homepage: https://github.com/agentsco-lab/item
 Description: item, the two-panel shell for the Surface Duo
  item-compositor and its session in place of phosh on Droidian: a dock
  across both panels, windows by panel, the system screen, the pen's sheet,
@@ -204,6 +212,13 @@ set -e
 # Removed while it is the shell: phosh back first, so the phone has one.
 if [ "$1" = remove ] && [ -d /run/systemd/system ] && systemctl is-enabled -q item.service 2>/dev/null; then
     item-switch phosh || true
+fi
+# The user's own units of item's stopped (Chromium resident, the warm-up,
+# the agent's session), where a user manager runs.
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$2 != "root" {print $1}'); do
+        runuser -u "#$u" -- env XDG_RUNTIME_DIR=/run/user/$u systemctl --user stop item-chromium.service item-warm.service item-agent-home.service 2>/dev/null || true
+    done
 fi
 SCRIPT
 
