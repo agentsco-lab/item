@@ -2,10 +2,8 @@
 //! serve it: 0 while the screen is lit, 3 (off) while it is dark, and
 //! PropertiesChanged at each change.
 //!
-//! The port's daemons go by it: sfduo-posture stops reading the hinge while
-//! the screen is dark (it polled it 25 times a second all night under item,
-//! some 15 % of a core), sfduo-brightness puts the backlight back as it
-//! lights. Set from outside (gsd-power), the screen goes dark as asked; it
+//! GNOME's pieces go by it (gsd-power, the port's sfduo-brightness when it
+//! runs beside item). Set from outside, the screen goes dark as asked; it
 //! is not lit so (main.rs). Only this property: the rest is mutter's.
 
 use std::collections::HashMap;
@@ -52,10 +50,7 @@ pub struct Display {
 impl Display {
     pub fn new(wake: Ping) -> Display {
         let shared: Arc<Mutex<Shared>> = Default::default();
-        let conn = zbus::blocking::connection::Builder::session()
-            .and_then(|b| b.name(NAME))
-            .and_then(|b| b.serve_at(PATH, Config { shared: shared.clone(), wake }))
-            .and_then(|b| b.build());
+        let conn = crate::bus::session().and_then(|c| crate::bus::serve(&c, &[NAME], PATH, Config { shared: shared.clone(), wake }).map(|_| c));
         match &conn {
             Ok(_) => tracing::info!("display: {NAME}'s PowerSaveMode"),
             Err(e) => tracing::warn!("display: not on the bus: {e}"),

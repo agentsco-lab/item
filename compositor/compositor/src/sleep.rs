@@ -89,6 +89,7 @@ static WAKELOCK: std::sync::OnceLock<(Option<std::fs::File>, Option<std::fs::Fil
 /// (main.rs); then CAP_WAKE_ALARM is let go of as an ambient capability, so
 /// the session and its apps do not get it.
 pub fn prepare() {
+    // SAFETY: a plain syscall with no pointers; the fd it returns is checked below.
     let fd = unsafe { libc::timerfd_create(libc::CLOCK_REALTIME_ALARM, libc::TFD_CLOEXEC | libc::TFD_NONBLOCK) };
     if fd < 0 {
         tracing::warn!("sleep: no wake alarm: {}", std::io::Error::last_os_error());
@@ -96,6 +97,7 @@ pub fn prepare() {
     TIMER.store(fd, std::sync::atomic::Ordering::Relaxed);
     let open = |p: &str| std::fs::OpenOptions::new().write(true).open(p).map_err(|e| tracing::warn!("sleep: {p}: {e}")).ok();
     let _ = WAKELOCK.set((open("/sys/power/wake_lock"), open("/sys/power/wake_unlock")));
+    // SAFETY: prctl with integer arguments only, the five it asks for; nothing is pointed to.
     unsafe { libc::prctl(libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong, 0, 0, 0) };
 }
 
@@ -104,10 +106,12 @@ fn set_alarm(fd: i32, at: Option<i64>) {
     if fd < 0 {
         return;
     }
+    // SAFETY: an all-zero itimerspec is a valid one (a C struct of integers).
     let mut spec: libc::itimerspec = unsafe { std::mem::zeroed() };
     if let Some(at) = at {
         spec.it_value.tv_sec = at as libc::time_t;
     }
+    // SAFETY: `spec` is a live local, and a null old-value pointer is allowed by timerfd_settime.
     if unsafe { libc::timerfd_settime(fd, libc::TFD_TIMER_ABSTIME, &spec, std::ptr::null_mut()) } < 0 {
         tracing::warn!("sleep: wake alarm not set: {}", std::io::Error::last_os_error());
     }
@@ -139,7 +143,7 @@ impl Sleep {
         std::thread::Builder::new()
             .name("sleep".into())
             .spawn(move || {
-                let Ok(bus) = zbus::blocking::Connection::system() else { return };
+                let Ok(bus) = crate::bus::system() else { return };
                 let rule = zbus::MatchRule::builder()
                     .msg_type(zbus::message::Type::Signal)
                     .interface("org.freedesktop.login1.Manager")
@@ -199,7 +203,7 @@ impl Sleep {
             if let Some(at) = at {
                 tracing::info!("sleep: woken for an alarm in {} s", at - now);
             }
-            let Ok(bus) = zbus::blocking::Connection::system() else { return };
+            let Ok(bus) = crate::bus::system() else { return };
             if let Err(e) = bus.call_method(Some("org.freedesktop.login1"), "/org/freedesktop/login1", Some("org.freedesktop.login1.Manager"), "Suspend", &(false)) {
                 tracing::warn!("sleep: refused: {e}");
             }

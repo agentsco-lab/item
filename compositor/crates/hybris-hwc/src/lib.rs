@@ -34,6 +34,8 @@ const RTLD_NOW: c_int = 2;
 const RTLD_GLOBAL: c_int = 0x100;
 const CLOCK_MONOTONIC: c_int = 1;
 
+// SAFETY: the caller's part is that `name` is a library whose symbols it then uses as they
+// are declared; the CString is NUL-terminated and the handle is never dlclosed.
 unsafe fn open_lib(name: &str) -> *mut c_void {
     let c = CString::new(name).unwrap();
     let h = dlopen(c.as_ptr(), RTLD_NOW | RTLD_GLOBAL);
@@ -43,6 +45,8 @@ unsafe fn open_lib(name: &str) -> *mut c_void {
     h
 }
 
+// SAFETY: the caller guarantees that `T` is the symbol's real signature (a function pointer
+// type, which is why transmute_copy from a `*mut c_void` is sound); the name is NUL-terminated.
 unsafe fn sym<T: Copy>(lib: *mut c_void, name: &str) -> T {
     let c = CString::new(name).unwrap();
     let p = dlsym(lib, c.as_ptr());
@@ -149,6 +153,8 @@ struct Presenter {
     last_ns: u64,
     stats: Stats,
 }
+// SAFETY: the pointers are hwcomposer's and the window's handles, which belong to no thread;
+// the Presenter is only reached under PRESENTER's mutex.
 unsafe impl Send for Presenter {}
 
 #[derive(Default)]
@@ -206,6 +212,7 @@ fn fence_pending(fd: c_int) -> bool {
         return false;
     }
     let mut p = PollFd { fd, events: 1, revents: 0 };
+    // SAFETY: `p` is a live PollFd of the kernel's layout and `1` is its count; a zero timeout returns at once.
     unsafe { poll(&mut p, 1, 0) == 0 }
 }
 
@@ -366,6 +373,9 @@ extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void)
 
     // The present fence signals when this frame is on screen and the last
     // one is free again.
+    // SAFETY: `buffer` and `p.last` are ANativeWindowBuffers from the window's present callback,
+    // which begin with android_native_base_t (NativeBase); the kept one stays alive from its inc_ref
+    // to the dec_ref here, and the fences closed are ones the window handed over and are replaced.
     unsafe {
         if !p.last.is_null() {
             let old = (w.get_fence)(p.last);
@@ -451,6 +461,7 @@ pub fn take_stats() -> FrameStats {
 
 pub fn now_ns() -> u64 {
     let mut ts = Timespec { sec: 0, nsec: 0 };
+    // SAFETY: `ts` is a live local of the kernel's timespec layout (two i64 on aarch64).
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
     ts.sec as u64 * 1_000_000_000 + ts.nsec as u64
 }
@@ -459,6 +470,8 @@ impl Output {
     /// Opens hwc2, waits for display 0, powers it on, puts one client layer
     /// over it and makes a native window with `buffers` buffers.
     pub fn open(buffers: i32) -> Output {
+        // SAFETY: the two libraries stay loaded for the program's life, and every `sym` is given the
+        // signature hwc2_compatibility_layer.h and hwcomposer.h declare for that name.
         let (hwc, win) = unsafe {
             let hwc2 = open_lib("libhwc2.so.1");
             let hwcw = open_lib("libhybris-hwcomposerwindow.so.1");
@@ -518,6 +531,8 @@ impl Output {
         assert!(!display.is_null(), "no hwc display 0 after 5 s");
 
         (hwc.set_power_mode)(display, HWC2_POWER_MODE_ON);
+        // SAFETY: `display` is non-null (asserted above); the compat layer returns a pointer to an
+        // HWC2DisplayConfig it allocates and never frees, of the layout `DisplayConfig` repeats.
         let cfg = unsafe { &*(hwc.active_config)(display) };
         let (width, height, vsync_period_ns) = (cfg.width, cfg.height, cfg.vsync_period);
 

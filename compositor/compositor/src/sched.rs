@@ -22,6 +22,9 @@ pub fn favour_this_thread() {
         return;
     }
     let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
+    // SAFETY: an all-zero cpu_set_t is a valid empty set; CPU_SET only writes within it for
+    // cores below CPU_SETSIZE (at most 7 here); `set` and `param` are live locals of the
+    // sizes passed, and the calls act on this thread (pid 0).
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
         for c in BIG.filter(|&c| c < cores) {
@@ -43,6 +46,8 @@ pub fn favour_this_thread() {
 
 /// In a child before it execs: every core again.
 pub fn unpin() {
+    // SAFETY: as in favour_this_thread, every bit set lies within CPU_SETSIZE; only a syscall
+    // runs here, nothing that allocates or locks, as a pre_exec hook in the forked child asks.
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
         for c in 0..libc::CPU_SETSIZE as usize {

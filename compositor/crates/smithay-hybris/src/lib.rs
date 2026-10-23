@@ -36,16 +36,20 @@ impl EGLNativeDisplay for HybrisDisplay {
 /// The ANativeWindow of `hybris_hwc::Output`.
 pub struct HwcWindow(pub *mut c_void);
 
-// The window is libhybris' and lives as long as the program; EGL is its only
+// SAFETY: the window is libhybris' and lives as long as the program; EGL is its only
 // user after creation.
 unsafe impl Send for HwcWindow {}
 
+// SAFETY: `create` returns what eglCreateWindowSurface gave for this display and config, or
+// the EGL error, which is all the trait asks of it.
 unsafe impl EGLNativeSurface for HwcWindow {
     unsafe fn create(
         &self,
         display: &Arc<EGLDisplayHandle>,
         config_id: ffi::egl::types::EGLConfig,
     ) -> Result<*const c_void, EGLError> {
+        // SAFETY: `display` is a live EGL display, `config_id` one of its configs, and `self.0` the
+        // ANativeWindow that outlives the surface; the attribute list is null, which EGL allows.
         wrap_egl_call_ptr(|| unsafe {
             ffi::egl::CreateWindowSurface(***display, config_id, self.0 as _, std::ptr::null())
         })

@@ -87,10 +87,7 @@ impl Idle {
         let delay = Arc::new(AtomicU64::new(300_000_000_000));
         let watches: Arc<Mutex<Watches>> = Default::default();
         let monitor = Monitor { last_active_ns: last.clone(), watches: watches.clone() };
-        let conn = zbus::blocking::connection::Builder::session()
-            .and_then(|b| b.name("org.gnome.Mutter.IdleMonitor"))
-            .and_then(|b| b.serve_at(PATH, monitor))
-            .and_then(|b| b.build());
+        let conn = crate::bus::session().and_then(|c| crate::bus::serve(&c, &["org.gnome.Mutter.IdleMonitor"], PATH, monitor).map(|_| c));
         match &conn {
             Ok(_) => tracing::info!("idle: the idle monitor"),
             Err(e) => tracing::warn!("idle: no idle monitor: {e}"),
@@ -101,7 +98,7 @@ impl Idle {
         std::thread::Builder::new()
             .name("idle".into())
             .spawn(move || {
-                let session = zbus::blocking::Connection::session().ok();
+                let session = crate::bus::session().ok();
                 let mut was_idle_ms = 0u64;
                 let mut tick = 0u32;
                 loop {

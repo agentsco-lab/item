@@ -27,6 +27,15 @@ const CPU_POLICIES: [&str; 2] = ["/sys/devices/system/cpu/cpufreq/policy4", "/sy
 const CPU_SHARE: f64 = 0.75;
 /// How long the clocks stay up after the last touch or motion.
 const HOLD_NS: u64 = 1_500_000_000;
+/// How high the minimum clocks stand. (A launch level at the cores' very
+/// top while the curtain waited was tried on 2026-10-23 and changed
+/// nothing: Chromium's 3.5 s cold and 2 s warm are loading and serial
+/// start-up, not clocks; the idle share through a launch is 50-78 %.)
+#[derive(Clone, Copy, PartialEq)]
+enum Level {
+    Floor,
+    High,
+}
 
 /// One clock's minimum: its file, what it is raised to and what it was.
 struct Knob {
@@ -40,6 +49,7 @@ pub struct GpuBoost {
     knobs: Vec<Knob>,
     boosted: bool,
     until_ns: u64,
+    level: Level,
     /// Time spent boosted, for the report (ns).
     pub boosted_ns: u64,
     since_ns: u64,
@@ -72,12 +82,19 @@ impl GpuBoost {
         for k in &knobs {
             tracing::info!("boost: {} min {} -> {} while touched or moving, {:.1} s after", k.name, k.floor, k.high, HOLD_NS as f64 / 1e9);
         }
-        GpuBoost { knobs, boosted: false, until_ns: 0, boosted_ns: 0, since_ns: 0 }
+        GpuBoost { knobs, boosted: false, until_ns: 0, level: Level::Floor, boosted_ns: 0, since_ns: 0 }
     }
 
-    fn set(&mut self, high: bool) {
+    fn set(&mut self, level: Level) {
+        if level == self.level {
+            return;
+        }
+        self.level = level;
         for k in &mut self.knobs {
-            let value = if high { &k.high } else { &k.floor };
+            let value = match level {
+                Level::Floor => &k.floor,
+                Level::High => &k.high,
+            };
             if let Err(e) = k.file.write_all(value.as_bytes()) {
                 tracing::warn!("boost: {}: {e}", k.name);
             }
@@ -92,16 +109,16 @@ impl GpuBoost {
         }
         self.until_ns = now_ns + HOLD_NS;
         if !self.boosted {
-            self.set(true);
             self.boosted = true;
             self.since_ns = now_ns;
         }
+        self.set(Level::High);
     }
 
     /// Now and then: the clocks back down once the hold is over.
     pub fn tick(&mut self, now_ns: u64) {
         if self.boosted && now_ns >= self.until_ns {
-            self.set(false);
+            self.set(Level::Floor);
             self.boosted = false;
             self.boosted_ns += now_ns - self.since_ns;
         }
@@ -121,7 +138,7 @@ impl GpuBoost {
 impl Drop for GpuBoost {
     fn drop(&mut self) {
         if self.boosted {
-            self.set(false);
+            self.set(Level::Floor);
         }
     }
 }

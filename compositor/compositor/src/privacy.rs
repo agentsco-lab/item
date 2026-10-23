@@ -74,7 +74,7 @@ impl Privacy {
         std::thread::Builder::new()
             .name("privacy location".into())
             .spawn(move || {
-                let Ok(bus) = zbus::blocking::Connection::system() else { return };
+                let Ok(bus) = crate::bus::system() else { return };
                 loop {
                     // Asked only while it runs: asking would start it (D-Bus
                     // activation), and not running nothing uses it.

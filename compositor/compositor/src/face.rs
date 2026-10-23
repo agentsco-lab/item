@@ -61,7 +61,7 @@ impl Face {
         }
         let (tx, rx) = channel::<Ask>();
         let _ = std::thread::Builder::new().name("face".into()).spawn(move || {
-            let Ok(bus) = zbus::blocking::Connection::system() else {
+            let Ok(bus) = crate::bus::system() else {
                 tracing::warn!("cvid: no system bus");
                 return;
             };
@@ -99,7 +99,7 @@ impl Face {
         // Its answers, for this user.
         let (h, uid) = (heard.clone(), unsafe { libc::getuid() });
         let _ = std::thread::Builder::new().name("face-heard".into()).spawn(move || {
-            let Ok(bus) = zbus::blocking::Connection::system() else { return };
+            let Ok(bus) = crate::bus::system() else { return };
             let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(NAME).and_then(|b| b.path(PATH)).map(|b| b.build());
             let Ok(rule) = rule else { return };
             let Ok(signals) = zbus::blocking::MessageIterator::for_match_rule(rule, &bus, Some(16)) else { return };

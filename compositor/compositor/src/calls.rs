@@ -101,7 +101,7 @@ fn read(conn: &zbus::blocking::Connection) -> Vec<Call> {
 /// has.
 fn act(path: OwnedObjectPath, method: &'static str) {
     std::thread::spawn(move || {
-        if let Ok(conn) = zbus::blocking::Connection::session() {
+        if let Ok(conn) = crate::bus::session() {
             match conn.call_method(Some(BUS), path.as_str(), Some(CALL), method, &()) {
                 Ok(_) => tracing::info!("calls: {method}"),
                 Err(e) => tracing::warn!("calls: {method}: {e}"),
@@ -179,7 +179,7 @@ impl Calls {
         std::thread::Builder::new()
             .name("calls".into())
             .spawn(move || {
-                let Ok(conn) = zbus::blocking::Connection::session() else { return };
+                let Ok(conn) = crate::bus::session() else { return };
                 let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).path_namespace(ROOT).map(|b| b.build());
                 let Ok(rule) = rule else { return };
                 let Ok(signals) = zbus::blocking::MessageIterator::for_match_rule(rule, &conn, Some(64)) else {
@@ -196,7 +196,7 @@ impl Calls {
         std::thread::Builder::new()
             .name("calls-owner".into())
             .spawn(move || {
-                let Ok(conn) = zbus::blocking::Connection::session() else { return };
+                let Ok(conn) = crate::bus::session() else { return };
                 let Ok(proxy) = zbus::blocking::fdo::DBusProxy::new(&conn) else { return };
                 let Ok(changes) = proxy.receive_name_owner_changed_with_args(&[(0, BUS)]) else { return };
                 for _ in changes {
@@ -395,7 +395,7 @@ impl Calls {
             put(&mut out, bg, r.loc.x, r.loc.y, a);
         }
         // Over the lock screen, which it hides.
-        let (w, h) = layout::LAYOUT;
+        let (w, h) = layout::size();
         let rect = Rectangle::<i32, Physical>::from_size((w * SCALE, h * SCALE).into());
         out.push(ShellElement::Solid(SolidColorRenderElement::new(self.dim.clone(), rect, CommitCounter::from((k * 1000.0) as usize), [0.02, 0.02, 0.03, alpha], Kind::Unspecified)));
         out

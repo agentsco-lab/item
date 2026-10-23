@@ -83,7 +83,7 @@ const SAVER_PATH: &str = "/org/gnome/ScreenSaver";
 impl Logind {
     pub fn new(wake: Ping) -> Logind {
         let shared = Arc::new(Mutex::new(Shared::default()));
-        let system = zbus::blocking::Connection::system().map_err(|e| tracing::warn!("logind: no system bus: {e}")).ok();
+        let system = crate::bus::system().map_err(|e| tracing::warn!("logind: no system bus: {e}")).ok();
         // Our session: the one this process belongs to (item.service's PAM
         // session, or session-run.sh's).
         let session: Option<OwnedObjectPath> = system.as_ref().and_then(|c| {
@@ -127,10 +127,8 @@ impl Logind {
             }
         }
         let saver = Saver { shared: shared.clone(), wake };
-        let saver = zbus::blocking::connection::Builder::session()
-            .and_then(|b| b.name("org.gnome.ScreenSaver"))
-            .and_then(|b| b.serve_at(SAVER_PATH, saver))
-            .and_then(|b| b.build())
+        let saver = crate::bus::session()
+            .and_then(|c| crate::bus::serve(&c, &["org.gnome.ScreenSaver"], SAVER_PATH, saver).map(|_| c))
             .map_err(|e| tracing::warn!("logind: not the screen saver: {e}"))
             .ok();
         if saver.is_some() {

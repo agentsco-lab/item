@@ -92,7 +92,7 @@ impl Fingerprint {
         }
         // The daemon can hang (an enrolment left running): its answers
         // waited for 5 s at most, the compositor starting without it if so.
-        let Ok(system) = zbus::blocking::connection::Builder::system().map(|b| b.method_timeout(std::time::Duration::from_secs(5))).and_then(|b| b.build()) else { return none };
+        let Ok(system) = crate::bus::system() else { return none };
         let fingers = system
             .call_method(Some(NAME), PATH, Some(NAME), "GetAll", &())
             .and_then(|r| r.body().deserialize::<Vec<String>>())
@@ -287,7 +287,7 @@ impl Fingerprint {
 /// A buzz through feedbackd (its event names), on a thread of its own.
 pub fn buzz(event: &'static str) {
     std::thread::spawn(move || {
-        if let Ok(s) = zbus::blocking::Connection::session() {
+        if let Ok(s) = crate::bus::session() {
             let hints: std::collections::HashMap<&str, zbus::zvariant::Value> = Default::default();
             let _ = s.call_method(Some("org.sigxcpu.Feedback"), "/org/sigxcpu/Feedback", Some("org.sigxcpu.Feedback"), "TriggerFeedback", &("item-compositor", event, hints, -1i32));
         }
