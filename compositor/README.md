@@ -1,5 +1,9 @@
 # item-compositor
 
+> The compositor's own README from its first two days (2026-09-30 to
+> 10-01), kept as it was; the root README says what it is now. The
+> "Variables" section at the end is current.
+
 A Wayland compositor of our own for the Surface Duo 1, in Rust on
 [smithay](https://github.com/Smithay/smithay), item-shell's next base
 ([docs/COMPOSITOR.md](../docs/COMPOSITOR.md)). It was an experiment of its
@@ -22,7 +26,7 @@ Why, from a day of probes on the Lindroid chain
 It is an experiment beside the port (agentsco-lab/surfaceduo-droidian) and
 item, which keep running the phone day to day.
 
-## Where it stands (2026-09-30)
+## Where it stood (2026-09-30)
 
 | | | |
 |---|---|---|
@@ -141,9 +145,17 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
 
 ## Layout
 
-- `compositor/` - item-compositor: `layout` (the panels and the hinge),
-  `state` (the Wayland protocols), `input` (touch), `shade` (the shade), `dock` (the dock), `boost` (the GPU's clock), `curtain` (the launch curtain), `gesture` (putting windows away), `grid` (the app grid), `apps` (desktop files and icons), `clock` (the desktop clock), `back` (back from the edge), `quick` (the shades' contents), `notify` (notifications), `layers` (layer surfaces, the keyboard), `protocols` (the globals stevia needs), `lock` (locking, blanking, the keys), `pam` (the PIN), `sysscreen` (the system screen), `pensheet` (the pen's sheet), `pace` (when each client hears its frame callbacks), `text` (fonts and labels), `output` (hwcomposer,
-  EGL, the renderer)
+- `compositor/` - item-compositor. The modules say what they are in their
+  own headers; the main ones: `layout` (the panels, the hinge, the turn),
+  `state` (the Wayland protocols, launches, the warm dock), `input` (touch),
+  `output` (hwcomposer, EGL, the renderer, the turn through blur), `posture`
+  and `sensors` (how the phone is held), `kbd`, `typing`, `keys` (the
+  keyboard), `flow` (the row of covers), `ribbon` (the pages), `dock`,
+  `shade`, `quick`, `notify`, `grid`, `curtain`, `gesture`, `lock`, `pinpad`,
+  `pam`, `keyring`, `polkit`, `nm`, `secrets`, `face`, `camera`, `setup`,
+  `tour`, `sysscreen`, `sysfacts`, `pensheet`, `walls`, `picker`, `clock`,
+  `calls`, `sleep`, `idle`, `boost`, `bus`, `mirror`, `pace`, `text`,
+  `prefs`, `voice`
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
   layer, a native window presenting with fences
 - `crates/smithay-hybris` - smithay's native EGL traits for libhybris without GBM

@@ -1,5 +1,8 @@
 # item's own compositor
 
+> It did, as item 0.2 on 2026-10-10; what follows is the decision and the
+> first 23 steps as they were, with their measurements.
+
 **Decided 2026-10-01: item-shell's base becomes a compositor of its own**,
 `item-compositor` (Rust, smithay), drawing through Android's hwcomposer on
 the Surface Duo 1 with the shell inside it, in place of item on the port's
@@ -49,7 +52,7 @@ SwayFX, KWin, phoc 0.57. It was brought up on the Duo's 4.14 kernel
 Its freedom to pick any compositor is paid for in exactly what matters
 most here (duo-lindroid's `log/2026-09-30-choosing-a-base.md`).
 
-## Measured against item on phosh
+## Measured against item 0.1 on phosh
 
 The same phone, the same night, timed below both compositors: a uprobe on
 libhybris' `hwc2_compat_display_present`, the call both make to hand
@@ -73,7 +76,7 @@ frame. phoc presents twice to each tap: a frame of its own on the touch,
 then the one with the client's content; item-compositor presents once
 (`compositor/log/2026-10-01-step-22-canvas.md`).
 
-## What it has (2026-10-01)
+## What it had (2026-10-01, as it was)
 
 The dock in two halves with item's motion (contact, bump, the neck across
 the hinge), windows tiled to a panel and moved through the hinge, put away
@@ -85,7 +88,7 @@ screen with the PIN (PAM, as phosh), the volume keys and bar, the lid, the
 pen as a finger, the system screen, the pen's sheet, the GPU boost on touch,
 `wp_presentation`.
 
-## Before it replaces phosh
+## Before it replaced phosh (2026-10-01, as it was; all of it is done)
 
 - The polkit agent, and the prompts phosh gives today: Wi-Fi passwords
   (NetworkManager's secret agent), the keyring (gcr's system prompter).
@@ -99,8 +102,8 @@ pen as a finger, the system screen, the pen's sheet, the GPU boost on touch,
 - No vsync while at rest; launches in an app scope of their own (GTK is
   refused its portal now).
 - Installing as a session of its own beside phosh, with the way back: a
-  package, a greeter entry or a switch like `sfduo-shell`, and a fall back
+  package, a greeter entry or a switch like `sfduo-shell` (it is `item-switch`), and a fall back
   to phosh if it does not start.
 
-Each goes in as a step in `compositor/log/`, measured and tried by
+Each went in as a step in `compositor/log/` (in the history at item-v0.2.1), measured and tried by
 hand, as the first 23 were.

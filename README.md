@@ -20,9 +20,10 @@ usable while that groundwork settles.
 
 ## What it looks like
 
-A minute of it, both panels at 60 fps with the gap between them, filmed
-from the compositor's own frames: the first setup (the PIN, a finger), the
-tour, the shade, the system screen, the pen's sheet.
+A minute of it (filmed with 0.2.1, the book only), both panels at 60 fps
+with the gap between them, filmed from the compositor's own frames: the first
+setup (the PIN, a finger), the tour, the shade, the system screen, the pen's
+sheet.
 
 https://github.com/user-attachments/assets/3799c1b3-e2b0-46e7-925e-fc196ece50a8
 
@@ -44,10 +45,28 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
 - **The dock** in two halves, under the thumbs. Its pieces are drops of
   water: they follow a finger, slosh along as the phone folds like a book,
   cross the hinge to the free panel and join. An app launched from it opens
-  on the panel it was launched from; a window is put away with a swipe up
-  from the panel's bottom edge and called back with a tap.
-- **Windows by panel.** A window takes its whole panel, or both when carried
-  across the hinge. There is no status bar.
+  on the panel it was launched from; in the book a window is put away with a
+  swipe up from the panel's bottom edge and called back with a tap. The
+  dock's apps are kept warm: launched after boot and put away before a frame
+  shows them, so a tap brings a window that exists.
+- **Windows by panel.** In the book a window takes its whole panel, or both
+  when carried across the hinge; stood up, a window takes the upper panel and
+  is put away with a swipe up on its cover. There is no status bar.
+- **The keyboard**, item's own: English and Russian, signs, and a "vibe"
+  layer for the terminal (esc, tab, ctrl, the arrows, y/n) on which Claude
+  Code is driven with a thumb; a microphone key that types what is said,
+  through OpenRouter with a key of the owner's. The port's stevia stays as a
+  choice.
+- **Postures.** item reads the hinge, gravity and the gyroscope and knows how
+  the phone is held. Stood up, the frame turns through blur: the upper panel
+  is the screen, the lower one the deck - black, the keyboard split for two
+  thumbs, the open windows as a row of covers above it, the pen's sheet and
+  the system screen a swipe to either side. Locked while stood up, the lock
+  screen is still the book's.
+- **Chromium** is the browser, resident without a window and asked for one
+  from the dock. **The Agent entry** is Claude Code in a terminal, warm in
+  tmux, with the keyboard's vibe layer under it; `item-agents` and
+  `item-sync` carry sessions and folders between the computer and the phone.
 - **A shade per panel**, glass over the screen: a status line, brightness,
   volume, quick settings and the player on the left; the open windows and the
   notifications on the right. **The system screen** left of the left panel
@@ -60,20 +79,23 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
   panels lighting. The faces enrolled stay on the phone, in
   `/var/lib/item-face`, root's alone; the camera is open only while the lock
   screen is lit.
-- **The first setup** after a clean install: a welcome, a new PIN, a finger,
-  a face, then a tour.
+- **The first setup** after a clean install: a welcome, a new PIN (the face
+  taken as it is typed, for CV ID), a finger, then a tour.
 - **The phone's sleep** is item's: the lid darkens and lights the screen,
   asleep again 3 s after a wake that lit nothing, woken for alarms, an alarm
   or a call keeps the screen lit.
 - **item Settings**: one window across both panels, the sections on the left,
-  one page on the right, with the pages of GNOME Settings and Mobile Settings
-  that apply to this phone opened in place.
+  one page on the right: Keyboard, Voice, Online, Battery, Date & time, About.
 
-## Measured
+## Measured (2026-10-01, item 0.2 against item 0.1 on phosh)
 
 The same Duo 1, timed below both compositors with a uprobe on libhybris'
 `hwc2_compat_display_present` - the call both make to hand hwcomposer a
-frame (`compositor/log/2026-10-01-step-21-ab.md` and the two after it).
+frame (`compositor/log/2026-10-01-step-21-ab.md` and the two after it, in
+the history at item-v0.2.1). 0.3.0's own numbers are in its release notes:
+the compositor 712 -> 365 MB resident after the fonts and pictures were
+tamed, Chromium 0.56 s to its window from the dock, one missed frame a
+second typing on the deck.
 
 | | item 0.1 on phosh | item-compositor |
 |---|---|---|
@@ -92,10 +114,9 @@ of each frame (the chain spends 9-13 ms and 0.76 W on it at 60 fps), and
 
 Other numbers: a frame of the shell renders in 1-1.5 ms; the shade follows
 the finger 22-26 ms behind it where the same shade through GTK took about
-39; a settings page opens in a tenth of a second where it took over one
-([docs/SETTINGS.md](docs/SETTINGS.md)); CV ID takes about 135 ms a frame
-on the Duo; a phone shut, Wi-Fi radio on and mobile data off, loses about
-1.3 % an hour (0.16 W) with the port 0.22.0.
+39; CV ID takes about 135 ms a frame on the Duo; a phone shut, Wi-Fi radio
+on and mobile data off, lost about 1.3 % an hour (2026-10-09, the port
+0.21.4, item 0.2.1), and 1.14 % with Wi-Fi off on 0.3.0 (2026-10-23).
 
 ## How it is made
 
@@ -123,14 +144,20 @@ A Surface Duo 1 on Droidian 102 with the port 0.22.0 or later. item
 disables `phosh.service` and runs `item.service` and `item-face.service` in
 its place (`item-fallback.service` starts phosh if item does not come up);
 it sets the kernel's alarm before sleeping, holds a wakelock while the screen
-is lit, and keeps its state in `~/.config/item`. The faces enrolled are in
+is lit, and keeps its state in `~/.config/item` (`dock.json`, `env`, `warm`
+and what Settings writes: `keyboard`, `keyboard-langs`, `keyboard-auto`,
+`haptic`, `voice`, `online`). The faces enrolled are in
 `/var/lib/item-face`, root's alone, and never leave the phone. Nothing of
 Droidian's is removed; the port's posture, dock and brightness autostarts are
 kept out of item's session, `mtp-server` is masked, and Android's Wi-Fi
 diagnostics daemon is stopped after boot (`item-quiet.service`). Three user
-units come with it: `item-warm` (the dock's apps' files read into the page
-cache after boot), `item-chromium` (Chromium resident without a window) and
+units come with it: `item-warm` (Chromium's files read into the page cache
+after boot; `~/.config/item/warm` names more), `item-chromium` (Chromium
+resident without a window) and
 `item-agent-home` (the agent's tmux session, when Claude Code is installed).
+They are on by the package's own links, so `systemctl --user mask` is the
+way to turn one off; an upgrade's new units and masks take effect at the
+next boot.
 
 **Nothing leaves the phone by itself.** item has no telemetry and no
 account. The one network use of its own, the system screen's weather
@@ -179,12 +206,15 @@ sudo item-switch phosh
 
 - Every app and menu is provisional: item Settings' pages, the shades'
   contents, the system screen and the pen's sheet will be reworked once the
-  groundwork is done. Some of Settings' pages (networks and passwords among
-  them) open the system's page for now.
+  groundwork is done. Six of Settings' pages (Wi-Fi, Bluetooth, the mobile
+  network, Display, Sound, Lock) are not made yet and say so; Wi-Fi,
+  Bluetooth and mobile data are switched from the left shade, a network's
+  password is asked by the shell.
 - Nineteen wallpapers come in `/usr/share/item/walls`, photographs from
   Unsplash with their credits beside them (`NAME.txt`, "Photo by ..."); the
-  picker takes one's own pictures from `~/.local/share/item/walls` too. The
-  desktop before one is chosen is Aurora, drawn by the compositor.
+  picker, opened by a finger held on the desk, takes one's own pictures from
+  `~/.local/share/item/walls` too. The desktop before one is chosen is
+  Aurora, drawn by the compositor.
 - Before the setup has run, and with a picture that cannot be read, the
   screen is black.
 - Tried on one phone. Each step was measured and tried by hand; there is

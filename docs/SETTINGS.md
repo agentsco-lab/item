@@ -1,5 +1,8 @@
 # Settings
 
+> item-shell 0.1's Settings on phosh (sfduo-settings), superseded by item
+> Settings (`apps/settings/`) in 0.2; kept for its measurements.
+
 The device came with three settings programs: GNOME Settings (gnome-control-
 center 48), Mobile Settings (phosh-mobile-settings) and Droidian's
 mobile-settings service, which has no window. Neither of the two with a
