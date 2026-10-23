@@ -1,0 +1,16 @@
+# item-agent-home: the agent's home session started warm at the session's
+# start (item-agents warm: claude inside tmux, detached), so the Agent entry
+# attaches to a session that is already up and answers at once.
+[Unit]
+Description=The agent's home session, warm (Claude Code in tmux)
+ConditionPathExists=%h/.local/bin/claude
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/item-agents warm
+ExecStop=/usr/bin/tmux kill-session -t home
+
+[Install]
+WantedBy=default.target

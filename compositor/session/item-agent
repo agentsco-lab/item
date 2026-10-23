@@ -1,0 +1,24 @@
+#!/bin/sh
+# item-agent: Claude Code in a terminal on the panel it was asked for, and
+# the agent's deck beside it (the compositor sees the Agent entry launched
+# and brings the keyboard up under the terminal in its vibe layer: kbd.rs).
+# Without claude on the phone, the terminal says how to put it there.
+# claude as its installer leaves it (~/.local/bin, not always on the
+# session's PATH) or on the PATH.
+for c in "$HOME/.local/bin/claude" claude; do
+    if command -v "$c" >/dev/null 2>&1; then
+        claude=$c
+        break
+    fi
+done
+if [ -n "$claude" ]; then
+    # Inside tmux (item-agents run): the window may close, another machine
+    # may attach, the session lives on.
+    run="exec item-agents run $HOME"
+else
+    run='echo "claude is not here yet: curl -fsSL https://claude.ai/install.sh | bash"; echo; exec bash'
+fi
+if command -v foot >/dev/null 2>&1; then
+    exec foot -a item-agent sh -c "$run"
+fi
+exec kgx -- sh -c "$run"

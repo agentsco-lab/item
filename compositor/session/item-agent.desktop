@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Agent
+Comment=Claude Code in a terminal, the keyboard's vibe layer under it
+Exec=item-agent
+Icon=item-agent
+Terminal=false
+Categories=Development;Utility;
+StartupWMClass=org.gnome.Console

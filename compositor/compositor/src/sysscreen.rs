@@ -74,6 +74,8 @@ pub struct SystemScreen {
     /// Details open, and where its row is on the page (logical y).
     details: bool,
     details_row: (f64, f64),
+    /// The rows a tap opens (page y top and bottom, the command).
+    taps: Vec<(f64, f64, String)>,
 }
 
 impl SystemScreen {
@@ -89,13 +91,18 @@ impl SystemScreen {
         let weather: crate::sysfacts::Now = Default::default();
         let w = weather.clone();
         std::thread::Builder::new().name("system screen".into()).spawn(move || crate::sysfacts::worker(rx, page, w, wake)).expect("system screen thread");
-        SystemScreen { weather, p: 0.0, wanted: false, page: None, page_h: 0.0, fresh, jobs: tx, last_read_ns: 0, minute: -1, scroll: 0.0, touch: None, run: None, id: Id::new(), frost: None, details: false, details_row: (0.0, 0.0) }
+        SystemScreen { weather, p: 0.0, wanted: false, page: None, page_h: 0.0, fresh, jobs: tx, last_read_ns: 0, minute: -1, scroll: 0.0, touch: None, run: None, id: Id::new(), frost: None, details: false, details_row: (0.0, 0.0), taps: Vec::new() }
     }
 
     fn read(&mut self) {
         self.last_read_ns = hybris_hwc::now_ns();
         self.minute = { let t = local_time(); t.tm_hour * 60 + t.tm_min };
         let _ = self.jobs.send(Job::Read);
+    }
+
+    /// Read again at the next frame while out (the orientation changed).
+    pub fn stale(&mut self) {
+        self.last_read_ns = 0;
     }
 
     /// The screen lit or dark: the load is sampled only while it is lit.
@@ -132,12 +139,21 @@ impl SystemScreen {
     }
 
     /// Shown: the left panel is taken.
+    /// Its panel: the left one; turned (layout.rs), the lower - the deck.
+    fn panel_index() -> usize {
+        if layout::turned() { 1 } else { 0 }
+    }
+
+    fn panel() -> smithay::utils::Rectangle<i32, smithay::utils::Logical> {
+        layout::panels()[Self::panel_index()]
+    }
+
     pub fn out(&self) -> bool {
         self.p > 0.0
     }
 
     fn max_scroll(&self) -> f64 {
-        (self.page_h - layout::panels()[0].size.h as f64).max(0.0)
+        (self.page_h - Self::panel().size.h as f64).max(0.0)
     }
 
     fn scroll_at(&self, now: u64) -> f64 {
@@ -156,7 +172,7 @@ impl SystemScreen {
 
     /// A finger down on the page while it is shown.
     pub fn touch_down(&mut self, slot: TouchSlot, pos: Point<f64, Logical>, time_us: u64) -> bool {
-        if !self.out() || layout::panel_at(pos) != Some(0) {
+        if !self.out() || layout::panel_at(pos) != Some(Self::panel_index()) {
             return false;
         }
         let now = hybris_hwc::now_ns();
@@ -198,14 +214,18 @@ impl SystemScreen {
         self.frost = frost.map(|(rgba, w, h)| (MemoryRenderBuffer::from_slice(&rgba, Fourcc::Abgr8888, (w as i32, h as i32), 1, Transform::Normal, None), (w as i32, h as i32)));
     }
 
-    /// Let go: a scroll runs on; a tap on Details opens or shuts it.
-    pub fn touch_up(&mut self, slot: TouchSlot) {
-        let Some(t) = self.touch.take_if(|t| t.slot == slot) else { return };
+    /// Let go: a scroll runs on; a tap on Details opens or shuts it; a tap
+    /// on an agent's session asks for its command (state.rs opens it).
+    pub fn touch_up(&mut self, slot: TouchSlot) -> Option<String> {
+        let Some(t) = self.touch.take_if(|t| t.slot == slot) else { return None };
         if !t.scrolling {
-            let y = self.scroll_at(hybris_hwc::now_ns()) + t.start.y - layout::panels()[0].loc.y as f64;
+            let y = self.scroll_at(hybris_hwc::now_ns()) + t.start.y - Self::panel().loc.y as f64;
             if y >= self.details_row.0 && y < self.details_row.1 {
                 self.details = !self.details;
                 let _ = self.jobs.send(Job::Details(self.details));
+            }
+            if let Some((_, _, cmd)) = self.taps.iter().find(|(top, bottom, _)| y >= *top && y < *bottom) {
+                return Some(cmd.clone());
             }
         }
         if t.scrolling {
@@ -214,11 +234,12 @@ impl SystemScreen {
                 self.run = Some((t.velocity, hybris_hwc::now_ns(), self.scroll));
             }
         }
+        None
     }
 
     pub fn cancel(&mut self) {
         if let Some(slot) = self.touch.as_ref().map(|t| t.slot) {
-            self.touch_up(slot);
+            let _ = self.touch_up(slot);
         }
     }
 
@@ -244,8 +265,9 @@ impl SystemScreen {
         if !self.out() && !self.wanted {
             return false;
         }
-        let Some((rgba, w, h, row)) = self.fresh.lock().unwrap().take() else { return false };
+        let Some((rgba, w, h, row, taps)) = self.fresh.lock().unwrap().take() else { return false };
         self.details_row = (row.0 as f64, row.1 as f64);
+        self.taps = taps.into_iter().map(|(a, b, c)| (a as f64, b as f64, c)).collect();
         self.page = Some(MemoryRenderBuffer::from_slice(&rgba, Fourcc::Abgr8888, (w, h), SCALE, Transform::Normal, None));
         self.page_h = (h / SCALE) as f64;
         true
@@ -264,14 +286,16 @@ impl SystemScreen {
         if p <= 0.0 {
             return Vec::new();
         }
-        let panel = layout::panels()[0];
+        let panel = Self::panel();
         let mut out = Vec::new();
         // The page, scrolled: the panel's height of it.
         if let Some(page) = &self.page {
             let scroll = self.scroll_at(frame_ns);
             let h = (panel.size.h as f64).min(self.page_h);
             let src = Rectangle::<f64, Logical>::new((0.0, scroll).into(), (panel.size.w as f64, h).into());
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), page, None, Some(src), Some((panel.size.w, h as i32).into()), Kind::Unspecified) {
+            // At its panel (the lower one when the frame is turned).
+            let at = ((panel.loc.x * SCALE) as f64, (panel.loc.y * SCALE) as f64);
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, at, page, None, Some(src), Some((panel.size.w, h as i32).into()), Kind::Unspecified) {
                 out.push(ShellElement::Text(e));
             }
         }
@@ -281,7 +305,8 @@ impl SystemScreen {
         if let Some((frost, (fw, fh))) = &self.frost {
             let k = crate::walls::FROST_STEP as f64 / SCALE as f64;
             let src = Rectangle::<f64, Logical>::new((0.0, 0.0).into(), ((panel.size.w as f64 / k).min(*fw as f64), (panel.size.h as f64 / k).min(*fh as f64)).into());
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), frost, None, Some(src), Some(panel.size), Kind::Unspecified) {
+            let at = ((panel.loc.x * SCALE) as f64, (panel.loc.y * SCALE) as f64);
+            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, at, frost, None, Some(src), Some(panel.size), Kind::Unspecified) {
                 out.push(ShellElement::Text(e));
                 return out;
             }
@@ -308,6 +333,7 @@ pub fn part_of_day(hour: i32) -> &'static str {
 
 /// The user's first name, unless AccountsService only knows the login.
 pub fn first_name() -> Option<String> {
+    // SAFETY: getuid takes nothing and cannot fail.
     let uid = unsafe { libc::getuid() };
     let login = std::env::var("USER").unwrap_or_default();
     let real = run("busctl", &["--system", "get-property", "org.freedesktop.Accounts", &format!("/org/freedesktop/Accounts/User{uid}"), "org.freedesktop.Accounts.User", "RealName"]);

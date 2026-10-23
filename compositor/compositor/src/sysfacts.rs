@@ -17,6 +17,11 @@
 //!   from boot, so a ledger keeps the counts the day started with
 //!   (`~/.local/state/item/traffic`), brought up to date with the samples
 //!   and written once a minute.
+//! - **Agents**: Claude Code's sessions on this phone and on the other
+//!   devices (`item-agents devices`, session/item-agents: the devices in
+//!   ~/.config/item/devices asked over ssh): each session's folder, model,
+//!   what it does - working, waiting for you, done - its turns and tokens
+//!   from its transcript.
 //! - **Storage**: free on the system image and /userdata, red under 1 GB.
 //! - **Update**: only when a newer port is out (GitHub, asked at most once
 //!   a day while the page is open, the answer kept in
@@ -59,9 +64,10 @@ pub enum Job {
     Details(bool),
 }
 
-/// A drawn page: premultiplied RGBA, its size in physical px, and where
-/// Details' row is (logical y, top and bottom).
-pub type Page = (Vec<u8>, i32, i32, (f32, f32));
+/// A drawn page: premultiplied RGBA, its size in physical px, where
+/// Details' row is (logical y, top and bottom), and the rows a tap opens
+/// (top, bottom, the command: an agent's session, item-agents open).
+pub type Page = (Vec<u8>, i32, i32, (f32, f32), Vec<(f32, f32, String)>);
 
 const INK: [f32; 4] = [0.95, 0.95, 0.96, 1.0];
 const DIM: [f32; 4] = [0.66, 0.68, 0.72, 1.0];
@@ -272,6 +278,108 @@ struct Facts {
     system: String,
     weather: Option<Weather>,
     weather_note: String,
+    agents: Vec<Device>,
+}
+
+/// The agents: Claude Code's sessions on this phone and on the other
+/// devices (`item-agents devices`: the list in ~/.config/item/devices, asked
+/// over ssh), as the script tells them.
+#[derive(Default, Clone, Debug, serde::Deserialize)]
+struct Device {
+    name: String,
+    #[serde(default)]
+    here: bool,
+    #[serde(default)]
+    online: bool,
+    #[serde(default)]
+    sessions: Vec<Session>,
+}
+
+#[derive(Default, Clone, Debug, serde::Deserialize)]
+struct Session {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    tmux: Option<String>,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    running: bool,
+    #[serde(default)]
+    since: u64,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    at: i64,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    turns: u32,
+    #[serde(default)]
+    tokens_in: u64,
+    #[serde(default)]
+    tokens_out: u64,
+    /// A copy synced here of a session of a device that is dark: to go on
+    /// with here.
+    #[serde(default)]
+    synced: bool,
+}
+
+/// The devices asked at most this often: the others answer over ssh.
+const AGENTS_EVERY: Duration = Duration::from_secs(15);
+
+fn agents(cache: &mut Option<(Instant, Vec<Device>)>) -> Vec<Device> {
+    if let Some((_, d)) = cache.as_ref().filter(|(at, _)| at.elapsed() < AGENTS_EVERY) {
+        return d.clone();
+    }
+    let t = Instant::now();
+    let out = std::process::Command::new("item-agents").arg("devices").output();
+    let devices: Vec<Device> = match &out {
+        Ok(o) => match serde_json::from_slice::<Vec<Device>>(&o.stdout) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!("agents: {e} in {} bytes; stderr: {}", o.stdout.len(), String::from_utf8_lossy(&o.stderr).trim());
+                // The last answer stays rather than nothing.
+                cache.as_ref().map(|(_, d)| d.clone()).unwrap_or_default()
+            }
+        },
+        Err(e) => {
+            tracing::warn!("agents: item-agents: {e}");
+            cache.as_ref().map(|(_, d)| d.clone()).unwrap_or_default()
+        }
+    };
+    tracing::debug!("agents: {} devices in {:.0} ms", devices.len(), t.elapsed().as_secs_f64() * 1e3);
+    *cache = Some((Instant::now(), devices.clone()));
+    devices
+}
+
+/// Tokens as a person reads them: 48k, 1.2M.
+fn tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1e6)
+    } else if n >= 10_000 {
+        format!("{}k", n / 1000)
+    } else if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1e3)
+    } else {
+        n.to_string()
+    }
+}
+
+/// How long ago, in a word or two.
+fn ago_text(t: i64) -> String {
+    let gone = now_s() as i64 - t;
+    if gone < 60 {
+        "just now".into()
+    } else if gone < 3600 {
+        format!("{} min ago", gone / 60)
+    } else if gone < 86_400 {
+        format!("{} h ago", gone / 3600)
+    } else {
+        format!("{} days ago", gone / 86_400)
+    }
 }
 
 #[derive(Clone)]
@@ -338,7 +446,9 @@ fn storage() -> Vec<(&'static str, f64, f64)> {
         .into_iter()
         .filter_map(|(name, path)| {
             let c = std::ffi::CString::new(path).ok()?;
+            // SAFETY: an all-zero statvfs is a valid one (a C struct of integers).
             let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+            // SAFETY: `c` is a NUL-terminated CString and `st` a live local for statvfs to fill.
             if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
                 return None;
             }
@@ -427,7 +537,7 @@ fn calendar() -> Events {
     let events: Events = Default::default();
     let e = events.clone();
     let _ = std::thread::Builder::new().name("calendar".into()).spawn(move || {
-        let Ok(bus) = zbus::blocking::Connection::session() else { return };
+        let Ok(bus) = crate::bus::session() else { return };
         let rule = zbus::MatchRule::builder().msg_type(zbus::message::Type::Signal).interface(CALENDAR).map(|b| b.build());
         let Ok(rule) = rule else { return };
         let Ok(signals) = zbus::blocking::MessageIterator::for_match_rule(rule, &bus, Some(64)) else { return };
@@ -507,12 +617,15 @@ pub fn next_alarm_at() -> Option<(i64, String)> {
         let name = d.find("'name': <'").map(|i| d[i + 10..].split('\'').next().unwrap_or("").to_owned()).unwrap_or_default();
         for ahead in 0..8i64 {
             let t = now + ahead * 86_400;
+            // SAFETY: an all-zero tm is a valid one (a C struct of integers and a pointer).
             let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+            // SAFETY: localtime_r reads a live time_t and writes a live local tm; both are on the stack here.
             unsafe { libc::localtime_r(&(t as libc::time_t), &mut tm) };
             tm.tm_hour = hour as i32;
             tm.tm_min = minute as i32;
             tm.tm_sec = 0;
             tm.tm_isdst = -1;
+            // SAFETY: `tm` is a live local tm that localtime_r filled; mktime reads and normalises it.
             let at = unsafe { libc::mktime(&mut tm) } as i64;
             // tm_wday: 0 Sunday; Clocks' days: 0 Monday.
             let wday = (tm.tm_wday as i64 + 6) % 7;
@@ -529,7 +642,9 @@ pub fn next_alarm_at() -> Option<(i64, String)> {
 }
 
 fn local(t: i64) -> libc::tm {
+    // SAFETY: an all-zero tm is a valid one (a C struct of integers and a pointer).
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    // SAFETY: localtime_r reads a live time_t and writes a live local tm; both are on the stack here.
     unsafe { libc::localtime_r(&(t as libc::time_t), &mut tm) };
     tm
 }
@@ -587,6 +702,11 @@ fn version_parts(v: &str) -> Vec<u32> {
     v.trim_start_matches('v').split('.').filter_map(|p| p.parse().ok()).collect()
 }
 
+/// Memory left for apps (MemAvailable, kB), as the kernel counts it.
+pub fn mem_available_kb() -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo").ok()?.lines().find(|l| l.starts_with("MemAvailable:"))?.split_whitespace().nth(1)?.parse().ok()
+}
+
 /// The port's version, and GitHub's latest when it is due (once a day).
 fn port(asked: &mut bool) -> String {
     let version = read("/usr/share/sfduo/version").trim().to_owned();
@@ -595,7 +715,7 @@ fn port(asked: &mut bool) -> String {
     let mut lines = kept.lines();
     let checked: u64 = lines.next().and_then(|l| l.parse().ok()).unwrap_or(0);
     let mut latest = lines.next().unwrap_or("").to_owned();
-    if !*asked && now_s().saturating_sub(checked) > UPDATE_EVERY_S {
+    if !*asked && crate::prefs::online() && now_s().saturating_sub(checked) > UPDATE_EVERY_S {
         *asked = true;
         let reply = fetch(RELEASES, "application/vnd.github+json");
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&reply) {
@@ -638,15 +758,9 @@ fn hinge(bus: &Option<zbus::blocking::Connection>) -> String {
         tracing::debug!("system: no hinge from org.sfduo.Posture");
         return "—".into();
     };
-    let posture = get("Posture").and_then(|v| String::try_from(v).ok()).unwrap_or_default();
-    let name = match posture.as_str() {
-        "closed" => Some("closed"),
-        "laptop" => Some("laptop"),
-        "flat" => Some("flat"),
-        "folded" => Some("folded back"),
-        _ => None,
-    };
-    format!("{angle:.0}°{}", name.map(|n| format!(" · {n}")).unwrap_or_default())
+    // Which way it is held is item's own reading (posture.rs), not the
+    // daemon's Posture: that one names a standing book "laptop".
+    format!("{angle:.0}° · {}", crate::posture::current().name())
 }
 
 /// Days since 1970 of a civil date (Howard Hinnant's).
@@ -692,6 +806,9 @@ fn sky(symbol: &str) -> (&'static str, String) {
 
 /// The weather for GNOME Weather's first city, from met.no.
 fn weather() -> Result<Weather, String> {
+    if !crate::prefs::online() {
+        return Err("Online is off in item Settings".into());
+    }
     let locations = run("gsettings", &["get", "org.gnome.Weather", "locations"]);
     let city = locations.split('\'').nth(1).filter(|c| !c.is_empty()).ok_or("Choose a city in Weather")?.to_owned();
     // The first coordinates, in radians: "[(0.879..., 0.531...)]".
@@ -732,7 +849,7 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
     let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
     let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
     let Some(fonts) = thin.zip(regular) else { return };
-    let bus = zbus::blocking::Connection::session().ok();
+    let bus = crate::bus::session().ok();
     let temps: Vec<String> = std::fs::read_dir("/sys/class/thermal")
         .map(|d| d.flatten().filter_map(|e| {
             let p = e.path();
@@ -748,6 +865,7 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
     let mut weather_cache: Option<(Instant, Result<Weather, String>)> = None;
     let events = calendar();
     let mut asked_update = false;
+    let mut agents_cache: Option<(Instant, Vec<Device>)> = None;
     let mut details = false;
     let (mut lit, mut samples) = (true, 0u32);
     let mut next_sample = Instant::now();
@@ -785,6 +903,7 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
                 f.hinge = hinge(&bus);
                 f.uptime = uptime_text(read("/proc/uptime").split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0.0));
                 f.port = port(&mut asked_update);
+                f.agents = agents(&mut agents_cache);
                 if weather_cache.as_ref().is_none_or(|(at, w)| at.elapsed() > WEATHER_EVERY || (w.is_err() && at.elapsed() > Duration::from_secs(120))) {
                     weather_cache = Some((Instant::now(), weather()));
                 }
@@ -902,6 +1021,7 @@ fn draw(fonts: &(Font, Font), f: &Facts, twelve: bool, details: bool) -> Option<
     };
     let (cx, inner) = (40.0f32, pw - 80.0);
     let now = crate::shade::local_time();
+    let mut taps: Vec<(f32, f32, String)> = Vec::new();
 
     // The head: the greeting and the date (the time is the desktop's).
     let part = crate::sysscreen::part_of_day(now.tm_hour);
@@ -946,6 +1066,54 @@ fn draw(fonts: &(Font, Font), f: &Facts, twelve: bool, details: bool) -> Option<
     row(&mut c, "Alarm", &f.alarm, DIM, &mut y);
     row(&mut c, "Event", &f.event, DIM, &mut y);
     y += 14.0;
+
+    // The agents: each device and its Claude Code sessions, once there
+    // are any (or a device listed).
+    if f.agents.iter().any(|d| !d.here || !d.sessions.is_empty()) {
+        section(&mut c, "Agents", &mut y);
+        for d in &f.agents {
+            let what = if !d.online && !d.sessions.is_empty() {
+                format!("offline · {} synced here", d.sessions.len())
+            } else if !d.online {
+                "offline".to_owned()
+            } else if d.sessions.is_empty() {
+                "no sessions".to_owned()
+            } else {
+                format!("{} session{}", d.sessions.len(), if d.sessions.len() == 1 { "" } else { "s" })
+            };
+            row(&mut c, if d.here { "This phone" } else { &d.name }, &what, if d.online { INK } else { DIM }, &mut y);
+            for s in d.sessions.iter().take(4) {
+                let folder = s.cwd.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or(&s.cwd);
+                let folder = if folder.is_empty() { "~" } else { folder };
+                let (what, color) = match (s.running, s.state.as_str()) {
+                    (true, "waiting") => (if s.message.is_empty() { "waiting for you".to_owned() } else { format!("waiting: {}", s.message) }, INK),
+                    (true, "working") => ("working".to_owned(), DIM),
+                    (true, "done") => (format!("done · {}", ago_text(s.at)), INK),
+                    (true, _) => (format!("running {}", uptime_text(s.since as f64)), DIM),
+                    (false, "synced") => (format!("synced · {}", ago_text(s.at)), DIM),
+                    (false, _) => (format!("stopped · {}", ago_text(s.at)), DIM),
+                };
+                let model = if s.model.is_empty() { String::new() } else { format!("{} · ", s.model) };
+                let top = y;
+                row(&mut c, &format!("  {folder}"), &format!("{model}{what}"), color, &mut y);
+                if s.turns > 0 {
+                    row(&mut c, "", &format!("{} turn{} · {} in · {} out", s.turns, if s.turns == 1 { "" } else { "s" }, tokens(s.tokens_in), tokens(s.tokens_out)), DIM, &mut y);
+                }
+                // A tap opens it: attached to its tmux session, or resumed
+                // from its transcript (item-agents open).
+                if (d.online || s.synced) && (s.tmux.is_some() || !s.id.is_empty()) {
+                    // A synced copy is resumed here, not there.
+                    let device = if d.here || s.synced { "-".to_owned() } else { d.name.clone() };
+                    // Each word quoted for the shell that runs it (open_agent):
+                    // the names and the path came over ssh from another device.
+                    let q = crate::state::sh_quote;
+                    let cmd = format!("item-agents open {} {} {} {}", q(&device), q(s.tmux.as_deref().unwrap_or("-")), q(if s.id.is_empty() { "-" } else { &s.id }), q(if s.cwd.is_empty() { "~" } else { &s.cwd }));
+                    taps.push((top - 8.0, y - 8.0, cmd));
+                }
+            }
+        }
+        y += 14.0;
+    }
 
     section(&mut c, "Weather", &mut y);
     match &f.weather {
@@ -1026,5 +1194,5 @@ fn draw(fonts: &(Font, Font), f: &Facts, twelve: bool, details: bool) -> Option<
     let used = ((y + 160.0) * s) as u32;
     let (w, h) = (c.width(), used.min(c.height()));
     let data = c.data()[..(w * h * 4) as usize].to_vec();
-    Some((data, w as i32, h as i32, (details_top, details_bottom)))
+    Some((data, w as i32, h as i32, (details_top, details_bottom), taps))
 }
