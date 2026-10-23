@@ -11,16 +11,29 @@ use smithay::utils::{Logical, Size, Transform};
 
 use crate::layout::SCALE;
 
-pub struct Font(fontdue::Font);
+/// A font, shared: fontdue parses every glyph's outline when it loads a
+/// file, 8-10 MB a font, and the shell's pieces ask for the same few files
+/// (2026-10-23: 55 loads, 417 MB of heap at the start, measured with a
+/// counting allocator). Each file is parsed once and handed out behind an Arc.
+#[derive(Clone)]
+pub struct Font(std::sync::Arc<fontdue::Font>);
+
+static LOADED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<fontdue::Font>>>> = std::sync::OnceLock::new();
 
 impl Font {
     /// The first of `paths` that loads.
     pub fn load(paths: &[&str]) -> Option<Font> {
+        let loaded = LOADED.get_or_init(Default::default);
         paths.iter().find_map(|path| {
+            if let Some(font) = loaded.lock().unwrap().get(*path) {
+                return Some(Font(font.clone()));
+            }
             let bytes = std::fs::read(path).ok()?;
             match fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
                 Ok(font) => {
                     tracing::info!("font: {path}");
+                    let font = std::sync::Arc::new(font);
+                    loaded.lock().unwrap().insert((*path).to_owned(), font.clone());
                     Some(Font(font))
                 }
                 Err(e) => {

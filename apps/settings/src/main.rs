@@ -22,6 +22,8 @@
 mod about;
 mod battery;
 mod datetime;
+mod keyboard;
+mod online;
 mod ui;
 
 use std::cell::RefCell;
@@ -46,6 +48,8 @@ const SECTIONS: &[Section] = &[
     Section { key: "mobile", title: "Mobile network", icon: "network-cellular-symbolic", make: || ui::coming("Mobile data, roaming, the network's type.", 161) },
     Section { key: "display", title: "Display", icon: "video-display-symbolic", make: || ui::coming("Brightness, night light, the screen's timeout.", 162) },
     Section { key: "sound", title: "Sound", icon: "audio-speakers-symbolic", make: || ui::coming("Outputs and volumes.", 162) },
+    Section { key: "keyboard", title: "Keyboard", icon: "input-keyboard-symbolic", make: keyboard::page },
+    Section { key: "online", title: "Online", icon: "network-transmit-receive-symbolic", make: online::page },
     Section { key: "lock", title: "Lock", icon: "system-lock-screen-symbolic", make: || ui::coming("The PIN, fingers, CV ID.", 163) },
     Section { key: "battery", title: "Battery", icon: "battery-good-symbolic", make: battery::page },
     Section { key: "time", title: "Date & time", icon: "preferences-system-time-symbolic", make: datetime::page },

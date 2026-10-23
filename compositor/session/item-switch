@@ -1,6 +1,6 @@
 #!/bin/sh
 # item-switch item|phosh|status: which shell the phone starts, changed now
-# and for the boots after.
+# and for the boots after; keyboard item|stevia: which keyboard item uses.
 set -e
 case "$1" in
 item)
@@ -24,13 +24,24 @@ phosh)
         systemctl --user unset-environment XDG_CURRENT_DESKTOP XDG_CONFIG_DIRS WAYLAND_DISPLAY 2>/dev/null || true
     systemctl start phosh.service
     ;;
+keyboard)
+    # Which keyboard item uses: its own, or the port's stevia (kbd.rs reads
+    # ~/.config/item/keyboard at the start: sudo item-switch item after).
+    case "$2" in
+    item|stevia) ;;
+    *) echo "item-switch keyboard item|stevia" >&2; exit 2 ;;
+    esac
+    U=$(systemctl show -p User --value item.service)
+    runuser -u "${U:-droidian}" -- sh -c "mkdir -p ~/.config/item && printf '%s\n' '$2' > ~/.config/item/keyboard"
+    echo "keyboard: $2 (from item's next start: sudo item-switch item)"
+    ;;
 status|"")
     for u in item phosh item-face; do
         printf '%-10s %s, %s\n' "$u" "$(systemctl is-enabled $u.service 2>/dev/null)" "$(systemctl is-active $u.service 2>/dev/null)"
     done
     ;;
 *)
-    echo "item-switch item|phosh|status" >&2
+    echo "item-switch item|phosh|status | keyboard item|stevia" >&2
     exit 2
     ;;
 esac

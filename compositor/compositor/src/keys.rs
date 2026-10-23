@@ -82,6 +82,7 @@ impl Keys {
     }
 
     pub fn clear(&mut self) {
+        // SAFETY: zeroing the bytes keeps the String valid UTF-8.
         unsafe { self.text.as_bytes_mut().fill(0) };
         self.text.clear();
         self.shift = false;
@@ -97,7 +98,8 @@ impl Keys {
         let rows = if self.signs { SIGNS } else { LETTERS };
         let mut out = Vec::new();
         for (r, row) in rows.iter().enumerate() {
-            let y = TOP + r as f64 * (KEY_H + GAP);
+            // From its panel's top (the deck's, the frame turned).
+            let y = p.loc.y as f64 + TOP + r as f64 * (KEY_H + GAP);
             let n = row.chars().count() as f64;
             // Short rows centred; the third has shift and delete beside it.
             let mut x = x0 + (10.0 - n) * step / 2.0;

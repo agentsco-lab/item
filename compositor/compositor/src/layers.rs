@@ -147,7 +147,7 @@ impl Layers {
         let size = if keyboard { (panel_w, want.h).into() } else { want };
         layer.with_pending_state(|s| s.size = Some(size));
         layer.send_configure();
-        tracing::info!("layer surface: {}x{} asked, {}x{} given{}", want.w, want.h, size.w, size.h, if keyboard { " (keyboard)" } else { "" });
+        tracing::debug!("layer surface: {}x{} asked, {}x{} given{}", want.w, want.h, size.w, size.h, if keyboard { " (keyboard)" } else { "" });
     }
 
     /// Where a layer surface stands, logical px, if it is shown.
@@ -191,7 +191,7 @@ impl Layers {
         // Else as the protocol has it, by its anchors and margins - item's
         // keyboard takes its panel by its left margin (717: the right one)
         // and hides below the edge by a negative bottom margin.
-        let (w, h) = layout::LAYOUT;
+        let (w, h) = layout::size();
         let x = match (anchor.contains(Anchor::LEFT), anchor.contains(Anchor::RIGHT)) {
             (true, false) => left,
             (false, true) => w - geo.w - right,
@@ -221,7 +221,7 @@ impl Layers {
     }
 
     pub fn keyboard_height(&self) -> Option<(usize, i32)> {
-        let screen_h = layout::LAYOUT.1;
+        let screen_h = layout::size().1;
         self.surfaces.iter().filter(|l| self.is_osk(l)).find_map(|l| {
             // Down once by stevia's own margin: settled (see `settled`).
             let r = self.place_asked(l)?;

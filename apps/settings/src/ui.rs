@@ -47,3 +47,14 @@ pub fn run(argv: &[&str]) -> String {
 pub fn read(path: &str) -> String {
     std::fs::read_to_string(path).map(|s| s.trim().to_owned()).unwrap_or_default()
 }
+
+/// A setting of item's written whole into ~/.config/item/NAME and renamed
+/// into place: the compositor sees the directory change (prefs.rs).
+pub fn write_conf(name: &str, text: &str) {
+    let dir = format!("{}/.config/item", std::env::var("HOME").unwrap_or_default());
+    let _ = std::fs::create_dir_all(&dir);
+    let tmp = format!("{dir}/.{name}.new");
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, format!("{dir}/{name}"));
+    }
+}
