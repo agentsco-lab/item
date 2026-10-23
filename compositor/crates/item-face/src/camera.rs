@@ -21,7 +21,7 @@ impl Camera {
     /// The helper started; each frame goes to `frames` with its play's
     /// number, made by `wrap` - dropped when the receiver is still busy.
     pub fn new<M: Send + 'static>(frames: SyncSender<M>, wrap: fn(u64, Vec<u8>) -> M) -> Camera {
-        let tool = std::env::var("CAMERA_WARM").unwrap_or_else(|_| "/var/tmp/gst/camera-warm".into());
+        let tool = std::env::var("CAMERA_WARM").unwrap_or_else(|_| "/usr/libexec/item/camera-warm".into());
         let child = Command::new(&tool).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit()).spawn();
         let Ok(mut child) = child else {
             tracing::warn!("camera: {tool} did not start");

@@ -45,6 +45,7 @@ struct Agent {
 /// The user polkit is to authenticate: ours if it is among those it
 /// offers, else the first unix user offered.
 fn user_of(identities: &[(String, HashMap<String, OwnedValue>)]) -> String {
+    // SAFETY: getuid takes nothing and cannot fail.
     let me = unsafe { libc::getuid() };
     let uids: Vec<u32> = identities
         .iter()
@@ -52,6 +53,8 @@ fn user_of(identities: &[(String, HashMap<String, OwnedValue>)]) -> String {
         .filter_map(|(_, d)| d.get("uid").and_then(|v| u32::try_from(v.try_clone().ok()?).ok()))
         .collect();
     let uid = if uids.contains(&me) { me } else { uids.first().copied().unwrap_or(me) };
+    // SAFETY: getpwuid returns null or a pointer to a NUL-terminated entry, copied out at once
+    // (unchecked: that entry is glibc's static buffer, which pam.rs reads from another thread too).
     unsafe {
         let pw = libc::getpwuid(uid);
         if pw.is_null() {
@@ -119,7 +122,7 @@ impl Polkit {
     pub fn new(wake: Ping) -> Polkit {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let agent = Agent { shared: shared.clone(), wake: wake.clone() };
-        let conn = zbus::blocking::connection::Builder::system().map(|b| b.method_timeout(std::time::Duration::from_secs(5))).and_then(|b| b.serve_at(PATH, agent)).and_then(|b| b.build());
+        let conn = crate::bus::system().and_then(|c| crate::bus::serve(&c, &[], PATH, agent).map(|_| c));
         let conn = match conn {
             Ok(c) => c,
             Err(e) => {
@@ -167,12 +170,14 @@ impl Polkit {
     /// The PIN for the first ask: checked on a thread by polkit's helper.
     pub fn answer(&self, mut pin: String) {
         let Some((cookie, user)) = self.shared.lock().unwrap().asks.first().map(|a| (a.cookie.clone(), a.user.clone())) else {
+            // SAFETY: zeroing the bytes keeps the String valid UTF-8.
             unsafe { pin.as_bytes_mut().fill(0) };
             return;
         };
         let (slot, wake) = (self.checked.clone(), self.wake.clone());
         std::thread::spawn(move || {
             let ok = check(&user, &cookie, &pin);
+            // SAFETY: zeroing the bytes keeps the String valid UTF-8.
             unsafe { pin.as_bytes_mut().fill(0) };
             *slot.lock().unwrap() = Some((cookie, ok));
             wake.ping();

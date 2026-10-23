@@ -390,7 +390,25 @@ fn run() -> i32 {
             return 1;
         }
     };
-    let _ = std::fs::set_permissions(PEN_SOCK, std::os::unix::fs::PermissionsExt::from_mode(0o666));
+    // The socket is the shell's alone: owned by the session's user (the
+    // unit's PEN_SOCK_OWNER, item's uid) and 0600; without that word, as
+    // before, open to the system (anyone could route the pen then).
+    match std::env::var("PEN_SOCK_OWNER").ok().and_then(|u| u.parse::<u32>().ok()) {
+        Some(uid) => {
+            let c = std::ffi::CString::new(PEN_SOCK).expect("a path");
+            // SAFETY: a NUL-terminated path and a uid; -1 leaves the group.
+            if unsafe { libc::chown(c.as_ptr(), uid, u32::MAX) } != 0 {
+                log(&format!("{PEN_SOCK}: chown to {uid}: {}", io::Error::last_os_error()));
+            }
+            let _ = std::fs::set_permissions(PEN_SOCK, std::os::unix::fs::PermissionsExt::from_mode(0o600));
+        }
+        None => {
+            log(&format!("{PEN_SOCK}: no PEN_SOCK_OWNER, open to every user"));
+            let _ = std::fs::set_permissions(PEN_SOCK, std::os::unix::fs::PermissionsExt::from_mode(0o666));
+        }
+    }
+    // Synthetic strokes (the bench) only when asked at the start.
+    let bench_allowed = std::env::var("PEN_BENCH").is_ok_and(|v| v == "1");
     let _ = sheet.set_nonblocking(true);
     let _ = src.set_nonblocking(true);
     let mut s = Splitter {
@@ -434,7 +452,7 @@ fn run() -> i32 {
             let mut buf = [0u8; 32];
             while let Ok(k) = sheet.recv(&mut buf) {
                 let said = String::from_utf8_lossy(&buf[..k]).trim().to_owned();
-                if let Some(secs) = said.strip_prefix("bench ").and_then(|v| v.parse::<f64>().ok()) {
+                if let Some(secs) = said.strip_prefix("bench ").and_then(|v| v.parse::<f64>().ok()).filter(|_| bench_allowed) {
                     let now = Instant::now();
                     s.bench = Some((now, now + Duration::from_secs_f64(secs), now));
                     log(&format!("bench: {secs} s"));

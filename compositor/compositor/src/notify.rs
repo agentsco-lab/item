@@ -94,7 +94,8 @@ impl Server {
                 || hint("category").is_some_and(|c| c.contains("alarm")),
             at_ns: hybris_hwc::now_ns(),
         };
-        tracing::info!("notification {id} from {} (icon {:?}): {}{}", note.app, note.icon, note.summary, if note.urgent { format!(" (urgent, {} actions)", note.actions.len()) } else { String::new() });
+        // The app and the id only: a summary is the owner's to read, not the journal's.
+        tracing::info!("notification {id} from {}{}", note.app, if note.urgent { format!(" (urgent, {} actions)", note.actions.len()) } else { String::new() });
         shared.notes.retain(|n| n.id != id);
         shared.notes.insert(0, note);
         drop(shared);
@@ -135,10 +136,7 @@ impl Notes {
     pub fn new(wake: Ping) -> Notes {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let server = Server { shared: shared.clone(), wake };
-        let conn = zbus::blocking::connection::Builder::session()
-            .and_then(|b| b.name(NAME))
-            .and_then(|b| b.serve_at(PATH, server))
-            .and_then(|b| b.build());
+        let conn = crate::bus::session().and_then(|c| crate::bus::serve(&c, &[NAME], PATH, server).map(|_| c));
         let conn = match conn {
             Ok(c) => {
                 tracing::info!("notifications: serving {NAME}");

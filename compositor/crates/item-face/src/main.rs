@@ -282,7 +282,7 @@ impl Worker {
 }
 
 fn run(rx: Receiver<Msg>, tx: SyncSender<Msg>, bus: Connection) {
-    let dir = PathBuf::from(std::env::var("CVID_MODELS").unwrap_or_else(|_| "/var/tmp/cvid".into()));
+    let dir = PathBuf::from(std::env::var("CVID_MODELS").unwrap_or_else(|_| "/usr/share/item/cvid".into()));
     let t = Instant::now();
     let det = cvid::Detector::new(&dir.join("face_detection_yunet_2023mar.onnx"), 256, 320);
     let emb = cvid::Embedder::new(&dir.join("face_recognition_sface_2021dec.onnx"));

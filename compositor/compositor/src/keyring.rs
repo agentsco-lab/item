@@ -125,10 +125,31 @@ struct Prompter {
     wake: Ping,
 }
 
+/// The names gnome-keyring-daemon holds: a prompt is taken only from
+/// their owner. Any other process on the session bus asking to be
+/// prompted would otherwise be answered with the PIN that unlocked, sent to
+/// its own key (service()); so each caller is checked against the bus.
+const KEYRING_NAMES: [&str; 2] = ["org.freedesktop.secrets", "org.gnome.keyring"];
+
+async fn is_keyring(conn: &zbus::Connection, sender: &str) -> bool {
+    let Ok(bus) = zbus::fdo::DBusProxy::new(conn).await else { return false };
+    for name in KEYRING_NAMES {
+        let Ok(name) = zbus::names::BusName::try_from(name) else { continue };
+        if bus.get_name_owner(name).await.is_ok_and(|owner| owner.as_str() == sender) {
+            return true;
+        }
+    }
+    false
+}
+
 #[zbus::interface(name = "org.gnome.keyring.internal.Prompter")]
 impl Prompter {
-    fn begin_prompting(&self, #[zbus(header)] header: zbus::message::Header<'_>, callback: OwnedObjectPath) {
+    async fn begin_prompting(&self, #[zbus(header)] header: zbus::message::Header<'_>, #[zbus(connection)] conn: &zbus::Connection, callback: OwnedObjectPath) {
         let Some(sender) = header.sender().map(|s| s.to_string()) else { return };
+        if !is_keyring(conn, &sender).await {
+            tracing::warn!("keyring: a prompt asked by {sender}, not the keyring: refused");
+            return;
+        }
         let exchange = Exchange::new();
         let first = exchange.send(None);
         self.shared.lock().unwrap().prompts.push(Prompt { sender: sender.clone(), callback: callback.clone(), exchange, kind: None, tried_pin: false });
@@ -176,10 +197,7 @@ impl Keyring {
         let shared = Arc::new(Mutex::new(Shared::default()));
         let (tx, rx) = channel::<Call>();
         let prompter = Prompter { shared: shared.clone(), calls: tx.clone(), wake };
-        let conn = zbus::blocking::connection::Builder::session()
-            .and_then(|b| b.name(NAME))
-            .and_then(|b| b.serve_at(PATH, prompter))
-            .and_then(|b| b.build());
+        let conn = crate::bus::session().and_then(|c| crate::bus::serve(&c, &[NAME], PATH, prompter).map(|_| c));
         let conn = match conn {
             Ok(c) => {
                 tracing::info!("keyring: the system prompter");
@@ -240,10 +258,12 @@ impl Keyring {
         // The PIN's time is up: dropped, zeroed.
         if shared.pin.as_ref().is_some_and(|(_, at)| at.elapsed() > std::time::Duration::from_secs(15)) {
             if let Some((mut pin, _)) = shared.pin.take() {
+                // SAFETY: zeroing the bytes keeps the String valid UTF-8.
                 unsafe { pin.as_bytes_mut().fill(0) };
             }
         }
         if let Some(mut pin) = pin {
+            // SAFETY: zeroing the bytes keeps the String valid UTF-8.
             unsafe { pin.as_bytes_mut().fill(0) };
         }
     }

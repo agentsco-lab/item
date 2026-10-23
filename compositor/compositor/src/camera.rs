@@ -2,7 +2,7 @@
 //! item-tracker #105, #107, #109): the screen lit while locked - the lid
 //! opened, the power key - and a small window on the right panel shows what
 //! the camera sees, for a few seconds. How the picture is turned and whether
-//! mirrored is read at each start from /tmp/item-camera (words: cw, ccw,
+//! mirrored is read at each start from $XDG_RUNTIME_DIR/item-camera (words: cw, ccw,
 //! none; mirror), to find the right way on the device.
 //!
 //! With CV ID on (CVID=1) the camera is item-face's (face.rs): no peek.
@@ -103,8 +103,8 @@ impl Peek {
 
     /// The helper started, loading the camera stack while nothing waits.
     fn spawn(&mut self) {
-        let tool = std::env::var("CAMERA_WARM").unwrap_or_else(|_| "/var/tmp/gst/camera-warm".into());
-        let log = std::fs::File::create("/tmp/camera-warm.log").map(Stdio::from).unwrap_or_else(|_| Stdio::null());
+        let tool = std::env::var("CAMERA_WARM").unwrap_or_else(|_| "/usr/libexec/item/camera-warm".into());
+        let log = std::fs::File::create(format!("{}/camera-warm.log", crate::prefs::runtime_dir())).map(Stdio::from).unwrap_or_else(|_| Stdio::null());
         let child = Command::new(&tool).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(log).spawn();
         let Ok(mut child) = child else {
             tracing::warn!("camera: {tool} did not start");
@@ -178,7 +178,7 @@ impl Peek {
         if self.orders.is_none() || self.playing {
             return;
         }
-        let how = std::fs::read_to_string("/tmp/item-camera").unwrap_or_else(|_| "ccw mirror".into());
+        let how = std::fs::read_to_string(format!("{}/item-camera", crate::prefs::runtime_dir())).unwrap_or_else(|_| "ccw mirror".into());
         let turn = if how.contains("ccw") { Turn::Ccw } else if how.contains("cw") { Turn::Cw } else { Turn::None };
         let mirror = how.contains("mirror");
         self.size = if turn == Turn::None { (W / 2, H / 2) } else { (H / 2, W / 2) };

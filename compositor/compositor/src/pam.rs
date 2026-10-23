@@ -40,6 +40,9 @@ extern "C" fn conversation(n: c_int, msgs: *mut *const PamMessage, resp: *mut *m
     if n <= 0 || msgs.is_null() || resp.is_null() {
         return PAM_CONV_ERR;
     }
+    // SAFETY: Linux-PAM's conversation contract: `msgs` is an array of `n` pointers to messages
+    // (checked non-null above), `appdata` is the `&CString` check_for gave pam_start, alive until
+    // pam_end, and the responses are calloc'd and strdup'd because libpam frees them with free().
     unsafe {
         let pin = &*(appdata as *const CString);
         let out = libc::calloc(n as usize, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
@@ -58,9 +61,12 @@ extern "C" fn conversation(n: c_int, msgs: *mut *const PamMessage, resp: *mut *m
     PAM_SUCCESS
 }
 
-/// Whether `pin` is the session user's: PAM's answer.
+/// Whether `pin` is the session user's: PAM's answer. (item-face takes
+/// this file too and uses check_for alone.)
 #[allow(dead_code)]
 pub fn check(pin: &str) -> bool {
+    // SAFETY: getpwuid returns null or a pointer to a NUL-terminated entry, copied out at once
+    // (unchecked: that entry is glibc's static buffer, which polkit.rs reads from another thread too).
     let user = std::env::var("USER").ok().or_else(|| unsafe {
         let pw = libc::getpwuid(libc::getuid());
         (!pw.is_null()).then(|| CStr::from_ptr((*pw).pw_name).to_string_lossy().into_owned())
@@ -72,6 +78,10 @@ pub fn check(pin: &str) -> bool {
 /// Whether `pin` is `user`'s (item-face, as root, for the caller's user).
 pub fn check_for(user: &str, pin: &str) -> bool {
     let user = user.to_owned();
+    // SAFETY: dlopen and dlsym get NUL-terminated literals; the transmutes give pam_start,
+    // pam_authenticate and pam_end their Linux-PAM signatures; `conv`, `secret` and `user_c`
+    // outlive the three calls, and `handle` is pam_start's, ended once (unchecked: the zeroing
+    // writes through a pointer from `as_ptr` on a shared borrow, within the string's own bytes).
     unsafe {
         let lib = libc::dlopen(c"libpam.so.0".as_ptr(), libc::RTLD_NOW);
         if lib.is_null() {
