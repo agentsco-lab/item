@@ -1,0 +1,19 @@
+# item: Chromium on the Wayland socket (Debian's wrapper looks for X
+# otherwise), typing through text-input v3, which item's keyboard rises on
+# for a field (kbd.rs, state.rs's text_field). Debian's /usr/bin/chromium
+# sources every file here; the flags add to its own (default-flags has
+# --enable-gpu-rasterization). Overlay scrollbars: a classic one appearing
+# when the keyboard shortens the window shifted the whole page.
+# Tiles on the CPU (2026-10-23): with the compositing in software, tiles
+# rastered on the GPU through ANGLE on hybris now and then stayed stale
+# after a backspace (the glyph gone from the field, still drawn); disable
+# wins over Debian's enable. WebGL still goes through the GPU process.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3 --enable-features=OverlayScrollbar --disable-gpu-rasterization"
+# No Mesa for Chromium (2026-10-23): it draws through ANGLE on hybris's EGL
+# (the session's __EGL_VENDOR_LIBRARY_FILENAMES), yet its Wayland side
+# opens a GBM device, which loads Mesa's zink (a Vulkan probe that fails,
+# logged) and then llvmpipe with libLLVM, 155 MB read for nothing: the
+# first launch after a boot took 2.2 s to its window with them, 1.84 s
+# without. With no GBM backend its buffers are wl_shm, as they were.
+export LIBGL_DRIVERS_PATH=/nonexistent
+export GBM_BACKENDS_PATH=/nonexistent

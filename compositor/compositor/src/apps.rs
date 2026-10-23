@@ -73,6 +73,11 @@ pub fn entry(desktop: &str) -> Option<Entry> {
     }
 }
 
+/// Desktop entries item leaves out of its grid, whatever their files say:
+/// the port's GNOME Web (phosh's browser; item's is Chromium, the only one
+/// that draws with the GPU on hybris - session/item-mimeapps.list).
+const LEFT_OUT: &[&str] = &["org.gnome.Epiphany.desktop"];
+
 /// Every app to show, by name: applications not hidden, not NoDisplay,
 /// and shown on a GNOME or Phosh desktop, the first file of a name winning.
 pub fn all() -> Vec<Entry> {
@@ -83,7 +88,7 @@ pub fn all() -> Vec<Entry> {
         let mut files: Vec<_> = files.flatten().map(|f| f.file_name().to_string_lossy().into_owned()).collect();
         files.sort();
         for name in files {
-            if !name.ends_with(".desktop") || !seen.insert(name.clone()) {
+            if !name.ends_with(".desktop") || !seen.insert(name.clone()) || LEFT_OUT.contains(&name.as_str()) {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(format!("{dir}/{name}")) else { continue };

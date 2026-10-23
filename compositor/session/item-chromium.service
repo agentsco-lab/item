@@ -1,0 +1,22 @@
+# item-chromium: Chromium kept resident without a window (the owner's word,
+# 2026-10-23: "let us keep an instance"), as Android keeps its apps warm.
+# The dock asks it for a window over its singleton socket (state.rs's
+# resident_chromium): 0.67 s to the window against 1.8 s for a fresh
+# process. Its flags come from /etc/chromium.d (session/item-chromium).
+# Closed by the user entirely, it comes back hidden a few seconds later.
+# Idle it holds about 400 MB (the browser and its GPU process).
+[Unit]
+Description=Chromium, resident without a window
+After=graphical-session.target
+
+[Service]
+# The compositor's socket first: graphical-session.target comes before it
+# listens, and Chromium exits when it cannot connect.
+ExecStartPre=/bin/sh -c 'n=0; until [ -S "$XDG_RUNTIME_DIR/wayland-item" ] || [ $n -ge 60 ]; do sleep 1; n=$((n+1)); done'
+ExecStart=/usr/bin/chromium --no-startup-window --keep-alive-for-test
+Restart=always
+RestartSec=3
+Slice=app.slice
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,16 @@
+# item: Chromium is the browser (2026-10-21). On the Duo's hybris stack
+# only Chromium draws with the GPU: its GPU process reaches the Adreno
+# through hybris' EGL (WebGL at 26 fps where WebKit paints on the CPU), and
+# it speaks text-input v3, so item's keyboard rises for its fields. The
+# port's phosh keeps GNOME Web (adaptation/system/phosh-mimeapps.list).
+# Read for the desktop "item" (XDG_CURRENT_DESKTOP=item:GNOME) before
+# gnome-mimeapps.list, which puts Firefox first - and Firefox's hidden
+# entry has no Exec, so a link opened nothing (the Agent's login,
+# 2026-10-21). A user's own choice in ~/.config wins. Chromium's flags
+# (the Wayland socket, text-input v3) are in item-chromium, installed as
+# /etc/chromium.d/item.
+[Default Applications]
+x-scheme-handler/http=chromium.desktop
+x-scheme-handler/https=chromium.desktop
+text/html=chromium.desktop
+application/xhtml+xml=chromium.desktop
