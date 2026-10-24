@@ -89,6 +89,7 @@ install -Dm644 session/item-agent.desktop "$S/usr/share/applications/item-agent.
 install -Dm644 session/item-agent.svg "$S/usr/share/icons/hicolor/scalable/apps/item-agent.svg"
 install -Dm644 session/item-vibration-symbolic.svg "$S/usr/share/item/icons/vibration-symbolic.svg"
 install -Dm644 session/item-turn.svg "$S/usr/share/item/icons/turn.svg"
+install -Dm644 session/item-turn-on.svg "$S/usr/share/item/icons/turn-on.svg"
 aarch64-linux-gnu-strip -o "$S/usr/bin/item-settings" "$SETTINGS/target/$TARGET/release/item-settings"
 install -Dm644 "$SETTINGS/lab.agentsco.item.Settings.desktop" "$S/usr/share/applications/lab.agentsco.item.Settings.desktop"
 install -Dm644 "$SETTINGS/lab.agentsco.item.Settings.svg" "$S/usr/share/icons/hicolor/scalable/apps/lab.agentsco.item.Settings.svg"

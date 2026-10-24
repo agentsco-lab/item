@@ -57,14 +57,15 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
   Code is driven with a thumb; a microphone key that types what is said,
   through OpenRouter with a key of the owner's. The port's stevia stays as a
   choice.
-- **The turn.** A button at the end of the dock turns the frame through
-  blur: the panel it is tapped on becomes the deck - black, the keyboard
-  split for two thumbs, the open windows as a row of covers above it, the
-  pen's sheet and the system screen a swipe to either side - and the other
-  the screen; tapped again, the book. Settings' Turn page hands the turn to
-  the sensors instead: item then reads the hinge, gravity and the gyroscope
-  and turns as the phone is stood up. Locked while stood up, the lock screen
-  is still the book's.
+- **The turn.** A button at the end of the dock's right half turns the
+  frame through blur: the right panel becomes the deck - black, the
+  keyboard split for two thumbs, the open windows as a row of covers above
+  it, the pen's sheet and the system screen a swipe to either side - and the
+  left the screen; tapped again, the book. Held, the button turns green and
+  the turn is the sensors': item then reads the hinge, gravity and the
+  gyroscope and turns as the phone is stood up; held again, the button's
+  (Settings' Turn page is the same switch). Locked while stood up, the lock
+  screen is still the book's.
 - **Chromium** is the browser, resident without a window and asked for one
   from the dock. **The Agent entry** is Claude Code in a terminal, warm in
   tmux, with the keyboard's vibe layer under it; `item-agents` and

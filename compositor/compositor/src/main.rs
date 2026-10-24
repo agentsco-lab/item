@@ -616,6 +616,9 @@ impl Data {
                 self.state.boost.kick(now);
                 self.state.needs_redraw = true;
             }
+            if self.state.dock.take_toggle() {
+                self.state.toggle_turn_mode();
+            }
         }
         self.state.lock.idle(now);
         self.state.warm_tick(now);

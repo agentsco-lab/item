@@ -83,6 +83,8 @@ enum Reading {
 enum Event {
     Reading(Reading),
     Dark(bool),
+    /// Gravity and the gyroscope wanted (the turn the sensors') or not.
+    Streams(bool),
     /// A socket died (the sensor's, that session's): asked for again.
     Lost(&'static str, i32),
 }
@@ -174,6 +176,11 @@ impl Sensors {
     pub fn dark(&self, dark: bool) {
         let _ = self.cmds.send(Event::Dark(dark));
     }
+
+    /// Gravity and the gyroscope read (the turn the sensors') or let go.
+    pub fn streams(&self, on: bool) {
+        let _ = self.cmds.send(Event::Streams(on));
+    }
 }
 
 fn posture_for(angle: f64, current: &str) -> &'static str {
@@ -216,14 +223,13 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
         }
     };
 
-    let sensor = |name, iface, interval_ms| Sensor { name, iface, interval_ms, session: None, sock: None, retry_at: None, backoff: RETRY };
     // The hinge always (the camera's fold, the lock, the dock's pieces);
     // gravity and the gyroscope only when the turn is theirs to decide
-    // (prefs.rs): by the dock's button, neither streams at all.
+    // (prefs.rs, and the dock's button held): by the button, neither
+    // streams at all.
     let mut sensors = vec![sensor("hingesensor", "local.HingeSensor", None)];
     if crate::prefs::turn_by_sensors() {
-        sensors.push(sensor("accelerometersensor", "local.AccelerometerSensor", Some(ACCEL_INTERVAL_MS)));
-        sensors.push(sensor("gyroscopesensor", "local.GyroscopeSensor", Some(GYRO_INTERVAL_MS)));
+        sensors.extend(streams());
     } else {
         tracing::info!("sensors: the turn is the dock's button's: the hinge alone is read");
     }
@@ -318,6 +324,28 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
                         }
                     }
                     tracing::info!("sensors: display {}", if dark { "off: not reading" } else { "on: reading" });
+                }
+            }
+            Some(Event::Streams(on)) => {
+                let have = sensors.len() > 1;
+                if on && !have {
+                    for mut s in streams() {
+                        attempt(&system, &mut s, &events_tx, dark, now);
+                        sensors.push(s);
+                    }
+                    heard = now;
+                    tracing::info!("sensors: the turn is the sensors': gravity and the gyroscope read");
+                } else if !on && have {
+                    for s in sensors.drain(1..) {
+                        call(&system, &s, "stop");
+                        if let Some(sock) = s.sock {
+                            let _ = sock.shutdown(std::net::Shutdown::Both);
+                        }
+                    }
+                    gravity_told = None;
+                    roll = None;
+                    gyro_at = None;
+                    tracing::info!("sensors: the turn is the dock's button's: the hinge alone is read");
                 }
             }
             Some(Event::Lost(name, session)) => {
@@ -495,6 +523,15 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
             publish(changed);
         }
     }
+}
+
+fn sensor(name: &'static str, iface: &'static str, interval_ms: Option<i32>) -> Sensor {
+    Sensor { name, iface, interval_ms, session: None, sock: None, retry_at: None, backoff: RETRY }
+}
+
+/// Gravity and the gyroscope, as asked for when the turn is theirs.
+fn streams() -> [Sensor; 2] {
+    [sensor("accelerometersensor", "local.AccelerometerSensor", Some(ACCEL_INTERVAL_MS)), sensor("gyroscopesensor", "local.GyroscopeSensor", Some(GYRO_INTERVAL_MS))]
 }
 
 /// `s` asked of sensorfw and started unless dark; refused (sensorfw not up

@@ -1126,6 +1126,22 @@ impl State {
         self.needs_redraw = true;
     }
 
+    /// The turn button held: the turn handed to the sensors (gravity and
+    /// the gyroscope start streaming, the posture decides; the button
+    /// green) or back to the button (the streams stop; the frame stays as
+    /// it is until the button is tapped). Kept in ~/.config/item/turn, as
+    /// Settings' Turn page writes it.
+    pub fn toggle_turn_mode(&mut self) {
+        let on = !self.turn_by_sensors;
+        self.turn_by_sensors = on;
+        self.turn_asked = crate::layout::turn();
+        self.dock.set_auto(on);
+        self.posture.by_sensors(on);
+        crate::prefs::write("turn", if on { "sensors" } else { "button" });
+        tracing::info!("turn: {} (the dock's button held)", if on { "by the sensors" } else { "by the button" });
+        self.needs_redraw = true;
+    }
+
     pub fn launch(&mut self, exec: &str, ids: &[String], icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>, panel: usize) {
         // The frame turned (layout.rs): every launch is the screen's, from
         // whichever half of the taskbar; the curtain rises there.

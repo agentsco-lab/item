@@ -348,6 +348,12 @@ impl Posture {
         self.sensors.dark(dark);
     }
 
+    /// The turn handed to the sensors (gravity and the gyroscope read) or
+    /// taken back (the hinge alone).
+    pub fn by_sensors(&self, on: bool) {
+        self.sensors.streams(on);
+    }
+
     pub fn angle(&self) -> f64 {
         f64::from_bits(self.angle.load(Ordering::Relaxed))
     }
