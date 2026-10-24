@@ -37,6 +37,9 @@ if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
   systemctl --user set-environment $VARS 2>/dev/null
   dbus-update-activation-environment $VARS 2>/dev/null
   systemctl --user stop xdg-desktop-portal.service xdg-desktop-portal-gtk.service xdg-desktop-portal-phosh.service xdg-desktop-portal-gnome.service 2>/dev/null
+  # item's own services, now that the manager knows this session (their
+  # ConditionEnvironment; default.target came before it did).
+  systemctl --user start --no-block item-warm.service item-chromium.service item-agent-home.service 2>/dev/null
 fi
 
 if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then

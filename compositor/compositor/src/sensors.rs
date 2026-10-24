@@ -217,11 +217,16 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
     };
 
     let sensor = |name, iface, interval_ms| Sensor { name, iface, interval_ms, session: None, sock: None, retry_at: None, backoff: RETRY };
-    let mut sensors = [
-        sensor("hingesensor", "local.HingeSensor", None),
-        sensor("accelerometersensor", "local.AccelerometerSensor", Some(ACCEL_INTERVAL_MS)),
-        sensor("gyroscopesensor", "local.GyroscopeSensor", Some(GYRO_INTERVAL_MS)),
-    ];
+    // The hinge always (the camera's fold, the lock, the dock's pieces);
+    // gravity and the gyroscope only when the turn is theirs to decide
+    // (prefs.rs): by the dock's button, neither streams at all.
+    let mut sensors = vec![sensor("hingesensor", "local.HingeSensor", None)];
+    if crate::prefs::turn_by_sensors() {
+        sensors.push(sensor("accelerometersensor", "local.AccelerometerSensor", Some(ACCEL_INTERVAL_MS)));
+        sensors.push(sensor("gyroscopesensor", "local.GyroscopeSensor", Some(GYRO_INTERVAL_MS)));
+    } else {
+        tracing::info!("sensors: the turn is the dock's button's: the hinge alone is read");
+    }
     let mut dark = false;
     let now = Instant::now();
     for s in sensors.iter_mut() {

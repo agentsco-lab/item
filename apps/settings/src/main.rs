@@ -24,6 +24,7 @@ mod battery;
 mod datetime;
 mod keyboard;
 mod online;
+mod turn;
 mod ui;
 
 use std::cell::RefCell;
@@ -50,6 +51,7 @@ const SECTIONS: &[Section] = &[
     Section { key: "sound", title: "Sound", icon: "audio-speakers-symbolic", make: || ui::coming("Not made yet. The volume is in the left shade and beside the keys.", 0) },
     Section { key: "keyboard", title: "Keyboard", icon: "input-keyboard-symbolic", make: keyboard::page },
     Section { key: "online", title: "Online", icon: "network-transmit-receive-symbolic", make: online::page },
+    Section { key: "turn", title: "Turn", icon: "object-rotate-right-symbolic", make: turn::page },
     Section { key: "lock", title: "Lock", icon: "system-lock-screen-symbolic", make: || ui::coming("Not made yet. The PIN, a finger and the face are set in the first setup.", 0) },
     Section { key: "battery", title: "Battery", icon: "battery-good-symbolic", make: battery::page },
     Section { key: "time", title: "Date & time", icon: "preferences-system-time-symbolic", make: datetime::page },

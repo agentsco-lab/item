@@ -347,6 +347,11 @@ pub struct Dock {
     drying: Option<((f64, f64), Option<MemoryRenderBuffer>, u64)>,
     /// When the finger on an icon came down, for a long press.
     pressed_at: u64,
+    /// The turn button: its icon, its pad, and the finger on it (which
+    /// button - the half it stands by - the finger, where it came down).
+    turn_icon: Option<MemoryRenderBuffer>,
+    turn_slab: MemoryRenderBuffer,
+    turn_pressed: Option<(usize, TouchSlot, Point<f64, Logical>)>,
     /// The same for groups of drops drawn freely (`group`), by slot.
     groups: std::cell::RefCell<Vec<std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>>>,
 }
@@ -383,7 +388,15 @@ pub enum Tap {
     /// and the app ids its windows may have (a window put away comes back
     /// instead).
     Launch(String, usize, Option<MemoryRenderBuffer>, Vec<String>),
+    /// The turn button: this panel to be the deck (the frame turned), or
+    /// None, turned already: the book again.
+    Turn(Option<usize>),
 }
+
+/// The turn button's pad: a square of the icon with the slab's padding.
+const BUTTON: i32 = 2 * PAD + ICON;
+/// Its icon (the package's; light, for the slab).
+const TURN_ICON: &str = "/usr/share/item/icons/turn.svg";
 
 impl Dock {
     pub fn new() -> Dock {
@@ -407,7 +420,27 @@ impl Dock {
                 Half { apps, extra: Vec::new(), target_w: w, slabs, size: (w, h), pressed: None }
             })
             .collect();
-        Dock { rise: None, on_deck: Default::default(), birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, paced: None, behind: false, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default() }
+        let turn_icon = crate::apps::icon(TURN_ICON, ICON);
+        if turn_icon.is_none() {
+            tracing::warn!("dock: no turn icon at {TURN_ICON}");
+        }
+        Dock { rise: None, on_deck: Default::default(), birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, paced: None, behind: false, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default(), turn_icon, turn_slab: slab(BUTTON, BUTTON, RADIUS as f64, RADIUS as f64), turn_pressed: None }
+    }
+
+    /// The turn button's pads at `places`, each with the half it stands
+    /// by: in the book one beside each half, on its inner side (a tap makes
+    /// that panel the deck); the halves joined on one panel, one at the
+    /// strip's far end (the book again). None while hidden or empty.
+    fn turn_cells(&self, places: &[Place; 2]) -> Vec<(usize, Rectangle<f64, Logical>)> {
+        let pad = |x: f64, y: f64| Rectangle::<f64, Logical>::new((x, y).into(), (BUTTON as f64, BUTTON as f64).into());
+        let after = |h: usize| pad(places[h].x + self.halves[h].size.0 as f64 + GAP as f64, places[h].y);
+        let before = |h: usize| pad(places[h].x - (GAP + BUTTON) as f64, places[h].y);
+        match self.mode {
+            Mode::Hidden => Vec::new(),
+            Mode::Both => [0, 1].into_iter().filter(|&h| self.halves[h].len() > 0).map(|h| (h, if h == 0 { after(0) } else { before(1) })).collect(),
+            Mode::On(0) => vec![(1, after(1))],
+            Mode::On(_) => vec![(0, before(0))],
+        }
     }
 
     /// Each half's place in a mode (item's `_pane_targets`).
@@ -987,6 +1020,12 @@ impl Dock {
             return false;
         }
         let places = self.targets(self.mode);
+        if let Some((h, _)) = self.turn_cells(&places).into_iter().find(|(_, cell)| cell.contains(pos)) {
+            self.turn_pressed = Some((h, slot, pos));
+            self.pressed_at = hybris_hwc::now_ns();
+            self.touched.set(self.pressed_at);
+            return true;
+        }
         for h in 0..2 {
             let (w, ht) = self.halves[h].size;
             let p = places[h];
@@ -1005,11 +1044,16 @@ impl Dock {
     }
 
     pub fn holds(&self, slot: TouchSlot) -> bool {
-        self.halves.iter().any(|h| h.pressed.is_some_and(|(_, s, _)| s == slot))
+        self.halves.iter().any(|h| h.pressed.is_some_and(|(_, s, _)| s == slot)) || self.turn_pressed.is_some_and(|(_, s, _)| s == slot)
     }
 
     /// A finger on an icon that moves away is no longer a tap on it.
     pub fn motion(&mut self, slot: TouchSlot, pos: Point<f64, Logical>) {
+        if let Some((_, s, at)) = self.turn_pressed {
+            if s == slot && ((pos.x - at.x).powi(2) + (pos.y - at.y).powi(2)).sqrt() > TAP {
+                self.turn_pressed = None;
+            }
+        }
         for half in &mut self.halves {
             if let Some((_, s, at)) = half.pressed {
                 if s == slot && ((pos.x - at.x).powi(2) + (pos.y - at.y).powi(2)).sqrt() > TAP {
@@ -1022,6 +1066,14 @@ impl Dock {
     /// The finger lets go: a tap launches the app onto the panel it was on.
     pub fn up(&mut self, slot: TouchSlot) -> Option<Tap> {
         let now = hybris_hwc::now_ns();
+        if let Some((h, s, at)) = self.turn_pressed {
+            if s == slot {
+                self.turn_pressed = None;
+                // Turned, any of them means the book; else the panel the
+                // button stands on becomes the deck.
+                return Some(Tap::Turn((!layout::turned()).then(|| layout::panel_at(at).unwrap_or(h))));
+            }
+        }
         for (h, half) in self.halves.iter_mut().enumerate() {
             if let Some((i, s, at)) = half.pressed {
                 if s == slot {
@@ -1041,6 +1093,7 @@ impl Dock {
 
     pub fn cancel(&mut self) {
         let now = hybris_hwc::now_ns();
+        self.turn_pressed = None;
         for (h, half) in self.halves.iter_mut().enumerate() {
             if half.pressed.take().is_some() {
                 let mut popped = self.popped.get();
@@ -1278,6 +1331,22 @@ impl Dock {
                     let src = Rectangle::new((0.0, 0.0).into(), (ICON as f64, ICON as f64).into());
                     push(&mut out, icon, cx - iw / 2.0, cy - ih / 2.0, Some((iw, ih)), Some(src), pressed * shown as f32);
                 }
+            }
+        }
+        // The turn button beside the halves: its pad, its icon dimmed
+        // under a finger; shown as the half it stands by is.
+        for (h, cell) in self.turn_cells(&places) {
+            if places[h].y >= bottom {
+                continue;
+            }
+            let shown = self.icons_shown(h, frame_ns) as f32;
+            if shown <= 0.01 {
+                continue;
+            }
+            push(&mut out, &self.turn_slab, cell.loc.x, cell.loc.y, None, None, shown);
+            if let Some(icon) = &self.turn_icon {
+                let pressed = if self.turn_pressed.is_some_and(|(q, _, _)| q == h) { 0.55 } else { 1.0 };
+                push(&mut out, icon, cell.loc.x + PAD as f64, cell.loc.y + PAD as f64, None, None, pressed * shown);
             }
         }
         // The drops under the icons.

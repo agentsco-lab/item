@@ -104,6 +104,11 @@ pub struct State {
     /// A client committed a new buffer since the loop last looked.
     pub client_frame: bool,
     pub dock: Dock,
+    /// The frame's turn as the dock's turn button asked (layout.rs's
+    /// values: 0 the book, 1 the right panel up, 2 the left), applied by
+    /// main.rs; with the turn by the sensors (prefs.rs) unused.
+    pub turn_asked: u8,
+    pub turn_by_sensors: bool,
     pub boost: GpuBoost,
     pub curtain: Curtain,
     pub gestures: Gestures,
@@ -321,6 +326,8 @@ impl State {
             entries: crate::apps::all(),
             client_frame: false,
             dock: Dock::new(),
+            turn_asked: 0,
+            turn_by_sensors: crate::prefs::turn_by_sensors(),
             boost: GpuBoost::new(),
             curtain: Curtain::new(),
             gestures: Gestures::default(),
@@ -1105,6 +1112,20 @@ impl State {
 
     /// An app onto a panel, from the dock or the grid: a window of it put
     /// away comes back; else it is launched under the curtain.
+    /// The dock's turn button tapped: the panel it was on becomes the deck
+    /// (the other the screen); tapped while turned, the book again. The
+    /// turn itself is main.rs's, each frame, with the blur.
+    pub fn ask_turn(&mut self, deck: Option<usize>) {
+        self.turn_asked = match deck {
+            None => 0,
+            Some(0) => 1,
+            Some(_) => 2,
+        };
+        tracing::info!("turn: asked {} by the dock's button", match self.turn_asked { 0 => "the book", 1 => "the right panel up", _ => "the left panel up" });
+        crate::fingerprint::buzz("button-pressed");
+        self.needs_redraw = true;
+    }
+
     pub fn launch(&mut self, exec: &str, ids: &[String], icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>, panel: usize) {
         // The frame turned (layout.rs): every launch is the screen's, from
         // whichever half of the taskbar; the curtain rises there.

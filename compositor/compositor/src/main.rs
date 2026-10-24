@@ -480,15 +480,20 @@ impl Data {
         if self.state.posture.take_orientation_changed() {
             self.state.system.stale();
         }
-        // The frame's turn as the posture wants it (layout.rs): applied when
-        // it differs, but not while the lock screen, the first setup, the
-        // tour or the wallpaper picker hold the book's geometry (draft 45);
-        // then as soon as they let go.
+        // The frame's turn as the dock's button asked (state.rs), or as the
+        // posture wants it when the turn is the sensors' (prefs.rs):
+        // applied when it differs, but not while the lock screen, the
+        // first setup, the tour or the wallpaper picker hold the book's
+        // geometry (draft 45); then as soon as they let go.
         {
             use crate::posture::Orientation;
-            let turn = match self.state.posture.orientation() {
-                Orientation::Laptop { lid: p } | Orientation::Stacked { up: p } => if p == 1 { 1 } else { 2 },
-                _ => 0,
+            let turn = if self.state.turn_by_sensors {
+                match self.state.posture.orientation() {
+                    Orientation::Laptop { lid: p } | Orientation::Stacked { up: p } => if p == 1 { 1 } else { 2 },
+                    _ => 0,
+                }
+            } else {
+                self.state.turn_asked
             };
             let held = self.state.lock.locked || self.state.setup.active || self.state.tour.watching() || self.state.picker.is_open();
             let was = crate::layout::turn();

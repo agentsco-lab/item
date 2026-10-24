@@ -70,6 +70,13 @@ pub fn online() -> bool {
     read("online").is_some_and(|v| v == "on")
 }
 
+/// Whether the frame turns as the sensors say the phone is held
+/// (`turn` = "sensors"), or by the dock's turn button alone (the default:
+/// the accelerometer and the gyroscope are then not read at all).
+pub fn turn_by_sensors() -> bool {
+    read("turn").is_some_and(|v| v == "sensors")
+}
+
 fn langs() -> Vec<Lang> {
     let mut out: Vec<Lang> = read("keyboard-langs")
         .unwrap_or_else(|| "en ru".into())

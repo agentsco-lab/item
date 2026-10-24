@@ -8,6 +8,10 @@
 # browser and its GPU process together).
 [Unit]
 Description=Chromium, resident without a window
+# Only in item's session (item-session sets WAYLAND_DISPLAY for the user's
+# manager and starts this): every user's manager has the wants link, root's
+# too, which ran this without a compositor - Chromium 455 restarts a day.
+ConditionEnvironment=WAYLAND_DISPLAY=wayland-item
 After=graphical-session.target
 
 [Service]

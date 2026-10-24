@@ -901,8 +901,10 @@ impl State {
                     return;
                 }
                 if self.dock.holds(slot) {
-                    if let Some(Tap::Launch(command, panel, icon, ids)) = self.dock.up(slot) {
-                        self.launch(&command, &ids, icon, panel);
+                    match self.dock.up(slot) {
+                        Some(Tap::Launch(command, panel, icon, ids)) => self.launch(&command, &ids, icon, panel),
+                        Some(Tap::Turn(deck)) => self.ask_turn(deck),
+                        None => {}
                     }
                     self.needs_redraw = true;
                     return;

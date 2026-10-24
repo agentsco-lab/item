@@ -3,6 +3,10 @@
 # attaches to a session that is already up and answers at once.
 [Unit]
 Description=The agent's home session, warm (Claude Code in tmux)
+# Only in item's session (item-session sets WAYLAND_DISPLAY for the user's
+# manager and starts this): every user's manager has the wants link, root's
+# too, which ran this without a compositor - Chromium 455 restarts a day.
+ConditionEnvironment=WAYLAND_DISPLAY=wayland-item
 ConditionPathExists=%h/.local/bin/claude
 After=graphical-session.target
 
