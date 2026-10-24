@@ -200,7 +200,10 @@ boots after:
 sudo item-switch phosh
 ```
 
-`item-switch status` says which shell the phone starts.
+`item-switch status` says which shell the phone starts. Under item,
+iio-sensor-proxy (phosh's rotation and light sensor) is masked - item reads
+sensorfw itself, and the proxy once hung sensorfw for everyone after a
+resume; `item-switch phosh` brings it back.
 
 ## Where it stands
 

@@ -201,6 +201,10 @@ if [ "$1" = configure ]; then
     sync
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload || true
+        # Already the shell (an upgrade): what item-switch item masks, masked.
+        if systemctl is-enabled -q item.service 2>/dev/null; then
+            systemctl mask --now iio-sensor-proxy.service 2>/dev/null || true
+        fi
         busctl call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
     fi
 fi

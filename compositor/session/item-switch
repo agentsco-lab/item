@@ -8,6 +8,11 @@ item)
     systemctl stop phosh.service 2>/dev/null || true
     systemctl reset-failed item.service 2>/dev/null || true
     systemctl enable item.service item-face.service
+    # iio-sensor-proxy serves phosh (rotation, the light sensor); item reads
+    # sensorfw itself. Masked under item: after a resume on 2026-10-23 it
+    # stopped reading its sockets and sensorfwd, writing to them, hung for
+    # everyone. Back for phosh.
+    systemctl mask --now iio-sensor-proxy.service 2>/dev/null || true
     systemctl start item-face.service
     # The composer phosh used: item starts it afresh (item-composer-fresh).
     touch /run/item-composer-used
@@ -16,6 +21,8 @@ item)
 phosh)
     systemctl disable item.service
     systemctl stop item.service
+    systemctl unmask iio-sensor-proxy.service 2>/dev/null || true
+    systemctl start iio-sensor-proxy.service 2>/dev/null || true
     systemctl enable phosh.service
     /usr/libexec/item/item-composer-fresh
     # The user's session environment back to phosh's.

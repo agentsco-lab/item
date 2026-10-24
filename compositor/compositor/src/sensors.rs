@@ -13,7 +13,11 @@
 //! started again as it lights; the first hinge reading then is where the
 //! hinge is, not a place to glide to. A sensor sensorfw cannot give yet
 //! (still starting, a load past the bus's timeout, a socket gone) is asked
-//! for again, 2 s on and doubling to 30 s, on this thread's clock.
+//! for again, 2 s on and doubling to 30 s, on this thread's clock. Lit
+//! with sessions open and nothing read for SILENT (the accelerometer
+//! streams; sensorfwd hung on 2026-10-23 with its sockets open, its bus
+//! dead), the sockets are shut and the sensors asked for again - said in
+//! the log, where a frozen posture is otherwise silent.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -64,6 +68,8 @@ const STILL_AFTER_S: f64 = 0.12;
 /// doubling with each refusal to RETRY_MAX.
 const RETRY: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(30);
+/// Lit, sessions open, nothing read for this long: asked for again.
+const SILENT: Duration = Duration::from_secs(15);
 /// The system bus asked for this many times at start, a second apart.
 const BUS_TRIES: u32 = 5;
 
@@ -77,8 +83,8 @@ enum Reading {
 enum Event {
     Reading(Reading),
     Dark(bool),
-    /// A socket died: its sensor is asked for again.
-    Lost(&'static str),
+    /// A socket died (the sensor's, that session's): asked for again.
+    Lost(&'static str, i32),
 }
 
 /// A sensor as sensorfw has it.
@@ -87,6 +93,8 @@ struct Sensor {
     iface: &'static str,
     interval_ms: Option<i32>,
     session: Option<i32>,
+    /// Its data socket (read on a thread; shut from here when silent).
+    sock: Option<Arc<std::os::unix::net::UnixStream>>,
     /// When to ask sensorfw for it again, and how long after that.
     retry_at: Option<Instant>,
     backoff: Duration,
@@ -208,7 +216,7 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
         }
     };
 
-    let sensor = |name, iface, interval_ms| Sensor { name, iface, interval_ms, session: None, retry_at: None, backoff: RETRY };
+    let sensor = |name, iface, interval_ms| Sensor { name, iface, interval_ms, session: None, sock: None, retry_at: None, backoff: RETRY };
     let mut sensors = [
         sensor("hingesensor", "local.HingeSensor", None),
         sensor("accelerometersensor", "local.AccelerometerSensor", Some(ACCEL_INTERVAL_MS)),
@@ -232,6 +240,8 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
     let mut fresh = true;
     let mut gliding = false;
     let mut last_tick = now;
+    // When a reading last came while lit (the watchdog's clock).
+    let mut heard = now;
     let mut candidate: (&'static str, u32) = ("between", 0);
     let mut gravity_told: Option<[f64; 3]> = None;
     let mut roll: Option<f64> = None;
@@ -254,6 +264,10 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
         for at in sensors.iter().filter_map(|s| s.retry_at) {
             due = Some(due.map_or(at, |d| d.min(at)));
         }
+        if !dark && sensors.iter().any(|s| s.session.is_some()) {
+            let at = heard + SILENT;
+            due = Some(due.map_or(at, |d| d.min(at)));
+        }
         let event = match due {
             Some(at) => match events_rx.recv_timeout(at.saturating_duration_since(now)) {
                 Ok(e) => Some(e),
@@ -267,6 +281,9 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
         };
         let now = Instant::now();
         let mut changed: HashMap<&str, Value<'_>> = HashMap::new();
+        if !dark && matches!(event, Some(Event::Reading(_))) {
+            heard = now;
+        }
         match event {
             Some(Event::Dark(d)) => {
                 if d != dark {
@@ -290,6 +307,7 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
                         let _ = told.send(Said::Dark(true));
                     } else {
                         fresh = true;
+                        heard = now;
                         if let Some(h) = read_hinge(&system) {
                             let _ = events_tx.send(Event::Reading(Reading::Hinge(h)));
                         }
@@ -297,11 +315,13 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
                     tracing::info!("sensors: display {}", if dark { "off: not reading" } else { "on: reading" });
                 }
             }
-            Some(Event::Lost(name)) => {
+            Some(Event::Lost(name, session)) => {
                 // Asked for again on this loop's clock, not by sleeping here
-                // (three sockets dying together would serialize).
-                if let Some(s) = sensors.iter_mut().find(|s| s.name == name) {
+                // (three sockets dying together would serialize). A socket
+                // the watchdog shut, or of a session since replaced: nothing.
+                if let Some(s) = sensors.iter_mut().find(|s| s.name == name && s.session == Some(session)) {
                     s.session = None;
+                    s.sock = None;
                     s.retry_at = Some(now + s.backoff);
                 }
             }
@@ -408,6 +428,19 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
             Some(Event::Reading(_)) => {}
             None => {}
         }
+        // Lit, sessions open, nothing read for SILENT: the sockets shut
+        // (their threads end, Lost brings each sensor back on its clock).
+        if !dark && now >= heard + SILENT && sensors.iter().any(|s| s.session.is_some()) {
+            tracing::warn!("sensors: nothing read for {} s with the display lit: asked for again", SILENT.as_secs());
+            for s in sensors.iter_mut().filter(|s| s.session.is_some()) {
+                if let Some(sock) = s.sock.take() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                }
+                s.session = None;
+                s.retry_at = Some(now + s.backoff);
+            }
+            heard = now;
+        }
         // The sensors due to be asked for again.
         for s in sensors.iter_mut() {
             if s.retry_at.is_some_and(|at| at <= now) && attempt(&system, s, &events_tx, dark, now) && s.name == "hingesensor" {
@@ -465,6 +498,7 @@ fn attempt(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<
     if open(system, s, events) {
         s.retry_at = None;
         s.backoff = RETRY;
+        // (The watchdog's clock is set by the caller's readings.)
         if !dark {
             call(system, s, "start");
         }
@@ -495,13 +529,22 @@ fn open(system: &zbus::blocking::Connection, s: &mut Sensor, events: &Sender<Eve
     if let Some(ms) = s.interval_ms {
         let _ = system.call_method(Some(SENSORFW), format!("{MANAGER}/{}", s.name).as_str(), Some(s.iface), "setInterval", &(session, ms));
     }
+    let sock = match connect(session) {
+        Ok(sock) => Arc::new(sock),
+        Err(e) => {
+            tracing::warn!("sensors: {}'s socket: {e}", s.name);
+            s.session = None;
+            return false;
+        }
+    };
+    s.sock = Some(sock.clone());
     tracing::info!("sensors: {} session {session}", s.name);
     let (name, events) = (s.name, events.clone());
     let _ = std::thread::Builder::new().name(format!("sensor {name}")).spawn(move || {
-        if let Err(e) = read_socket(session, name, &events) {
+        if let Err(e) = read_socket(&sock, name, &events) {
             tracing::warn!("sensors: {name}'s socket: {e}");
         }
-        let _ = events.send(Event::Lost(name));
+        let _ = events.send(Event::Lost(name, session));
     });
     true
 }
@@ -528,16 +571,24 @@ fn read_hinge(system: &zbus::blocking::Connection) -> Option<u32> {
 }
 
 /// sensorfw's data socket for a session: a greeting byte, the session's
-/// number sent back, then frames of a count and as many readings - 16
-/// bytes for the hinge (u64 time, u32 value, 4 pad), 24 for x, y, z (u64,
-/// three f32, 4 pad). The last reading of a frame is the one told.
-fn read_socket(session: i32, name: &'static str, events: &Sender<Event>) -> std::io::Result<()> {
+/// number sent back (2 s for each, or no socket).
+fn connect(session: i32) -> std::io::Result<std::os::unix::net::UnixStream> {
     let mut sock = std::os::unix::net::UnixStream::connect(SOCKET)?;
     sock.set_read_timeout(Some(Duration::from_secs(2)))?;
+    sock.set_write_timeout(Some(Duration::from_secs(2)))?;
     let mut greeting = [0u8; 1];
     sock.read_exact(&mut greeting)?;
     sock.write_all(&session.to_le_bytes())?;
     sock.set_read_timeout(None)?;
+    sock.set_write_timeout(None)?;
+    Ok(sock)
+}
+
+/// The socket read: frames of a count and as many readings - 16 bytes for
+/// the hinge (u64 time, u32 value, 4 pad), 24 for x, y, z (u64, three f32,
+/// 4 pad). The last reading of a frame is the one told. Ends with the
+/// socket (closed by sensorfwd, or shut from the loop when silent).
+fn read_socket(mut sock: &std::os::unix::net::UnixStream, name: &'static str, events: &Sender<Event>) -> std::io::Result<()> {
     let size = if name == "hingesensor" { 16 } else { 24 };
     let mut pending: Vec<u8> = Vec::with_capacity(4096);
     let mut buf = [0u8; 8192];
