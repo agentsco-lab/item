@@ -50,8 +50,8 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
   dock's apps are kept warm: launched after boot and put away before a frame
   shows them, so a tap brings a window that exists.
 - **Windows by panel.** In the book a window takes its whole panel, or both
-  when carried across the hinge; stood up, a window takes the upper panel and
-  is put away with a swipe up on its cover. There is no status bar.
+  when carried across the hinge; turned, a window takes the screen's panel
+  and is put away with a swipe up on its cover. There is no status bar.
 - **The keyboard**, item's own: English and Russian, signs, and a "vibe"
   layer for the terminal (esc, tab, ctrl, the arrows, y/n) on which Claude
   Code is driven with a thumb; a microphone key that types what is said,
@@ -133,8 +133,8 @@ through PAM; the session by gnome-session. CV ID runs YuNet, SFace and
 MiniFASNetV2 as ONNX models with tract, the camera through GStreamer's
 droidcamsrc, as a service of its own (`item-face`). item Settings is GTK4
 and libadwaita. The keyboard is the compositor's own (the port's stevia
-stays as a choice); the hinge, gravity and the gyroscope are read in-process
-from sensorfw's sockets; the browser is Debian's Chromium on Wayland. All of
+stays as a choice); the hinge is read in-process from sensorfw's sockets,
+gravity and the gyroscope too while the turn is the sensors'; the browser is Debian's Chromium on Wayland. All of
 it ships as one Debian package built on the computer for aarch64
 (`compositor/tools/package-deb.sh`).
 

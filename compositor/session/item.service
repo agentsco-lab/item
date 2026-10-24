@@ -10,6 +10,11 @@ Documentation=https://github.com/agentsco-lab/item
 Conflicts=getty@tty1.service
 After=getty@tty1.service rc-local.service plymouth-quit-wait.service systemd-user-sessions.service
 Wants=dbus.socket item-face.service
+# The sensors (the hinge for the camera's fold and the lock; gravity and
+# the gyroscope when the turn is theirs). sensorfwd is not enabled on the
+# port: iio-sensor-proxy pulled it in, and item-switch masks that under
+# item. Not After: item asks for the sensors again until sensorfwd is up.
+Wants=sensorfwd.service
 After=dbus.socket item-face.service
 After=lxc@android.service
 BindsTo=android-service@hwcomposer.service

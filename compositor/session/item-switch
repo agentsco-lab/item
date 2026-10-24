@@ -13,6 +13,8 @@ item)
     # stopped reading its sockets and sensorfwd, writing to them, hung for
     # everyone. Back for phosh.
     systemctl mask --now iio-sensor-proxy.service 2>/dev/null || true
+    # sensorfwd was the proxy's to pull in; item.service wants it now.
+    systemctl start sensorfwd.service 2>/dev/null || true
     systemctl start item-face.service
     # The composer phosh used: item starts it afresh (item-composer-fresh).
     touch /run/item-composer-used

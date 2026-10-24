@@ -1110,8 +1110,6 @@ impl State {
         self.spawn_app(&entry.exec, entry.ids.first().map(String::as_str).unwrap_or("app"));
     }
 
-    /// An app onto a panel, from the dock or the grid: a window of it put
-    /// away comes back; else it is launched under the curtain.
     /// The dock's turn button tapped: the panel it was on becomes the deck
     /// (the other the screen); tapped while turned, the book again. The
     /// turn itself is main.rs's, each frame, with the blur.
@@ -1142,6 +1140,8 @@ impl State {
         self.needs_redraw = true;
     }
 
+    /// An app onto a panel, from the dock or the grid: a window of it put
+    /// away comes back; else it is launched under the curtain.
     pub fn launch(&mut self, exec: &str, ids: &[String], icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>, panel: usize) {
         // The frame turned (layout.rs): every launch is the screen's, from
         // whichever half of the taskbar; the curtain rises there.

@@ -14,8 +14,9 @@
 //! hinge is, not a place to glide to. A sensor sensorfw cannot give yet
 //! (still starting, a load past the bus's timeout, a socket gone) is asked
 //! for again, 2 s on and doubling to 30 s, on this thread's clock. Lit
-//! with sessions open and nothing read for SILENT (the accelerometer
-//! streams; sensorfwd hung on 2026-10-23 with its sockets open, its bus
+//! with the accelerometer's session open and nothing read for SILENT (it
+//! streams; the hinge alone tells only changes, and silence from it is
+//! nothing; sensorfwd hung on 2026-10-23 with its sockets open, its bus
 //! dead), the sockets are shut and the sensors asked for again - said in
 //! the log, where a frozen posture is otherwise silent.
 
@@ -275,7 +276,7 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
         for at in sensors.iter().filter_map(|s| s.retry_at) {
             due = Some(due.map_or(at, |d| d.min(at)));
         }
-        if !dark && sensors.iter().any(|s| s.session.is_some()) {
+        if !dark && streaming(&sensors) {
             let at = heard + SILENT;
             due = Some(due.map_or(at, |d| d.min(at)));
         }
@@ -463,7 +464,7 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
         }
         // Lit, sessions open, nothing read for SILENT: the sockets shut
         // (their threads end, Lost brings each sensor back on its clock).
-        if !dark && now >= heard + SILENT && sensors.iter().any(|s| s.session.is_some()) {
+        if !dark && now >= heard + SILENT && streaming(&sensors) {
             tracing::warn!("sensors: nothing read for {} s with the display lit: asked for again", SILENT.as_secs());
             for s in sensors.iter_mut().filter(|s| s.session.is_some()) {
                 if let Some(sock) = s.sock.take() {
@@ -523,6 +524,12 @@ fn run(events_tx: Sender<Event>, events_rx: Receiver<Event>, told: Sender<Said>,
             publish(changed);
         }
     }
+}
+
+/// Whether a stream's session is open (the accelerometer's: readings
+/// every ACCEL_INTERVAL_MS while lit), which the watchdog can hear.
+fn streaming(sensors: &[Sensor]) -> bool {
+    sensors.iter().any(|s| s.name == "accelerometersensor" && s.session.is_some())
 }
 
 fn sensor(name: &'static str, iface: &'static str, interval_ms: Option<i32>) -> Sensor {
