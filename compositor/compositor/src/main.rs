@@ -495,7 +495,10 @@ impl Data {
             } else {
                 self.state.turn_asked
             };
-            let held = self.state.lock.locked || self.state.setup.active || self.state.tour.watching() || self.state.picker.is_open();
+            // (The tour's steps hold it; the hint for apps after them does
+            // not: it waited for an app opened and put away, and the dock's
+            // turn button did nothing until then - 2026-10-25.)
+            let held = self.state.lock.locked || self.state.setup.active || self.state.tour.active() || self.state.picker.is_open();
             let was = crate::layout::turn();
             let dock_places = self.state.dock.places_now(hybris_hwc::now_ns());
             if turn != was && !held && crate::layout::set_turn(turn) {
