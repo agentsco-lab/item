@@ -1,7 +1,16 @@
-//! The first setup, once: welcome, the PIN (the face taken as it is typed), a
-//! finger, all set. The left panel says what and why, the right one is where
-//! you act.
+//! The first setup, once: welcome, Wi-Fi (and whether item may go online),
+//! the PIN (the face taken as it is typed), a finger, all set. The left
+//! panel says what and why, the right one is where you act.
 //!
+//! - **Wi-Fi**, as Android's setup asks first: the networks NetworkManager
+//!   sees on the right, the strongest first, the one joined marked; a tap
+//!   joins it (`nmcli device wifi connect`), NetworkManager asking for its
+//!   password through item's own agent (nm.rs) in the system's dialog, over
+//!   the setup. Skippable. Joined, the clock is set from the network
+//!   (systemd-timesyncd, by itself) while the rest of the setup goes on.
+//! - **Online**: joined, the setup asks whether item may reach the network
+//!   by itself - the weather from met.no, the port's updates from GitHub
+//!   (prefs::online, off unless said; item sends nothing anywhere else).
 //! - **The PIN.** Droidian's images come with 1234, found by trying it with
 //!   PAM at the start: then a new PIN of four digits is asked for twice and
 //!   set, else the one there is asked for once. There is no OK: a PIN is
@@ -103,6 +112,14 @@ const PIN_MARK_Y: f64 = 120.0;
 const PRINT_R: f64 = 92.0;
 /// The reader, under the power key (lock.rs's POWER_Y).
 const READER_Y: f64 = 455.0;
+/// The networks' rows on the right: from here down, this tall, this many
+/// at most; scanned again this often while shown.
+const NETS_Y: f64 = 170.0;
+const NET_H: f64 = 56.0;
+const NET_GAP: f64 = 10.0;
+const NET_W: f64 = 420.0;
+const NETS_MAX: usize = 7;
+const RESCAN_NS: u64 = 8_000_000_000;
 const ARROW_ICON: &str = "/usr/share/icons/Adwaita/symbolic/actions/go-next-symbolic.svg";
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -115,6 +132,10 @@ const NOTE: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Step {
     Welcome,
+    /// The networks: one joined, or skipped.
+    Wifi,
+    /// Joined: may item go online by itself.
+    Online,
     /// Finding out whether the PIN is Droidian's.
     Checking,
     PinNew,
@@ -230,6 +251,67 @@ impl Orb {
     }
 }
 
+/// A Wi-Fi network as nmcli lists it.
+#[derive(Clone, Debug, PartialEq)]
+struct Net {
+    ssid: String,
+    signal: u8,
+    secure: bool,
+    joined: bool,
+}
+
+/// nmcli's terse line split at its unescaped colons (`\:` is a colon in a
+/// name, `\\` a backslash).
+fn terse(line: &str) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(n) = chars.next() {
+                    out.last_mut().unwrap().push(n);
+                }
+            }
+            ':' => out.push(String::new()),
+            c => out.last_mut().unwrap().push(c),
+        }
+    }
+    out
+}
+
+/// The networks in reach, the joined first, then by signal; each name once.
+fn scan() -> Vec<Net> {
+    let _ = std::process::Command::new("nmcli").args(["radio", "wifi", "on"]).output();
+    let out = std::process::Command::new("nmcli").args(["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "auto"]).output();
+    let Ok(out) = out else { return Vec::new() };
+    let mut nets: Vec<Net> = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let f = terse(line);
+        let [used, ssid, signal, security] = &f[..] else { continue };
+        if ssid.is_empty() {
+            continue;
+        }
+        let net = Net { ssid: ssid.clone(), signal: signal.parse().unwrap_or(0), secure: !security.is_empty() && security != "--", joined: used == "*" };
+        match nets.iter_mut().find(|n| n.ssid == net.ssid) {
+            Some(n) => {
+                n.signal = n.signal.max(net.signal);
+                n.joined |= net.joined;
+            }
+            None => nets.push(net),
+        }
+    }
+    nets.sort_by(|a, b| b.joined.cmp(&a.joined).then(b.signal.cmp(&a.signal)));
+    nets.truncate(NETS_MAX);
+    nets
+}
+
+/// A network's row: its name, and what it is (secured, joining, joined).
+struct NetRow {
+    net: Net,
+    name: Label,
+    state: Label,
+}
+
 /// A step's words, and when they come in.
 #[derive(Clone)]
 struct Words {
@@ -307,6 +389,16 @@ pub struct Setup {
     button2: Label,
     arrow: Option<MemoryRenderBuffer>,
     id: Id,
+    /// Wi-Fi: the last scan's answer (from a thread), when it was asked,
+    /// the rows shown; the network being joined, and the answer.
+    scanned: Arc<Mutex<Option<Vec<Net>>>>,
+    scan_at: u64,
+    nets: Vec<NetRow>,
+    net_bg: MemoryRenderBuffer,
+    net_bg_on: MemoryRenderBuffer,
+    joining: Option<String>,
+    join_failed: Option<String>,
+    joined_answer: Arc<Mutex<Option<(String, Result<(), String>)>>>,
 }
 
 impl Setup {
@@ -372,6 +464,14 @@ impl Setup {
             button2: Label::new(19.0, WHITE),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
             id: Id::new(),
+            scanned: Default::default(),
+            scan_at: 0,
+            nets: Vec::new(),
+            net_bg: crate::grid::rounded(NET_W, NET_H, 16.0, [36, 36, 36, 36]),
+            net_bg_on: crate::grid::rounded(NET_W, NET_H, 16.0, [64, 64, 64, 64]),
+            joining: None,
+            join_failed: None,
+            joined_answer: Default::default(),
         }
     }
 
@@ -498,7 +598,20 @@ impl Setup {
             self.moved_at = now + crate::pinpad::SPLIT_NS;
         }
         match step {
-            Step::Welcome => self.text("Hello", &["Let's make this Duo yours:", "a PIN, a fingerprint, and you're in."], "Get started", WELCOME_Y + 90.0),
+            Step::Welcome => self.text("Hello", &["Let's make this Duo yours:", "Wi-Fi, a PIN, a fingerprint, and you're in."], "Get started", WELCOME_Y + 90.0),
+            Step::Wifi => {
+                let button = if self.joined().is_some() { "Next" } else { "Skip" };
+                self.text("Wi-Fi", &["Choose a network.", "The clock is set from it,", "while you finish the setup."], button, 150.0);
+                self.scan_now();
+            }
+            Step::Online => {
+                let name = self.joined().unwrap_or_default();
+                let first = format!("Connected to “{name}”.");
+                self.text("Online", &[&first, "item can also get the weather (met.no)", "and look for updates (GitHub).", "Nothing else is sent anywhere."], "Allow", 150.0);
+                if let Some((_, regular)) = &self.fonts {
+                    self.button2.set(regular, "Not now");
+                }
+            }
             Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
             Step::PinNew => {
                 if was != Step::PinAgain && was != Step::Saving {
@@ -564,6 +677,10 @@ impl Setup {
                 let breath = 1.0 + 0.025 * (t / BREATH_NS * std::f64::consts::TAU).sin();
                 Orb { r: 52.0 * breath, ..orb }
             }
+            // A small drop over the networks, empty; on the left while
+            // asked whether to go online.
+            Step::Wifi => Orb { x: middle(1), y: PIN_MARK_Y - 10.0, r: PIN_DROP_R, ..orb },
+            Step::Online => Orb { r: 40.0, ..orb },
             Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
                 // A small drop over the pad, filling with coral: a third
                 // for the new PIN, two for it again, full as it is saved;
@@ -632,6 +749,9 @@ impl Setup {
             return false;
         }
         let mut changed = false;
+        if self.step == Step::Wifi {
+            changed |= self.poll_wifi();
+        }
         if self.step == Step::Checking {
             let found = *self.is_default.lock().unwrap();
             if let Some(default) = found {
@@ -773,6 +893,129 @@ impl Setup {
         self.pin_for_keyring.take()
     }
 
+    /// The network joined, as the last scan saw it.
+    fn joined(&self) -> Option<String> {
+        self.nets.iter().find(|r| r.net.joined).map(|r| r.net.ssid.clone())
+    }
+
+    /// The networks looked for again, on a thread.
+    fn scan_now(&mut self) {
+        self.scan_at = hybris_hwc::now_ns();
+        let (slot, wake) = (self.scanned.clone(), self.wake.clone());
+        std::thread::spawn(move || {
+            let nets = scan();
+            *slot.lock().unwrap() = Some(nets);
+            wake.ping();
+        });
+    }
+
+    /// `ssid` joined, on a thread: NetworkManager asks for its password
+    /// through item's agent if it needs one (the dialog over the setup).
+    fn join(&mut self, ssid: &str) {
+        tracing::info!("setup: joining a Wi-Fi network");
+        self.joining = Some(ssid.to_owned());
+        self.join_failed = None;
+        self.refresh_rows();
+        if self.dry {
+            *self.joined_answer.lock().unwrap() = Some((ssid.to_owned(), Err("dry".into())));
+            self.wake.ping();
+            return;
+        }
+        let (slot, wake, ssid) = (self.joined_answer.clone(), self.wake.clone(), ssid.to_owned());
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("nmcli").args(["--wait", "60", "device", "wifi", "connect", &ssid]).output();
+            let result = match out {
+                Ok(o) if o.status.success() => Ok(()),
+                Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_owned()),
+                Err(e) => Err(e.to_string()),
+            };
+            *slot.lock().unwrap() = Some((ssid, result));
+            wake.ping();
+        });
+    }
+
+    /// The Wi-Fi step's answers: a scan, a join; scanned again now and then.
+    fn poll_wifi(&mut self) -> bool {
+        let mut changed = false;
+        let scanned = self.scanned.lock().unwrap().take();
+        if let Some(nets) = scanned {
+            let was = self.joined();
+            let keep: Vec<Net> = nets;
+            self.nets = keep.into_iter().map(|net| NetRow { net, name: Label::new(19.0, WHITE), state: Label::new(16.0, NOTE) }).collect();
+            self.refresh_rows();
+            if was.is_none() && self.joined().is_some() && self.joining.is_none() {
+                self.relabel_button();
+            }
+            changed = true;
+        }
+        let answer = self.joined_answer.lock().unwrap().take();
+        if let Some((ssid, result)) = answer {
+            self.joining = None;
+            match result {
+                Ok(()) => {
+                    tracing::info!("setup: Wi-Fi joined");
+                    for r in &mut self.nets {
+                        r.net.joined = r.net.ssid == ssid;
+                    }
+                    // The clock: systemd-timesyncd tries as the network
+                    // changes, by itself.
+                }
+                Err(e) => {
+                    tracing::warn!("setup: Wi-Fi not joined: {}", e.lines().next().unwrap_or(""));
+                    self.join_failed = Some(ssid);
+                }
+            }
+            self.refresh_rows();
+            self.relabel_button();
+            changed = true;
+        }
+        if self.joining.is_none() && hybris_hwc::now_ns() >= self.scan_at + RESCAN_NS {
+            self.scan_now();
+        }
+        changed
+    }
+
+    /// The button's word as the network stands: Next once joined.
+    fn relabel_button(&mut self) {
+        let word = if self.joined().is_some() { "Next" } else { "Skip" };
+        if let Some((_, regular)) = &self.fonts {
+            self.words.button.set(regular, word);
+        }
+    }
+
+    /// The rows' words.
+    fn refresh_rows(&mut self) {
+        let Some((_, regular)) = &self.fonts else { return };
+        for r in &mut self.nets {
+            let (state, colour) = if self.joining.as_deref() == Some(r.net.ssid.as_str()) {
+                ("Connecting…", ACCENT)
+            } else if r.net.joined {
+                ("Connected", GREEN)
+            } else if self.join_failed.as_deref() == Some(r.net.ssid.as_str()) {
+                ("Didn't connect", AMBER)
+            } else if r.net.secure {
+                ("Secured", [1.0, 1.0, 1.0, 0.5])
+            } else {
+                ("Open", [1.0, 1.0, 1.0, 0.5])
+            };
+            r.name.set(regular, &r.net.ssid);
+            r.state = Label::new(16.0, colour);
+            r.state.set(regular, state);
+        }
+    }
+
+    /// A network's row on the right panel.
+    fn net_rect(i: usize) -> Rectangle<f64, smithay::utils::Logical> {
+        let right = layout::panels()[1];
+        Rectangle::new(((right.loc.x as f64 + (right.size.w as f64 - NET_W) / 2.0), NETS_Y + i as f64 * (NET_H + NET_GAP)).into(), (NET_W, NET_H).into())
+    }
+
+    /// Whether the system's dialog may come over the setup: a Wi-Fi
+    /// network's password, asked while one is joined.
+    pub fn wants_wifi_dialog(&self) -> bool {
+        self.holds_screen() && self.step == Step::Wifi
+    }
+
     fn button_rect() -> Rectangle<f64, smithay::utils::Logical> {
         let right = layout::panels()[1];
         Rectangle::new(((right.loc.x as f64 + (right.size.w as f64 - BUTTON_W) / 2.0), 640.0).into(), (BUTTON_W, BUTTON_H).into())
@@ -808,6 +1051,20 @@ impl Setup {
             }
             return;
         }
+        if self.step == Step::Wifi {
+            if let Some(i) = (0..self.nets.len()).find(|&i| Self::net_rect(i).contains((x, y))) {
+                let net = self.nets[i].net.clone();
+                if !net.joined && self.joining.is_none() {
+                    self.join(&net.ssid);
+                }
+                return;
+            }
+        }
+        if self.step == Step::Online && Self::button2_rect().contains((x, y)) {
+            tracing::info!("setup: item stays offline");
+            self.go(Step::Checking);
+            return;
+        }
         if self.step == Step::FingerKnown && Self::button2_rect().contains((x, y)) {
             tracing::info!("setup: another finger");
             self.go(Step::Finger);
@@ -821,7 +1078,19 @@ impl Setup {
         }
         match self.step {
             Step::FingerKnown => self.go(Step::Done),
-            Step::Welcome => self.go(Step::Checking),
+            Step::Welcome => self.go(Step::Wifi),
+            Step::Wifi => {
+                let next = if self.joined().is_some() { Step::Online } else { Step::Checking };
+                tracing::info!("setup: Wi-Fi {}", if next == Step::Online { "joined" } else { "skipped" });
+                self.go(next);
+            }
+            Step::Online => {
+                tracing::info!("setup: item may go online");
+                if !self.dry {
+                    crate::prefs::write("online", "on");
+                }
+                self.go(Step::Checking);
+            }
             Step::Finger => {
                 // Later: the reader stops.
                 tracing::info!("setup: the finger later");
@@ -1053,7 +1322,17 @@ impl Setup {
             put(&mut out, &w.button.buffer, b.loc.x + (BUTTON_W - w.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - w.button.extent.h as f64) / 2.0 + dy, a, None);
             put(&mut out, &self.button_bg.get(), b.loc.x, b.loc.y + dy, a, None);
         }
-        if self.step == Step::FingerKnown {
+        if self.step == Step::Wifi {
+            for (i, row) in self.nets.iter().enumerate() {
+                let (a, dy) = coming(self.right_at() + WORDS_GAP_NS * i as u64);
+                let r = Self::net_rect(i);
+                let bg = if row.net.joined || self.joining.as_deref() == Some(row.net.ssid.as_str()) { &self.net_bg_on } else { &self.net_bg };
+                put(&mut out, &row.name.buffer, r.loc.x + 22.0, r.loc.y + (NET_H - row.name.extent.h as f64) / 2.0 + dy, a, None);
+                put(&mut out, &row.state.buffer, r.loc.x + NET_W - 22.0 - row.state.extent.w as f64, r.loc.y + (NET_H - row.state.extent.h as f64) / 2.0 + dy, a, None);
+                put(&mut out, bg, r.loc.x, r.loc.y + dy, a, None);
+            }
+        }
+        if self.step == Step::FingerKnown || self.step == Step::Online {
             let (a, dy) = coming(self.right_at() + WORDS_GAP_NS);
             let b = Self::button2_rect();
             put(&mut out, &self.button2.buffer, b.loc.x + (BUTTON_W - self.button2.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - self.button2.extent.h as f64) / 2.0 + dy, a, None);

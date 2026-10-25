@@ -533,6 +533,12 @@ impl Screen {
         // The first setup: its circle over its words (setup.rs, orb.frag).
         // Its rings over its words; its drop under the dark the setup lays
         // over the wallpaper, darkened with what it bends.
+        // The system's dialog over the setup while it asks during it (a
+        // Wi-Fi password); else under the lock screen, below.
+        let dialog_over_setup = state.setup.active && state.dialog.is_open();
+        if dialog_over_setup {
+            elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        }
         let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns)).unwrap_or_default();
         elements.extend(rings);
         elements.extend(state.setup.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
@@ -591,7 +597,9 @@ impl Screen {
             elements.extend(self.lock_wall(ldx, rdx));
         }
         // The system's dialog, under the lock screen, over everything else.
-        elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        if !dialog_over_setup {
+            elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        }
         // The lock screen going: a picture of it taken as it began, in a
         // wave from where it was touched, or as doors (door.rs).
         let turn = state.lock.turning(frame_ns).map(|(style, k, start)| (style, k, start, state.lock.touched_at()));

@@ -743,8 +743,11 @@ impl Data {
         self.state.keyring.service(self.state.lock.locked || self.state.setup.holds_screen());
         // polkit's asks: the dialog, once the phone is unlocked; the PIN's
         // answer; an ask taken back.
-        if !self.state.lock.locked && !self.state.setup.holds_screen() && !self.state.dialog.is_open() {
-            if let Some((message, _action)) = self.state.polkit.waiting() {
+        // (During the first setup, only a Wi-Fi password, while one is
+        // joined.)
+        let setup_wifi = self.state.setup.wants_wifi_dialog();
+        if !self.state.lock.locked && (!self.state.setup.holds_screen() || setup_wifi) && !self.state.dialog.is_open() {
+            if let Some((message, _action)) = self.state.polkit.waiting().filter(|_| !setup_wifi) {
                 self.state.asker = state::Asker::Polkit;
                 self.state.dialog.ask_pin("Authentication required", &message);
                 self.state.needs_redraw = true;

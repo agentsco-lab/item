@@ -329,8 +329,9 @@ impl State {
         }
         self.lock.last_touch_ns = hybris_hwc::now_ns();
         self.idle.active(self.lock.last_touch_ns);
-        // The first setup: every touch is its own (setup.rs).
-        if self.setup.holds_screen() {
+        // The first setup: every touch is its own (setup.rs) - but the
+        // system's dialog's over it (a Wi-Fi password).
+        if self.setup.holds_screen() && !self.dialog.is_open() {
             match contact {
                 Contact::Down(slot, pos, _) if self.setup_touch.is_none() => {
                     self.setup.down(pos.x, pos.y);
