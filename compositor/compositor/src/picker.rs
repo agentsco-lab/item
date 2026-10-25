@@ -39,6 +39,10 @@ use crate::walls::Vignette;
 /// A picture on the pictures' sheet, logical px, and between them.
 const THUMB_W: f64 = 180.0;
 const THUMB_H: f64 = 101.0;
+/// With one picture on each panel the pictures are tall, 3:4 as a panel
+/// is, in one row (walls.rs's THUMB_TALL_PX).
+const TALL_W: f64 = 180.0;
+const TALL_H: f64 = 240.0;
 const GAP: f64 = 16.0;
 /// The sheets' distance from the bottom, their side margin.
 /// The accent's row under the pictures (accent.rs): a swatch each, the
@@ -207,6 +211,8 @@ pub struct Picker {
     /// The finger that opened it, held till it lets go.
     opener: Option<TouchSlot>,
     ring: MemoryRenderBuffer,
+    ring_tall: MemoryRenderBuffer,
+    placeholder_tall: MemoryRenderBuffer,
     /// The fixed swatches; the wallpaper's, drawn again with it (and its
     /// hole); the light ring round the one chosen.
     swatches: Vec<MemoryRenderBuffer>,
@@ -334,6 +340,8 @@ impl Picker {
             run: None,
             opener: None,
             ring: crate::grid::rounded(THUMB_W + 8.0, THUMB_H + 8.0, 17.0, [235, 235, 235, 235]),
+            ring_tall: crate::grid::rounded(TALL_W + 8.0, TALL_H + 8.0, 17.0, [235, 235, 235, 235]),
+            placeholder_tall: crate::grid::rounded(TALL_W, TALL_H, 26.0 / 2.0, [255, 255, 255, 12]),
             swatches: crate::accent::PALETTE.iter().map(|c| crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, *c)).collect(),
             wall_swatch: std::cell::RefCell::new((0, crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()))),
             hole: crate::grid::rounded(SWATCH - 12.0, SWATCH - 12.0, (SWATCH - 12.0) / 2.0, [14, 16, 20, 255]),
@@ -420,7 +428,7 @@ impl Picker {
     /// The sheets' height: the pictures' or the look's, whichever is more,
     /// going from one to the other eased.
     fn sheet_h(&self) -> f64 {
-        let pictures = 2.0 * SHEET_PAD + HEAD_H + 2.0 * THUMB_H + GAP;
+        let pictures = 2.0 * SHEET_PAD + HEAD_H + if self.tall() { TALL_H } else { 2.0 * THUMB_H + GAP };
         let look = 2.0 * SHEET_PAD + self.look_rows().len() as f64 * ROW_H;
         eased(&self.lift_shown, pictures.max(look), self.frame.get())
     }
@@ -476,22 +484,37 @@ impl Picker {
         (0..count).filter(|&i| self.group != Some(i)).collect()
     }
 
+    /// The pictures tall (one on each panel: 3:4, one row) or wide (16:9,
+    /// two rows).
+    fn tall(&self) -> bool {
+        self.each_mark.is_some()
+    }
+
+    fn tile(&self) -> (f64, f64) {
+        if self.tall() { (TALL_W, TALL_H) } else { (THUMB_W, THUMB_H) }
+    }
+
+    fn rows(&self) -> usize {
+        if self.tall() { 1 } else { 2 }
+    }
+
     /// Picture `i`'s column and row, and the gap before it (Unsplash's batch
     /// starts a column of its own, after SECTION_GAP).
     fn place(&self, i: usize) -> (usize, usize, f64) {
+        let rows = self.rows();
         match self.group {
             Some(g) if i > g => {
                 let j = i - g - 1;
-                (g.div_ceil(2) + j / 2, j % 2, SECTION_GAP)
+                (g.div_ceil(rows) + j / rows, j % rows, SECTION_GAP)
             }
-            _ => (i / 2, i % 2, 0.0),
+            _ => (i / rows, i % rows, 0.0),
         }
     }
 
     /// Picture `i`'s left edge on the sheet, unscrolled.
     fn place_x(&self, i: usize) -> f64 {
         let (col, _, gap) = self.place(i);
-        SHEET_PAD + col as f64 * (THUMB_W + GAP) + gap
+        SHEET_PAD + col as f64 * (self.tile().0 + GAP) + gap
     }
 
     /// Where Unsplash's batch starts on the sheet, unscrolled.
@@ -505,13 +528,14 @@ impl Picker {
     fn thumb(&self, i: usize, scroll: f64) -> Rectangle<f64, Logical> {
         let s = self.sheet(0);
         let (_, row, _) = self.place(i);
+        let (w, h) = self.tile();
         let x = s.loc.x + self.place_x(i) - scroll;
-        let y = s.loc.y + SHEET_PAD + HEAD_H + row as f64 * (THUMB_H + GAP);
-        Rectangle::new((x, y).into(), (THUMB_W, THUMB_H).into())
+        let y = s.loc.y + SHEET_PAD + HEAD_H + row as f64 * (h + GAP);
+        Rectangle::new((x, y).into(), (w, h).into())
     }
 
     fn max_scroll(&self, count: usize) -> f64 {
-        let last = self.items(count).last().map_or(0.0, |&i| self.place_x(i) + THUMB_W);
+        let last = self.items(count).last().map_or(0.0, |&i| self.place_x(i) + self.tile().0);
         (last + SHEET_PAD - self.sheet(0).size.w).max(0.0)
     }
 
@@ -762,7 +786,7 @@ impl Picker {
     /// The one on in the middle of the strip, as far as it goes.
     pub fn recenter(&mut self, current: usize, count: usize) {
         let w = self.sheet(0).size.w;
-        let at = self.place_x(current) + THUMB_W / 2.0;
+        let at = self.place_x(current) + self.tile().0 / 2.0;
         self.scroll = (at - w / 2.0).clamp(0.0, self.max_scroll(count));
         self.run = None;
     }
@@ -1251,7 +1275,7 @@ impl Picker {
                 if let (Some((_, l)), Some(bx)) = (cached.as_ref(), self.batch_x()) {
                     let x = pics.loc.x + bx - scroll;
                     if x < pics.loc.x + pics.size.w - 40.0 {
-                        let y = pics.loc.y + SHEET_PAD + HEAD_H + THUMB_H - l.extent.h as f64 / 2.0;
+                        let y = pics.loc.y + SHEET_PAD + HEAD_H + self.tile().1 / 2.0 - l.extent.h as f64 / 2.0;
                         put(&mut out, &l.buffer, x.max(pics.loc.x + SHEET_PAD), y, lift);
                     }
                 }
@@ -1281,13 +1305,13 @@ impl Picker {
                 put(&mut out, &self.badge, b.loc.x, b.loc.y, lift);
             }
             if whole && (i == current || self.ring_extra == Some(i)) {
-                put(&mut out, &self.ring, r.loc.x - 4.0, r.loc.y - 4.0, lift);
+                put(&mut out, if self.tall() { &self.ring_tall } else { &self.ring }, r.loc.x - 4.0, r.loc.y - 4.0, lift);
             }
             crop.set((!whole).then_some(part));
             match &thumbs[i] {
                 Some(t) => put(&mut out, t, x0, r.loc.y, lift),
                 // Still coming (Unsplash's batch): its place shown.
-                None => put(&mut out, &self.placeholder, x0, r.loc.y, lift),
+                None => put(&mut out, if self.tall() { &self.placeholder_tall } else { &self.placeholder }, x0, r.loc.y, lift),
             }
             crop.set(None);
         }

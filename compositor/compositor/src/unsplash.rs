@@ -252,7 +252,8 @@ fn batch(tall: bool, seen: &HashSet<String>, keep: &mut dyn FnMut(Photo, (Vec<u8
                 download_location: s(&p["links"]["download_location"]),
                 raw: s(&p["urls"]["raw"]),
             };
-            let url = format!("{}&w={}&h={}&fit=crop&fm=jpg&q=75", photo.raw, THUMB.0, THUMB.1);
+            let (tw, th) = if tall { crate::walls::THUMB_TALL_PX } else { THUMB };
+            let url = format!("{}&w={tw}&h={th}&fit=crop&fm=jpg&q=75", photo.raw);
             let Some((mut px, w, h)) = fetch(&url, None).ok().and_then(|b| crate::walls::decode_bytes(&b)) else { continue };
             if !dark(&px) {
                 continue;

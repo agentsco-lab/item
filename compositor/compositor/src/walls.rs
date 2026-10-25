@@ -3,6 +3,7 @@
 //! The set is the pictures in `~/.local/share/item/walls` and the package's
 //! `/usr/share/item/walls` (the user's first, by name), each with a small
 //! picture beside it for choosing (`thumb-NAME.jpg`, made from the picture
+//! - 16:9; a tall one's `thumbt-NAME.jpg`, 3:4 as a panel is -
 //! when it is missing). Before them comes Aurora, the wallpaper drawn by the
 //! compositor itself (its small picture `thumb-aurora`).
 //!
@@ -206,7 +207,7 @@ fn kept() -> PathBuf {
 /// The kept choice and the owner's pictures, as one text: a change to it
 /// is a change from outside.
 fn outside() -> String {
-    let mut names: Vec<String> = std::fs::read_dir(home().join(".local/share/item/walls")).map(|d| d.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| !n.starts_with("thumb-")).collect()).unwrap_or_default();
+    let mut names: Vec<String> = std::fs::read_dir(home().join(".local/share/item/walls")).map(|d| d.flatten().filter_map(|e| e.file_name().into_string().ok()).filter(|n| !n.starts_with("thumb-") && !n.starts_with("thumbt-")).collect()).unwrap_or_default();
     names.sort();
     format!("{}\n{}", std::fs::read_to_string(kept()).unwrap_or_default(), names.join("\n"))
 }
@@ -357,6 +358,8 @@ const BLACK: &str = "black";
 
 /// The small pictures' size, px.
 const THUMB_PX: (u32, u32) = (360, 202);
+/// A tall picture's small one, px (3:4, as a panel; picker.rs's TALL).
+pub(crate) const THUMB_TALL_PX: (u32, u32) = (360, 480);
 
 /// A source picture kept at most this many px (12 Mpx, 48 MB in RGBA): the
 /// phone's pictures are 12-26 Mpx (50-104 MB each, three kept). The
@@ -462,7 +465,7 @@ impl Walls {
         let mut files: Vec<String> = Vec::new();
         for d in &dirs {
             for n in std::fs::read_dir(d).map(|d| d.flatten().filter_map(|e| e.file_name().into_string().ok()).collect::<Vec<_>>()).unwrap_or_default() {
-                if (n.ends_with(".jpg") || n.ends_with(".jpeg")) && !n.starts_with("thumb-") && !files.contains(&n) {
+                if (n.ends_with(".jpg") || n.ends_with(".jpeg")) && !n.starts_with("thumb-") && !n.starts_with("thumbt-") && !files.contains(&n) {
                     files.push(n);
                 }
             }
@@ -629,7 +632,7 @@ impl Walls {
             return;
         }
         let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
-        for f in [name.to_owned(), format!("{stem}.txt"), format!("thumb-{name}")] {
+        for f in [name.to_owned(), format!("{stem}.txt"), format!("thumb-{name}"), format!("thumbt-{name}")] {
             let _ = std::fs::remove_file(own.join(f));
         }
         tracing::info!("walls: {name} out of the set");
@@ -923,7 +926,9 @@ impl Walls {
         }
         self.thumbs_asked = true;
         let names = self.names.clone();
-        let paths: Vec<(PathBuf, PathBuf)> = names.iter().map(|n| (self.path(&format!("thumb-{n}")), self.path(n))).collect();
+        // A tall picture's small one is tall too (3:4, a panel's shape).
+        let tall: Vec<bool> = names.iter().map(|n| self.tall.contains(n)).collect();
+        let paths: Vec<(PathBuf, PathBuf)> = names.iter().zip(&tall).map(|(n, &t)| (self.path(&format!("{}{n}", if t { "thumbt-" } else { "thumb-" })), self.path(n))).collect();
         // The strip's first: those it shows now.
         let mut order = self.shown.clone();
         order.extend((0..names.len()).filter(|i| !self.shown.contains(i)));
@@ -939,12 +944,12 @@ impl Walls {
                         return None;
                     }
                     let (src, sw, sh) = decode(picture)?;
-                    let (w, h) = THUMB_PX;
+                    let (w, h) = if tall[i] { THUMB_TALL_PX } else { THUMB_PX };
                     let mut out = vec![0u8; (w * h * 4) as usize];
                     let (win, _) = window(sw, sh, w as f64, h as f64, &View::of(""));
                     resample(&src, sw, sh, win, &mut out, w, 0, 0, w, h);
                     let _ = std::fs::create_dir_all(&made_dir);
-                    if let Ok(e) = jpeg_encoder::Encoder::new_file(made_dir.join(format!("thumb-{}", names[i])), 90) {
+                    if let Ok(e) = jpeg_encoder::Encoder::new_file(made_dir.join(format!("{}{}", if tall[i] { "thumbt-" } else { "thumb-" }, names[i])), 90) {
                         if let Err(e) = e.encode(&out, w as u16, h as u16, jpeg_encoder::ColorType::Rgba) {
                             tracing::warn!("walls: thumb of {}: {e}", names[i]);
                         }
