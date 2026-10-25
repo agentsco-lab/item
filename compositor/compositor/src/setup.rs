@@ -281,7 +281,6 @@ fn terse(line: &str) -> Vec<String> {
 
 /// The networks in reach, the joined first, then by signal; each name once.
 fn scan() -> Vec<Net> {
-    let _ = std::process::Command::new("nmcli").args(["radio", "wifi", "on"]).output();
     let out = std::process::Command::new("nmcli").args(["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "auto"]).output();
     let Ok(out) = out else { return Vec::new() };
     let mut nets: Vec<Net> = Vec::new();
@@ -607,7 +606,7 @@ impl Setup {
             Step::Online => {
                 let name = self.joined().unwrap_or_default();
                 let first = format!("Connected to “{name}”.");
-                self.text("Online", &[&first, "item can also get the weather (met.no)", "and look for updates (GitHub).", "Nothing else is sent anywhere."], "Allow", 150.0);
+                self.text("Online", &[&first, "item can also get the weather (met.no)", "and look for updates (GitHub).", "Nothing else is sent anywhere."], "Allow", WELCOME_Y + 90.0);
                 if let Some((_, regular)) = &self.fonts {
                     self.button2.set(regular, "Not now");
                 }
@@ -1156,6 +1155,8 @@ impl Setup {
             }
             let _ = std::fs::write(&path, "");
         }
+        // The warm-ups item-session held back while the setup was up.
+        let _ = std::process::Command::new("systemctl").args(["--user", "start", "--no-block", "item-warm.service", "item-chromium.service"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
         let now = hybris_hwc::now_ns();
         self.leaving = Some(now);
         self.handed = Some((now, (self.orb.x, self.orb.y), self.orb.r));
