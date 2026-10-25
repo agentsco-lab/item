@@ -540,10 +540,16 @@ impl Screen {
             elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         }
         let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns)).unwrap_or_default();
-        elements.extend(rings);
-        elements.extend(state.setup.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        // Under the dialog the setup's words and rows are not drawn (they
+        // showed through it): its dark and wallpaper only.
+        if !dialog_over_setup {
+            elements.extend(rings);
+            elements.extend(state.setup.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
+        }
         if state.setup.active {
-            elements.extend(setup_drop);
+            if !dialog_over_setup {
+                elements.extend(setup_drop);
+            }
             elements.extend(self.setup_wall(state.setup.shown(frame_ns) as f32));
         }
         // A call, over the lock screen (calls.rs).
