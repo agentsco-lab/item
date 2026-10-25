@@ -48,6 +48,8 @@ for b in item-compositor item-face pen-split; do
 done
 # The keyring's secrets in and out (secrets.rs), for the services the shell speaks to.
 aarch64-linux-gnu-strip -o "$S/usr/bin/item-secret" "$R/item-secret"
+# item/grid's live view reads the mirror through it over ssh.
+aarch64-linux-gnu-strip -o "$lib/item-mirror-relay" "$R/item-mirror-relay"
 # camera-warm declares the four GStreamer calls it makes itself: a stub
 # with GStreamer's soname is all the link needs.
 printf 'void gst_init(void){}\nvoid *gst_parse_launch(void){return 0;}\nint gst_element_set_state(void){return 0;}\nint gst_element_get_state(void){return 0;}\n' > "$WORK/gst.c"
