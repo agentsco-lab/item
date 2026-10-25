@@ -81,6 +81,8 @@ const SHEET_PAD: f64 = 16.0;
 const HEAD_H: f64 = 44.0;
 const TAB_W: f64 = 104.0;
 const PILL_W: f64 = 112.0;
+/// The gap before Unsplash's batch on the pictures' sheet.
+const SECTION_GAP: f64 = 28.0;
 
 /// A row of the look's sheet.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -260,8 +262,9 @@ pub struct Picker {
     pub opened_on: usize,
     /// The clock's card is up.
     clock_card: bool,
-    /// The pictures' tab: Unsplash's batch (else the set).
-    on_unsplash: bool,
+    /// The batch's picture put on last (its index in the strip): ringed
+    /// there, where it was tapped, not only among the set.
+    pub ring_extra: Option<usize>,
     tab_words: [Label; 2],
     layout_word: Label,
     accent_word: Label,
@@ -376,7 +379,7 @@ impl Picker {
             each_mark: None,
             opened_on: 1,
             clock_card: false,
-            on_unsplash: false,
+            ring_extra: None,
             tab_words: [label(13.0, 0.85, "Yours"), label(13.0, 0.85, "Unsplash")],
             layout_word: label(13.0, 0.7, "Layout"),
             accent_word: label(13.0, 0.7, "Accent"),
@@ -466,40 +469,56 @@ impl Picker {
         Rectangle::new((s.loc.x + s.size.w - SHEET_PAD - PILL_W, s.loc.y + SHEET_PAD + (HEAD_H - MODE_H) / 2.0 - 4.0).into(), (PILL_W, MODE_H).into())
     }
 
-    /// The pictures the open tab shows, as indices into the strip's list:
-    /// the set's (before the group), or Unsplash's batch (after its tile).
-    fn tab_items(&self, count: usize) -> std::ops::Range<usize> {
+    /// The pictures on the sheet, as indices into the strip's list: the
+    /// set's, then Unsplash's batch (the group's own index between them is
+    /// no picture: Shuffle is at the sheet's top right).
+    fn items(&self, count: usize) -> Vec<usize> {
+        (0..count).filter(|&i| self.group != Some(i)).collect()
+    }
+
+    /// Picture `i`'s column and row, and the gap before it (Unsplash's batch
+    /// starts a column of its own, after SECTION_GAP).
+    fn place(&self, i: usize) -> (usize, usize, f64) {
         match self.group {
-            Some(g) if self.on_unsplash => (g + 1).min(count)..count,
-            Some(g) => 0..g.min(count),
-            None => 0..count,
+            Some(g) if i > g => {
+                let j = i - g - 1;
+                (g.div_ceil(2) + j / 2, j % 2, SECTION_GAP)
+            }
+            _ => (i / 2, i % 2, 0.0),
         }
     }
 
+    /// Picture `i`'s left edge on the sheet, unscrolled.
+    fn place_x(&self, i: usize) -> f64 {
+        let (col, _, gap) = self.place(i);
+        SHEET_PAD + col as f64 * (THUMB_W + GAP) + gap
+    }
+
+    /// Where Unsplash's batch starts on the sheet, unscrolled.
+    fn batch_x(&self) -> Option<f64> {
+        let g = self.group?;
+        Some(self.place_x(g + 1))
+    }
+
     /// Picture `i`'s rect at the scroll `scroll`, logical px, open (it may
-    /// be outside the sheet: the caller clips by the sheet).
+    /// be outside the sheet: the drawing cuts it at the sheet's sides).
     fn thumb(&self, i: usize, scroll: f64) -> Rectangle<f64, Logical> {
         let s = self.sheet(0);
-        let slot = i.saturating_sub(self.tab_first());
-        let (col, row) = (slot / 2, slot % 2);
-        let x = s.loc.x + SHEET_PAD + col as f64 * (THUMB_W + GAP) - scroll;
+        let (_, row, _) = self.place(i);
+        let x = s.loc.x + self.place_x(i) - scroll;
         let y = s.loc.y + SHEET_PAD + HEAD_H + row as f64 * (THUMB_H + GAP);
         Rectangle::new((x, y).into(), (THUMB_W, THUMB_H).into())
     }
 
-    /// The open tab's first index.
-    fn tab_first(&self) -> usize {
-        match self.group {
-            Some(g) if self.on_unsplash => g + 1,
-            _ => 0,
-        }
+    fn max_scroll(&self, count: usize) -> f64 {
+        let last = self.items(count).last().map_or(0.0, |&i| self.place_x(i) + THUMB_W);
+        (last + SHEET_PAD - self.sheet(0).size.w).max(0.0)
     }
 
-    fn max_scroll(&self, count: usize) -> f64 {
-        let n = self.tab_items(count).len();
-        let cols = n.div_ceil(2) as f64;
-        let content = cols * (THUMB_W + GAP) - GAP + 2.0 * SHEET_PAD;
-        (content - self.sheet(0).size.w).max(0.0)
+    /// Whether Unsplash's batch is what the sheet shows at `scroll` (its
+    /// name in the header lit).
+    fn batch_in_view(&self, scroll: f64) -> bool {
+        self.batch_x().is_some_and(|x| x - scroll < self.sheet(0).size.w / 2.0)
     }
 
     /// The credit's rect, where a tap opens its link.
@@ -712,7 +731,7 @@ impl Picker {
         self.hold = None;
         self.run = None;
         self.clock_card = false;
-        self.on_unsplash = false;
+        self.ring_extra = None;
         self.removing = None;
         self.lift_shown.set((f64::NAN, f64::NAN, 0));
         self.recenter(current, count);
@@ -742,19 +761,16 @@ impl Picker {
 
     /// The one on in the middle of the strip, as far as it goes.
     pub fn recenter(&mut self, current: usize, count: usize) {
-        // Its tab open (Unsplash's batch past the group's tile).
-        self.on_unsplash = self.group.is_some_and(|g| current > g);
-        let col = current.saturating_sub(self.tab_first()) / 2;
         let w = self.sheet(0).size.w;
-        let at = SHEET_PAD + col as f64 * (THUMB_W + GAP) + THUMB_W / 2.0;
+        let at = self.place_x(current) + THUMB_W / 2.0;
         self.scroll = (at - w / 2.0).clamp(0.0, self.max_scroll(count));
         self.run = None;
     }
 
-    /// The pictures' tab turned to Unsplash's batch (Shuffle pressed).
-    pub fn show_unsplash(&mut self) {
-        self.on_unsplash = true;
-        self.scroll = 0.0;
+    /// The sheet scrolled to Unsplash's batch (Shuffle pressed, or its name
+    /// in the header tapped), or back to the set's start.
+    pub fn show_unsplash(&mut self, count: usize) {
+        self.scroll = self.batch_x().map_or(0.0, |x| (x - SHEET_PAD).clamp(0.0, self.max_scroll(count)));
         self.run = None;
     }
 
@@ -995,16 +1011,18 @@ impl Picker {
             return None;
         }
         // The pictures' header: the tabs, Shuffle.
+        // Yours / Unsplash: to where each starts on the sheet.
         if let Some(i) = (0..2).find(|&i| (i == 0 || self.group.is_some()) && self.tab(i).contains(h.start)) {
-            let to = i == 1;
-            if to != self.on_unsplash {
-                self.on_unsplash = to;
+            self.removing = None;
+            if i == 1 {
+                self.show_unsplash(count);
+            } else {
                 self.scroll = 0.0;
-                self.removing = None;
+                self.run = None;
             }
             return None;
         }
-        if self.group.is_some() && self.on_unsplash && self.shuffle_pill().contains(h.start) {
+        if self.group.is_some() && self.shuffle_pill().contains(h.start) {
             return (!self.group_busy).then_some(Picked::Shuffle);
         }
         // Remove offered: its pill tapped removes; anything else lets it be.
@@ -1015,7 +1033,7 @@ impl Picker {
             return None;
         }
         let sheet = self.sheet(0);
-        let i = self.tab_items(count).find(|&i| self.thumb(i, scroll).contains(h.start) && sheet.contains(h.start))?;
+        let i = self.items(count).into_iter().find(|&i| self.thumb(i, scroll).contains(h.start) && sheet.contains(h.start))?;
         // Held long on one kept from Unsplash: its Remove offered.
         if self.kept.contains(&i) && hybris_hwc::now_ns().saturating_sub(self.pressed_at) > LONG_NS {
             self.removing = Some(i);
@@ -1213,11 +1231,12 @@ impl Picker {
             let (x, y) = centred(l, self.tab(i));
             put(&mut out, &l.buffer, x, y, lift);
         }
+        let scroll = self.scroll_at(frame_ns, thumbs.len());
         if tabs == 2 {
-            let lr = self.tab(usize::from(self.on_unsplash));
+            let lr = self.tab(usize::from(self.batch_in_view(scroll)));
             put(&mut out, &self.mode_lit, lr.loc.x + (TAB_W - MODE_W) / 2.0, lr.loc.y, lift);
         }
-        if self.group.is_some() && self.on_unsplash {
+        if self.group.is_some() {
             let p = self.shuffle_pill();
             let l = &self.shuffle_words[usize::from(self.group_busy)];
             let (x, y) = centred(l, p);
@@ -1228,15 +1247,18 @@ impl Picker {
                 if cached.as_ref().is_none_or(|(n, _)| n != note) {
                     *cached = Some((note.clone(), label(13.0, 0.7, note)));
                 }
-                if let Some((_, l)) = cached.as_ref() {
-                    let y = pics.loc.y + SHEET_PAD + HEAD_H + THUMB_H - l.extent.h as f64 / 2.0;
-                    put(&mut out, &l.buffer, pics.loc.x + SHEET_PAD + 4.0, y, lift);
+                // In the batch's place, where its pictures would be.
+                if let (Some((_, l)), Some(bx)) = (cached.as_ref(), self.batch_x()) {
+                    let x = pics.loc.x + bx - scroll;
+                    if x < pics.loc.x + pics.size.w - 40.0 {
+                        let y = pics.loc.y + SHEET_PAD + HEAD_H + THUMB_H - l.extent.h as f64 / 2.0;
+                        put(&mut out, &l.buffer, x.max(pics.loc.x + SHEET_PAD), y, lift);
+                    }
                 }
             }
         }
-        let scroll = self.scroll_at(frame_ns, thumbs.len());
         let (left, right) = (pics.loc.x + 6.0, pics.loc.x + pics.size.w - 6.0);
-        for i in self.tab_items(thumbs.len()) {
+        for i in self.items(thumbs.len()) {
             let r = self.thumb(i, scroll);
             if r.loc.x + r.size.w <= left || r.loc.x >= right {
                 continue;
@@ -1258,7 +1280,7 @@ impl Picker {
                 put(&mut out, &self.u_word.buffer, x, y - 1.0, lift);
                 put(&mut out, &self.badge, b.loc.x, b.loc.y, lift);
             }
-            if whole && i == current {
+            if whole && (i == current || self.ring_extra == Some(i)) {
                 put(&mut out, &self.ring, r.loc.x - 4.0, r.loc.y - 4.0, lift);
             }
             crop.set((!whole).then_some(part));

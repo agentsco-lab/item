@@ -422,13 +422,18 @@ impl State {
                     // One of Unsplash's batch: fetched into the set, then on.
                     Some(crate::picker::Picked::Wallpaper(i)) if i > self.walls.shown.len() => {
                         self.gallery.pick(i - self.walls.shown.len() - 1, self.walls.each);
+                        // Ringed where it was tapped, once it is on (its
+                        // place in the batch: the set before it may grow).
+                        self.picked_from_batch = Some(i - self.walls.shown.len() - 1);
                         let current = self.walls.current.clone();
                         self.picker.set_info(&current, &["Fetching the photo…".to_owned()], hybris_hwc::now_ns());
                     }
                     Some(crate::picker::Picked::Shuffle) => {
                         self.gallery.shuffle(self.walls.each);
-                        // Unsplash's tab, its places coming.
-                        self.picker.show_unsplash();
+                        // To the batch, its places coming.
+                        self.picker.ring_extra = None;
+                        let count = self.picker_strip();
+                        self.picker.show_unsplash(count);
                     }
                     // One kept from Unsplash out of the set (its credit and
                     // small picture with it); the one before it on, if it
@@ -449,6 +454,7 @@ impl State {
                     }
                     Some(crate::picker::Picked::Credit) => {}
                     Some(crate::picker::Picked::Wallpaper(i)) => {
+                        self.picker.ring_extra = None;
                         let name = self.walls.names[self.walls.shown[i]].clone();
                         if name != self.walls.current {
                             self.picker.info_wait();

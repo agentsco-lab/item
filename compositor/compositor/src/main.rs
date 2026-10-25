@@ -1445,13 +1445,14 @@ fn main() {
             if let Some(picked) = data.state.gallery.take_picked() {
                 match picked {
                     Ok(name) => {
-                        // In the owner's set now: read again, then on.
+                        // In the owner's set now: read again, then on; the
+                        // sheet stays where it is, the tapped one ringed.
                         data.state.walls.reload();
                         data.state.walls.choose(&name);
                         data.state.walls.ask_thumbs();
-                        let current = data.state.walls.shown_current().unwrap_or(0);
-                        let count = data.state.picker_strip();
-                        data.state.picker.recenter(current, count);
+                        let own = data.state.walls.shown.len();
+                        data.state.picker.ring_extra = data.state.picked_from_batch.take().map(|b| own + 1 + b);
+                        data.state.picker_strip();
                     }
                     Err(e) => {
                         let current = data.state.walls.current.clone();

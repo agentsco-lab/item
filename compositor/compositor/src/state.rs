@@ -252,6 +252,9 @@ pub struct State {
     /// Wallpapers from Unsplash, with a key (unsplash.rs): after the set's
     /// own in the picker's strip.
     pub gallery: crate::unsplash::Gallery,
+    /// The batch's picture being fetched (its place in the batch): ringed
+    /// there once on, the sheet not moved.
+    pub picked_from_batch: Option<usize>,
     /// The desktop's editing: choosing the wallpaper (picker.rs).
     pub picker: crate::picker::Picker,
     /// The panel each window was last opened onto: the dock's half its
@@ -393,6 +396,7 @@ impl State {
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
             gallery: crate::unsplash::Gallery::new(wake.clone()),
+            picked_from_batch: None,
             picker: crate::picker::Picker::new(),
             opened_on: Default::default(),
             carrying: None,
