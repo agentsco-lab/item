@@ -624,7 +624,9 @@ impl Screen {
         elements.extend(state.shade.elements(&mut self.renderer, frame_ns, &rows, glass).into_iter().map(FrameElement::from));
         // The wallpaper's choosing, over the desktop.
         let current = state.walls.shown_current().unwrap_or(usize::MAX);
-        elements.extend(state.picker.elements(&mut self.renderer, frame_ns, &state.walls.shown_thumbs(), current).into_iter().map(FrameElement::from));
+        let mut thumbs = state.walls.shown_thumbs();
+        thumbs.extend(state.gallery.thumbs.iter().cloned());
+        elements.extend(state.picker.elements(&mut self.renderer, frame_ns, &thumbs, current).into_iter().map(FrameElement::from));
         let glass_start = elements.len();
         if let (Some(g), true) = (&self.glass, state.shade.visible()) {
             // Under each sheet a pane of glass (glass.rs, pane.frag): the

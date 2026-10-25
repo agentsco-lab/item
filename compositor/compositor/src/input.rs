@@ -394,7 +394,7 @@ impl State {
             return;
         }
         // Choosing the wallpaper: every touch is the picker's.
-        let count = self.walls.shown.len();
+        let count = self.walls.shown.len() + self.gallery.len();
         match &contact {
             Contact::Down(slot, pos, t) if self.picker.is_open() => {
                 self.picker.down(*slot, *pos, *t, count, self.clock.last_rect.get());
@@ -408,6 +408,13 @@ impl State {
             }
             Contact::Up(slot, _) if self.picker.holds(*slot) => {
                 match self.picker.up(*slot, count) {
+                    // One of Unsplash's batch: fetched into the set, then on.
+                    Some(crate::picker::Picked::Wallpaper(i)) if i >= self.walls.shown.len() => {
+                        self.gallery.pick(i - self.walls.shown.len(), self.walls.each);
+                        let current = self.walls.current.clone();
+                        self.picker.set_info(&current, &["Fetching the photo…".to_owned()], hybris_hwc::now_ns());
+                    }
+                    Some(crate::picker::Picked::Shuffle) => self.gallery.shuffle(self.walls.each),
                     Some(crate::picker::Picked::Wallpaper(i)) => {
                         let name = self.walls.names[self.walls.shown[i]].clone();
                         if name != self.walls.current {
@@ -419,6 +426,8 @@ impl State {
                     }
                     Some(crate::picker::Picked::Each(each)) => {
                         self.walls.set_each(each);
+                        // Unsplash's batch was in the other shape.
+                        self.gallery.clear();
                         self.picker.each_mark = self.walls.each.then_some(usize::from(self.walls.target == crate::walls::Side::Right));
                         self.picker.set_room(self.walls.zoom_room());
                         // The strip now shows the mode's pictures.

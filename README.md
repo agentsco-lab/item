@@ -221,6 +221,11 @@ resume; `item-switch phosh` brings it back.
   picker, opened by a finger held on the desk, takes one's own pictures from
   `~/.local/share/item/walls` too. The desktop before one is chosen is
   Aurora, drawn by the compositor.
+- With an Unsplash key of your own in the keyring (`unsplash`: item/grid's
+  Keys, or `item-secret set unsplash`), the wallpaper picker has Shuffle:
+  dark photos from Unsplash's Wallpapers topic, twelve at a time; a tap
+  keeps one in your set with its credit. Without a key there is no Shuffle,
+  and nothing is asked of the network.
 - Before the setup has run, and with a picture that cannot be read, the
   screen is black.
 - Tried on one phone. Each step was measured and tried by hand; there is

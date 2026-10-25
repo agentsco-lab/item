@@ -219,11 +219,11 @@ fn made_cache() -> (PathBuf, PathBuf) {
 }
 
 /// A small picture's corners, px of it.
-const THUMB_RADIUS: f64 = 26.0;
+pub(crate) const THUMB_RADIUS: f64 = 26.0;
 
 /// Rounds an RGBA picture's corners (premultiplied, as the renderer takes
 /// it: the colour goes with the alpha).
-fn round_corners(rgba: &mut [u8], w: u32, h: u32, r: f64) {
+pub(crate) fn round_corners(rgba: &mut [u8], w: u32, h: u32, r: f64) {
     let (w, h) = (w as usize, h as usize);
     for y in 0..h {
         for x in 0..w {
@@ -330,18 +330,21 @@ fn jpeg_size(path: &std::path::Path) -> Option<(u32, u32)> {
 }
 
 fn decode(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
+    let data = std::fs::read(path).ok()?;
+    let r = decode_bytes(&data);
+    if r.is_none() {
+        tracing::warn!("walls: {}: not decoded", path.display());
+    }
+    r
+}
+
+/// A JPEG's bytes as RGBA, and its size (unsplash.rs's photos too).
+pub(crate) fn decode_bytes(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
     use zune_core::colorspace::ColorSpace;
     use zune_core::options::DecoderOptions;
-    let data = std::fs::read(path).ok()?;
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
-    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(&data, options);
-    let pixels = match decoder.decode() {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!("walls: {}: {e:?}", path.display());
-            return None;
-        }
-    };
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(data, options);
+    let pixels = decoder.decode().ok()?;
     let (w, h) = decoder.dimensions()?;
     Some((pixels, w as u32, h as u32))
 }

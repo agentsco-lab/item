@@ -176,6 +176,8 @@ pub enum Picked {
     ClockMoved((f64, f64)),
     /// The vignette, with a picture on each panel.
     Vignette(Vignette),
+    /// Another batch from Unsplash (unsplash.rs).
+    Shuffle,
 }
 
 pub struct Picker {
@@ -200,6 +202,11 @@ pub struct Picker {
     modes: [Label; 2],
     mode_glass: MemoryRenderBuffer,
     mode_lit: MemoryRenderBuffer,
+    /// Unsplash's Shuffle, beside the mode switch: shown with a key in the
+    /// keyring (Some), lit while it fetches (Some(true)); its words.
+    pub shuffle: Option<bool>,
+    shuffle_words: [Label; 2],
+    shuffle_glass: MemoryRenderBuffer,
     /// "Dark" and "Glow", the vignette's.
     tints: [Label; 2],
     tint_lit: MemoryRenderBuffer,
@@ -311,6 +318,9 @@ impl Picker {
             modes: [label(13.0, 0.85, "Both panels"), label(13.0, 0.85, "Each panel")],
             mode_glass: crate::grid::rounded(2.0 * MODE_W + 8.0, MODE_H + 8.0, (MODE_H + 8.0) / 2.0, [255, 255, 255, 26]),
             mode_lit: crate::grid::rounded(MODE_W, MODE_H, MODE_H / 2.0, [255, 255, 255, 64]),
+            shuffle: None,
+            shuffle_words: [label(13.0, 0.85, "Shuffle"), label(13.0, 0.6, "Loading…")],
+            shuffle_glass: crate::grid::rounded(MODE_W, MODE_H + 8.0, (MODE_H + 8.0) / 2.0, [255, 255, 255, 26]),
             tints: [label(13.0, 0.85, "Dark"), label(13.0, 0.85, "Glow")],
             tint_lit: crate::grid::rounded(TINT_W, TINT_H, TINT_H / 2.0, [255, 255, 255, 64]),
             tint_glass: crate::grid::rounded(2.0 * TINT_W + 8.0, TINT_H + 8.0, (TINT_H + 8.0) / 2.0, [255, 255, 255, 26]),
@@ -372,7 +382,12 @@ impl Picker {
         Rectangle::new((x0 + 4.0 + i as f64 * MODE_W, s.loc.y + MODE_TOP + 4.0).into(), (MODE_W, MODE_H).into())
     }
 
-    /// The strip's rect, logical px, open.
+    /// Unsplash's Shuffle, left of the mode switch, logical px, open.
+    fn shuffle_rect(&self) -> Rectangle<f64, Logical> {
+        let m = self.mode(0);
+        Rectangle::new((m.loc.x - 4.0 - 12.0 - MODE_W, m.loc.y - 4.0).into(), (MODE_W, MODE_H + 8.0).into())
+    }
+
     /// The strip's rect, logical px, open: over the panel's card, if any.
     fn strip(&self) -> Rectangle<f64, Logical> {
         let (w, h) = (layout::size().0 as f64, layout::size().1 as f64);
@@ -972,6 +987,9 @@ impl Picker {
         if let Some(i) = (0..2).find(|&i| self.mode(i).contains(h.start)) {
             return Some(Picked::Each(i == 1));
         }
+        if self.shuffle == Some(false) && self.shuffle_rect().contains(h.start) {
+            return Some(Picked::Shuffle);
+        }
         // A swatch: a little more room round it than it shows.
         if let Some(i) = (0..=crate::accent::PALETTE.len()).find(|&i| {
             let r = self.swatch(i);
@@ -1191,6 +1209,14 @@ impl Picker {
         put(&mut out, &self.mode_lit, lr.loc.x, lr.loc.y, drop);
         let r0 = self.mode(0);
         put(&mut out, &self.mode_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, drop);
+        // Shuffle (with a key), "Loading…" while it fetches.
+        if let Some(busy) = self.shuffle {
+            let r = self.shuffle_rect();
+            let l = &self.shuffle_words[usize::from(busy)];
+            let (x, y) = centred(l, r);
+            put(&mut out, &l.buffer, x, y, drop);
+            put(&mut out, &self.shuffle_glass, r.loc.x, r.loc.y, drop);
+        }
         put(&mut out, &self.glass, strip.loc.x, strip.loc.y, drop);
         out
     }

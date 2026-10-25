@@ -249,6 +249,9 @@ pub struct State {
     pub asker: Asker,
     /// The wallpapers, and which one is on (walls.rs).
     pub walls: crate::walls::Walls,
+    /// Wallpapers from Unsplash, with a key (unsplash.rs): after the set's
+    /// own in the picker's strip.
+    pub gallery: crate::unsplash::Gallery,
     /// The desktop's editing: choosing the wallpaper (picker.rs).
     pub picker: crate::picker::Picker,
     /// The panel each window was last opened onto: the dock's half its
@@ -389,6 +392,7 @@ impl State {
             sleep: crate::sleep::Sleep::new(wake.clone()),
             asker: Asker::Polkit,
             walls: crate::walls::Walls::new(wake.clone()),
+            gallery: crate::unsplash::Gallery::new(wake.clone()),
             picker: crate::picker::Picker::new(),
             opened_on: Default::default(),
             carrying: None,

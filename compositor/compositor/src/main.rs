@@ -82,6 +82,7 @@ mod kbd;
 mod secrets;
 mod typing;
 mod voice;
+mod unsplash;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -589,8 +590,10 @@ impl Data {
                 let look = crate::clock::style().0;
                 (self.state.picker.brightness, self.state.picker.font, self.state.picker.vignette) = (look.alpha, look.font, self.state.walls.vignette);
                 let current = self.state.walls.shown_current().unwrap_or(0);
-                let count = self.state.walls.shown.len();
+                let count = self.state.walls.shown.len() + self.state.gallery.len();
                 self.state.picker.open(slot, current, count);
+                // Shuffle offered if the keyring has Unsplash's key.
+                self.state.gallery.check_key();
                 let info = self.state.walls.info(&self.state.walls.current);
                 self.state.picker.set_info(&self.state.walls.current.clone(), &info, now + 250_000_000);
                 self.state.walls.ask_thumbs();
@@ -1034,7 +1037,7 @@ impl Data {
         if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.alert.settle(self.pacing.target_ns) || self.state.layers.sliding() || self.state.tour.settle() {
             self.state.needs_redraw = true;
         }
-        let count = self.state.walls.shown.len();
+        let count = self.state.walls.shown.len() + self.state.gallery.len();
         if self.state.picker.settle(self.pacing.target_ns, count) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
@@ -1427,6 +1430,38 @@ fn main() {
                 data.state.system.set_frost(frost);
             }
             if data.state.walls.take_thumbs() {
+                data.state.needs_redraw = true;
+            }
+            // Unsplash's photos (unsplash.rs): the strip's batch, a pick
+            // become the wallpaper, what went wrong; Shuffle with the key.
+            let shuffle = data.state.gallery.available().then(|| data.state.gallery.busy());
+            if data.state.picker.shuffle != shuffle {
+                data.state.picker.shuffle = shuffle;
+                data.state.needs_redraw = true;
+            }
+            if data.state.gallery.take() {
+                data.state.needs_redraw = true;
+            }
+            if let Some(e) = data.state.gallery.take_error() {
+                let current = data.state.walls.current.clone();
+                data.state.picker.set_info(&current, &[e], hybris_hwc::now_ns());
+                data.state.needs_redraw = true;
+            }
+            if let Some(picked) = data.state.gallery.take_picked() {
+                match picked {
+                    Ok(name) => {
+                        // In the owner's set now: read again, then on.
+                        data.state.walls.reload();
+                        data.state.walls.choose(&name);
+                        data.state.walls.ask_thumbs();
+                        let current = data.state.walls.shown_current().unwrap_or(0);
+                        data.state.picker.recenter(current, data.state.walls.shown.len() + data.state.gallery.len());
+                    }
+                    Err(e) => {
+                        let current = data.state.walls.current.clone();
+                        data.state.picker.set_info(&current, &[e], hybris_hwc::now_ns());
+                    }
+                }
                 data.state.needs_redraw = true;
             }
             if !data.state.ribbon.moving() && data.state.system.refresh() {
