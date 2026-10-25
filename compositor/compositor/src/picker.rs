@@ -239,6 +239,7 @@ pub struct Picker {
     badge: MemoryRenderBuffer,
     remove_words: Label,
     u_word: Label,
+    hint_words: Label,
     remove_glass: MemoryRenderBuffer,
     /// When the finger on the strip came down (a long press).
     pressed_at: u64,
@@ -360,6 +361,7 @@ impl Picker {
             badge: crate::grid::rounded(22.0, 22.0, 11.0, [0, 0, 0, 150]),
             remove_words: label(13.0, 0.95, "Remove"),
             u_word: label(13.0, 0.9, "u"),
+            hint_words: label(12.0, 0.6, "Shuffle: dark photos"),
             remove_glass: crate::grid::rounded(92.0, 32.0, 16.0, [200, 60, 50, 220]),
             pressed_at: 0,
             tints: [label(13.0, 0.85, "Dark"), label(13.0, 0.85, "Glow")],
@@ -448,9 +450,12 @@ impl Picker {
 
     /// A row of the look's sheet: its rect, logical px.
     fn row_rect(&self, row: Row) -> Option<Rectangle<f64, Logical>> {
-        let i = self.look_rows().iter().position(|r| *r == row)?;
+        let rows = self.look_rows();
+        let i = rows.iter().position(|r| *r == row)?;
         let s = self.sheet(1);
-        Some(Rectangle::new((s.loc.x + SHEET_PAD, s.loc.y + SHEET_PAD + i as f64 * ROW_H).into(), (s.size.w - 2.0 * SHEET_PAD, ROW_H).into()))
+        // The rows in the sheet's middle (it is as tall as the pictures').
+        let top = s.loc.y + (s.size.h - rows.len() as f64 * ROW_H) / 2.0;
+        Some(Rectangle::new((s.loc.x + SHEET_PAD, top + i as f64 * ROW_H).into(), (s.size.w - 2.0 * SHEET_PAD, ROW_H).into()))
     }
 
     /// Swatch `i`'s rect (0 the wallpaper's), logical px, open.
@@ -481,7 +486,13 @@ impl Picker {
     /// set's, then Unsplash's batch (the group's own index between them is
     /// no picture: Shuffle is at the sheet's top right).
     fn items(&self, count: usize) -> Vec<usize> {
-        (0..count).filter(|&i| self.group != Some(i)).collect()
+        (0..count).filter(|&i| self.group != Some(i) || self.batch_empty(count)).collect()
+    }
+
+    /// No batch yet (Shuffle not pressed, or it found nothing): the group's
+    /// own index stands for a tile that says what Shuffle does.
+    fn batch_empty(&self, count: usize) -> bool {
+        self.group.is_some_and(|g| count <= g + 1)
     }
 
     /// The pictures tall (one on each panel: 3:4, one row) or wide (16:9,
@@ -503,8 +514,8 @@ impl Picker {
     fn place(&self, i: usize) -> (usize, usize, f64) {
         let rows = self.rows();
         match self.group {
-            Some(g) if i > g => {
-                let j = i - g - 1;
+            Some(g) if i >= g => {
+                let j = i.saturating_sub(g + 1);
                 (g.div_ceil(rows) + j / rows, j % rows, SECTION_GAP)
             }
             _ => (i / rows, i % rows, 0.0),
@@ -1058,6 +1069,9 @@ impl Picker {
         }
         let sheet = self.sheet(0);
         let i = self.items(count).into_iter().find(|&i| self.thumb(i, scroll).contains(h.start) && sheet.contains(h.start))?;
+        if self.group == Some(i) {
+            return (!self.group_busy).then_some(Picked::Shuffle);
+        }
         // Held long on one kept from Unsplash: its Remove offered.
         if self.kept.contains(&i) && hybris_hwc::now_ns().saturating_sub(self.pressed_at) > LONG_NS {
             self.removing = Some(i);
@@ -1250,15 +1264,26 @@ impl Picker {
         // cut at the sheet's sides.
         let pics = self.sheet(0);
         let tabs = if self.group.is_some() { 2 } else { 1 };
+        let scroll = self.scroll_at(frame_ns, thumbs.len());
+        // Yours · Unsplash: the names of the strip's two parts, the one in
+        // view bright, each a jump to where it starts.
+        let in_view = usize::from(self.batch_in_view(scroll));
         for i in 0..tabs {
             let l = &self.tab_words[i];
-            let (x, y) = centred(l, self.tab(i));
-            put(&mut out, &l.buffer, x, y, lift);
+            let r = self.tab(i);
+            fade.set(if i == in_view { 1.0 } else { 0.5 });
+            put(&mut out, &l.buffer, r.loc.x + 6.0, r.loc.y + (r.size.h - l.extent.h as f64) / 2.0, lift);
         }
-        let scroll = self.scroll_at(frame_ns, thumbs.len());
-        if tabs == 2 {
-            let lr = self.tab(usize::from(self.batch_in_view(scroll)));
-            put(&mut out, &self.mode_lit, lr.loc.x + (TAB_W - MODE_W) / 2.0, lr.loc.y, lift);
+        fade.set(1.0);
+        // The line between the parts, in the strip.
+        if let Some(bx) = self.batch_x() {
+            let x = pics.loc.x + bx - scroll - SECTION_GAP / 2.0 - GAP / 2.0;
+            if x > pics.loc.x + SHEET_PAD && x < pics.loc.x + pics.size.w - SHEET_PAD {
+                let (_, h) = self.tile();
+                let rows = self.rows() as f64;
+                let tall = rows * h + (rows - 1.0) * GAP;
+                put(&mut out, &self.sized(2.0, tall, 1), x, pics.loc.y + SHEET_PAD + HEAD_H, lift);
+            }
         }
         if self.group.is_some() {
             let p = self.shuffle_pill();
@@ -1281,10 +1306,22 @@ impl Picker {
                 }
             }
         }
-        let (left, right) = (pics.loc.x + 6.0, pics.loc.x + pics.size.w - 6.0);
+        let (left, right) = (pics.loc.x + SHEET_PAD, pics.loc.x + pics.size.w - SHEET_PAD);
+        let empty = self.batch_empty(thumbs.len());
         for i in self.items(thumbs.len()) {
             let r = self.thumb(i, scroll);
-            if r.loc.x + r.size.w <= left || r.loc.x >= right {
+            // Less than a sliver showing: not drawn.
+            if r.loc.x + r.size.w <= left + 12.0 || r.loc.x >= right - 12.0 {
+                continue;
+            }
+            // No batch yet: the group's tile says what Shuffle brings.
+            if empty && self.group == Some(i) {
+                if r.loc.x >= left && r.loc.x + r.size.w <= right {
+                    let hint = &self.hint_words;
+                    let (x, y) = centred(hint, r);
+                    put(&mut out, &hint.buffer, x, y, lift);
+                    put(&mut out, if self.tall() { &self.placeholder_tall } else { &self.placeholder }, r.loc.x, r.loc.y, lift);
+                }
                 continue;
             }
             // Cut at the sheet's sides: the part of it inside.
@@ -1308,7 +1345,7 @@ impl Picker {
                 put(&mut out, if self.tall() { &self.ring_tall } else { &self.ring }, r.loc.x - 4.0, r.loc.y - 4.0, lift);
             }
             crop.set((!whole).then_some(part));
-            match &thumbs[i] {
+            match thumbs.get(i).cloned().flatten().as_ref() {
                 Some(t) => put(&mut out, t, x0, r.loc.y, lift),
                 // Still coming (Unsplash's batch): its place shown.
                 None => put(&mut out, if self.tall() { &self.placeholder_tall } else { &self.placeholder }, x0, r.loc.y, lift),
