@@ -159,8 +159,8 @@ Maintainer: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Section: x11
 Priority: optional
 Installed-Size: $INSTALLED
-Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, phosh, chromium, gnome-console, tmux, sudo, python3, wget, curl, pulseaudio-utils, libglib2.0-bin, adaptation-droidian-surfaceduo (>= 0.21)
-Recommends: rsync, openssh-client, gnome-calls, chatty, gnome-weather
+Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, phosh, chromium, gnome-console, tmux, sudo, python3, pulseaudio-utils, libglib2.0-bin, adaptation-droidian-surfaceduo (>= 0.21)
+Recommends: curl, wget, rsync, openssh-client, gnome-calls, chatty, gnome-weather
 Homepage: https://github.com/agentsco-lab/item
 Description: item, the two-panel shell for the Surface Duo
  item-compositor and its session in place of phosh on Droidian: a dock

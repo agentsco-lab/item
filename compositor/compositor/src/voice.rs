@@ -154,39 +154,17 @@ fn send(pcm: &[u8], config: &Config) -> Result<String, String> {
     use base64::Engine;
     let audio = base64::engine::general_purpose::STANDARD.encode(wav(pcm));
     let body = serde_json::json!({ "model": config.model, "input_audio": { "data": audio, "format": "wav" }, "language": config.language }).to_string();
-    // The body in a file (the phone has wget, not curl), on the runtime
-    // dir's tmpfs, gone once sent.
-    if !config.url.starts_with("https://") {
-        return Err(format!("{}: the voice goes over https only", config.url));
-    }
-    let dir = std::env::var("XDG_RUNTIME_DIR").map_err(|_| "no XDG_RUNTIME_DIR: the voice needs the session's private directory".to_owned())?;
-    let path = format!("{dir}/item-voice-{}.json", std::process::id());
-    std::fs::write(&path, body).map_err(|e| format!("{path}: {e}"))?;
-    // The key in wget's own configuration file, readable by the user alone
-    // (0600, on the runtime dir's tmpfs, gone once sent): on the command
-    // line it would be anyone's to read in /proc while the request runs.
-    let rc = format!("{dir}/item-voice-{}.wgetrc", std::process::id());
-    let written = {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&rc).and_then(|mut f| f.write_all(format!("header = Authorization: Bearer {key}\n").as_bytes()))
-    };
+    // Over HTTPS from the compositor itself (net.rs): the key in the
+    // request's header alone - no file, no command line, no child.
+    let auth = format!("Bearer {key}");
     drop(key);
-    if let Err(e) = written {
-        let _ = std::fs::remove_file(&path);
-        return Err(format!("{rc}: {e}"));
+    let out = crate::net::post_json(&config.url, &[("Authorization", &auth)], &body, std::time::Duration::from_secs(60));
+    drop(auth);
+    let out = out.map_err(|e| format!("{}: {e}", config.model))?;
+    let v: serde_json::Value = serde_json::from_slice(&out.body).unwrap_or_default();
+    if !out.ok() {
+        return Err(format!("no answer from {} ({}: {})", config.model, out.status, v["error"]["message"].as_str().unwrap_or("no reason")));
     }
-    let out = Command::new("wget")
-        .args(["-q", "-T", "60", "-O", "-", &format!("--config={rc}"), "--header", "Content-Type: application/json", &format!("--post-file={path}"), &config.url])
-        .stdin(Stdio::null())
-        .output();
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&rc);
-    let out = out.map_err(|e| format!("wget: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("no answer from {} ({})", config.model, out.status));
-    }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("the answer: {e}"))?;
     match v["text"].as_str() {
         Some(t) => Ok(t.trim().to_owned()),
         None => Err(format!("the answer: {}", v["error"]["message"].as_str().unwrap_or("no text in it"))),

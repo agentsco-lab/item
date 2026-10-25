@@ -20,6 +20,7 @@
 //! the time from a touch to the first frame showing a client's answer to it.
 
 mod apps;
+mod net;
 mod back;
 mod boost;
 mod bus;

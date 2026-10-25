@@ -77,9 +77,12 @@ fn run(cmd: &str, args: &[&str]) -> String {
     std::process::Command::new(cmd).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
 }
 
-/// A page from the web (the phone has wget, not curl), or nothing.
+/// A page from the web (net.rs), or nothing.
 fn fetch(url: &str, accept: &str) -> String {
-    run("wget", &["-q", "-T", "10", "-O", "-", "-U", "item-shell/0.1 github.com/agentsco-lab/item", "--header", &format!("Accept: {accept}"), url])
+    match crate::net::get(url, &[("Accept", accept)], std::time::Duration::from_secs(10)) {
+        Ok(a) if a.ok() => String::from_utf8_lossy(&a.body).into_owned(),
+        _ => String::new(),
+    }
 }
 
 fn read(path: &str) -> String {

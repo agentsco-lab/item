@@ -5,6 +5,9 @@ edition = "2021"
 description = "A Wayland compositor for the Surface Duo, drawing through hwcomposer: the base of item-shell"
 
 [dependencies]
+# HTTPS from the compositor itself (net.rs): rustls, the phone's own trust
+# store through the platform verifier - in place of wget and curl.
+ureq = { version = "3.4", default-features = false, features = ["rustls", "platform-verifier"] }
 # The mirror's frames, compressed (mirror.rs).
 lz4_flex = { version = "0.11", default-features = false, features = ["safe-encode"] }
 hybris-hwc = { path = "../crates/hybris-hwc" }

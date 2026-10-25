@@ -14,13 +14,11 @@
 //! Unsplash it was downloaded (their API's rule), and puts it on. The
 //! pictures not chosen live in memory only.
 //!
-//! The key goes to curl in a configuration file of the user's alone (0600,
-//! in the runtime directory, gone once used): never on a command line.
-//! Only the API's requests carry it; the pictures come from Unsplash's
+//! The key goes in the API's requests' header alone (net.rs: no file, no
+//! command line, no child process); the pictures come from Unsplash's
 //! image host without it.
 
 use std::collections::HashSet;
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use smithay::backend::allocator::Fourcc;
@@ -318,44 +316,20 @@ fn key() -> Result<String, String> {
     crate::secrets::get(KEY)?.filter(|k| !k.trim().is_empty()).map(|k| k.trim().to_owned()).ok_or_else(|| format!("no key: item-secret set {KEY}"))
 }
 
-/// A GET over https with curl; with `key`, Unsplash's API's header, the key
-/// in curl's configuration file of the user's alone (0600), never on its
-/// command line.
+/// A GET over https (net.rs); with `key`, Unsplash's API's header - the
+/// key in the request alone, never in a file or on a command line.
 fn fetch(url: &str, key: Option<&str>) -> Result<Vec<u8>, String> {
-    if !url.starts_with("https://") {
-        return Err(format!("{url}: https only"));
+    let auth = key.map(|k| format!("Client-ID {k}"));
+    let mut headers: Vec<(&str, &str)> = Vec::new();
+    if let Some(a) = &auth {
+        headers.push(("Authorization", a));
+        headers.push(("Accept-Version", "v1"));
     }
-    let mut c = Command::new("curl");
-    c.args(["-sS", "--fail", "-L", "-m", "60", "--proto", "=https"]);
-    let rc = match key {
-        Some(k) => {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let dir = std::env::var("XDG_RUNTIME_DIR").map_err(|_| "no XDG_RUNTIME_DIR".to_owned())?;
-            let rc = format!("{dir}/item-unsplash-{}-{:?}.curlrc", std::process::id(), std::thread::current().id()).replace(['(', ')'], "");
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&rc)
-                .and_then(|mut f| f.write_all(format!("header = \"Authorization: Client-ID {k}\"\nheader = \"Accept-Version: v1\"\n").as_bytes()))
-                .map_err(|e| format!("{rc}: {e}"))?;
-            c.args(["-K", &rc]);
-            Some(rc)
-        }
-        None => None,
-    };
-    let out = c.arg(url).stdin(Stdio::null()).output();
-    if let Some(rc) = rc {
-        let _ = std::fs::remove_file(rc);
+    let a = crate::net::get(url, &headers, std::time::Duration::from_secs(60)).map_err(|e| format!("Unsplash did not answer ({e})"))?;
+    if !a.ok() {
+        return Err(format!("Unsplash did not answer ({})", a.status));
     }
-    let out = out.map_err(|e| format!("curl: {e}"))?;
-    if !out.status.success() {
-        let e = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("Unsplash did not answer ({})", e.trim().lines().last().unwrap_or("no reason")));
-    }
-    Ok(out.stdout)
+    Ok(a.body)
 }
 
 /// An "#rrggbb"'s luma, 0..1.
