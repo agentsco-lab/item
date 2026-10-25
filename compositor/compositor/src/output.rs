@@ -1510,7 +1510,7 @@ impl Screen {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         let h = crate::layout::LANDSCAPE.1;
         let full_w = wall_width();
-        let source = include_str!("wall.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl"));
+        let source = crate::glass::dithered(&include_str!("wall.frag").replace("//_WALLPAPER_", include_str!("wallpaper.glsl")));
         let program = match self.renderer.compile_custom_pixel_shader(&source, &[UniformName::new("shift", UniformType::_1f)]) {
             Ok(p) => p,
             Err(e) => {
@@ -1668,7 +1668,7 @@ impl Screen {
             let names = ["strength", "reach", "soft", "glow", "book", "inner"].map(|n| UniformName::new(n, UniformType::_1f));
             let mut names = names.to_vec();
             names.push(UniformName::new("colour", UniformType::_3f));
-            match self.renderer.compile_custom_pixel_shader(include_str!("vignette.frag"), &names) {
+            match self.renderer.compile_custom_pixel_shader(&crate::glass::dithered(include_str!("vignette.frag")), &names) {
                 Ok(p) => self.vignette_program = Some(p),
                 Err(e) => {
                     tracing::warn!("vignette: {e}");

@@ -16,6 +16,12 @@ use smithay::backend::renderer::gles::{GlesError, GlesRenderer, GlesTexProgram, 
 use smithay::backend::renderer::{Bind, Blit, Frame, Offscreen, Renderer, TextureFilter};
 use smithay::utils::{Buffer, Physical, Rectangle, Size, Transform};
 
+/// A shader's source with the shared dither (dither.glsl) where it has
+/// `//_DITHER_`: every gradient item draws is dithered at its output.
+pub fn dithered(src: &str) -> String {
+    src.replace("//_DITHER_", include_str!("dither.glsl"))
+}
+
 /// The blur's levels below the first (half the output): a quarter, an
 /// eighth, a sixteenth.
 const DEPTH: usize = 3;
@@ -37,7 +43,7 @@ pub struct Glass {
 impl Glass {
     pub fn new(renderer: &mut GlesRenderer, output: Size<i32, Physical>) -> Option<Glass> {
         let names = [UniformName::new("pixel", UniformType::_2f), UniformName::new("up", UniformType::_1f)];
-        let program = match renderer.compile_custom_texture_shader(include_str!("blur.frag"), &names) {
+        let program = match renderer.compile_custom_texture_shader(&dithered(include_str!("blur.frag")), &names) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!("glass: the blur's shader: {e}");
@@ -54,7 +60,7 @@ impl Glass {
         let atlas_size: Size<i32, Buffer> = (half.w, half.h * 2).into();
         let atlas: GlesTexture = renderer.create_buffer(Fourcc::Abgr8888, atlas_size).ok()?;
         let pane_names = ["texl", "src0", "origin"].map(|n| UniformName::new(n, UniformType::_2f)).into_iter().chain([UniformName::new("sheet", UniformType::_4f), UniformName::new("turn", UniformType::_1f)]).collect::<Vec<_>>();
-        let pane = match renderer.compile_custom_texture_shader(include_str!("pane.frag"), &pane_names) {
+        let pane = match renderer.compile_custom_texture_shader(&dithered(include_str!("pane.frag")), &pane_names) {
             Ok(p) => Some(p),
             Err(e) => {
                 tracing::warn!("glass: the pane's shader: {e}");
@@ -62,7 +68,7 @@ impl Glass {
             }
         };
         let tile_names = ["texl", "src0", "origin"].map(|n| UniformName::new(n, UniformType::_2f)).into_iter().chain([UniformName::new("tile", UniformType::_4f), UniformName::new("round", UniformType::_1f), UniformName::new("veil", UniformType::_1f), UniformName::new("turn", UniformType::_1f)]).collect::<Vec<_>>();
-        let tile = match renderer.compile_custom_texture_shader(include_str!("tile.frag"), &tile_names) {
+        let tile = match renderer.compile_custom_texture_shader(&dithered(include_str!("tile.frag")), &tile_names) {
             Ok(p) => Some(p),
             Err(e) => {
                 tracing::warn!("glass: the tile's shader: {e}");

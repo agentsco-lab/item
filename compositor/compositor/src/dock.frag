@@ -11,6 +11,8 @@ precision highp float;
 #else
 precision mediump float;
 #endif
+
+//_DITHER_
 #if defined(EXTERNAL)
 uniform samplerExternalOES tex;
 #else
@@ -204,7 +206,8 @@ void main() {
     vec3 silver = vec3(0.94, 0.95, 0.97) * (tone + 0.16 * top_line - 0.1 * low_line) + vec3(0.12) * soft * shine;
     vec4 mercury = vec4(min(silver, vec3(1.0)), 1.0);
 
-    vec4 drop = clamp(mix(water, mercury, metal), 0.0, 1.0) * cover;
+    vec4 drop = clamp(mix(water, mercury, metal), 0.0, 1.0);
+    drop = vec4(dither(drop.rgb), drop.a) * cover;
     // Wet spots, where the drop is not: the wallpaper a little darker and
     // bent through the film, a faint sheen along the edge.
     vec4 film = vec4(0.0);

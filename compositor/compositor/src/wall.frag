@@ -5,6 +5,8 @@ precision highp float;
 #else
 precision mediump float;
 #endif
+
+//_DITHER_
 varying vec2 v_coords;
 uniform vec2 size;
 uniform float alpha;
@@ -16,5 +18,5 @@ uniform float tint;
 
 // The wallpaper over the whole screen, under everything (output.rs).
 void main() {
-    gl_FragColor = vec4(wallpaper(v_coords * size), 1.0) * alpha;
+    gl_FragColor = vec4(dither(wallpaper(v_coords * size)), 1.0) * alpha;
 }

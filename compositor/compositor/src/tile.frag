@@ -11,6 +11,8 @@ precision highp float;
 #else
 precision mediump float;
 #endif
+
+//_DITHER_
 #if defined(EXTERNAL)
 uniform samplerExternalOES tex;
 #else
@@ -70,5 +72,5 @@ void main() {
         cover = 1.0 - smoothstep(-1.0, 0.5, d);
     }
     vec3 c = frosted(q) * (1.0 - veil) + TINT * veil;
-    gl_FragColor = vec4(c, 1.0) * alpha * cover;
+    gl_FragColor = vec4(dither(c), 1.0) * alpha * cover;
 }

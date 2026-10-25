@@ -12,6 +12,8 @@ precision highp float;
 #else
 precision mediump float;
 #endif
+
+//_DITHER_
 #if defined(EXTERNAL)
 uniform samplerExternalOES tex;
 #else
@@ -53,5 +55,7 @@ void main() {
         sum += texture2D(tex, uv + vec2(-h.x, -h.y)) * 2.0;
         sum /= 12.0;
     }
-    gl_FragColor = sum * alpha;
+    // Each pass's result is 8 bits again: the noise keeps what falls
+    // between the levels.
+    gl_FragColor = vec4(dither(sum.rgb), sum.a) * alpha;
 }

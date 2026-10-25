@@ -1828,7 +1828,7 @@ impl Dock {
             names.push(UniformName::new("fill", UniformType::_4f));
             names.extend(["radius", "melt", "shine", "metal", "time", "life", "woff", "wet", "wet2", "level", "dim"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             names.extend(["origin", "texl", "src0"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)));
-            match renderer.compile_custom_texture_shader(include_str!("dock.frag"), &names) {
+            match renderer.compile_custom_texture_shader(&crate::glass::dithered(include_str!("dock.frag")), &names) {
                 Ok(p) => *self.program.borrow_mut() = Some(p),
                 Err(e) => {
                     tracing::warn!("dock: the drops' shader: {e}");

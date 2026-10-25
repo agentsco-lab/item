@@ -11,6 +11,8 @@ precision highp float;
 #else
 precision mediump float;
 #endif
+
+//_DITHER_
 #if defined(EXTERNAL)
 uniform samplerExternalOES tex;
 #else
@@ -74,5 +76,5 @@ void main() {
     }
     // Clear, a touch of the blurred picture so what is on the sheet reads.
     vec3 c = mix(sharp(q), frosted(q), 0.25);
-    gl_FragColor = vec4(c * (1.0 - TINT_A) + TINT * TINT_A, 1.0) * alpha;
+    gl_FragColor = vec4(dither(c * (1.0 - TINT_A) + TINT * TINT_A), 1.0) * alpha;
 }

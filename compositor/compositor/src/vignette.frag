@@ -5,6 +5,8 @@ precision highp float;
 #else
 precision mediump float;
 #endif
+
+//_DITHER_
 varying vec2 v_coords;
 uniform vec2 size;
 uniform float alpha;
@@ -44,5 +46,11 @@ void main() {
         discard;
     }
     vec3 c = glow > 0.5 ? colour : vec3(0.0);
-    gl_FragColor = vec4(c * av * (1.0 - hz), a) * alpha;
+    // The accent's glow dithered; the dark one is not: under it is a
+    // photo's own grain, dithered Aurora (kept, only darker) or black.
+    vec3 lit = c * av * (1.0 - hz);
+    if (glow > 0.5) {
+        lit = dither(lit);
+    }
+    gl_FragColor = vec4(lit, a) * alpha;
 }
