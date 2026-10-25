@@ -15,7 +15,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 cd "$HERE"
 TARGET=aarch64-unknown-linux-gnu
 CARGO=${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}
-"$CARGO" build --release --target $TARGET -p item-compositor -p item-face -p pen-split
+"$CARGO" build --release --target $TARGET -p item-compositor -p item-face -p pen-split -p item-agents
 # item Settings (#160), its own crate cross-built against a sysroot of
 # trixie's GTK and libadwaita (apps/settings/tools/fetch-sysroot.sh).
 SETTINGS="$HERE/../apps/settings"
@@ -58,8 +58,10 @@ install -m755 session/item-session session/item-composer-fresh "$lib/"
 install -m755 session/item-switch "$S/usr/bin/item-switch"
 # The Agent entry: Claude Code in a terminal, the keyboard's vibe layer under it (kbd.rs).
 install -m755 session/item-agent "$S/usr/bin/item-agent"
-install -m755 session/item-agents "$S/usr/bin/item-agents"
-install -m755 session/item-sync "$S/usr/bin/item-sync"
+# item-agents and item-sync, Rust since 0.3 (crates/item-agents): python3
+# is no longer item's.
+aarch64-linux-gnu-strip -o "$S/usr/bin/item-agents" "$R/item-agents"
+aarch64-linux-gnu-strip -o "$S/usr/bin/item-sync" "$R/item-sync"
 install -Dm644 session/item-agent-home.service "$S/usr/lib/systemd/user/item-agent-home.service"
 install -d "$S/usr/lib/systemd/user/default.target.wants"
 ln -s ../item-agent-home.service "$S/usr/lib/systemd/user/default.target.wants/item-agent-home.service"
@@ -159,7 +161,7 @@ Maintainer: Ivan Verbovoy <145046797+iverbovoy@users.noreply.github.com>
 Section: x11
 Priority: optional
 Installed-Size: $INSTALLED
-Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, phosh, chromium, gnome-console, tmux, sudo, python3, pulseaudio-utils, libglib2.0-bin, adaptation-droidian-surfaceduo (>= 0.21)
+Depends: libc6, libgcc-s1, libinput10, libxkbcommon0, libgstreamer1.0-0, libgtk-4-1, libadwaita-1-0, gnome-session-bin, gnome-settings-daemon, phosh, chromium, gnome-console, tmux, sudo, pulseaudio-utils, libglib2.0-bin, adaptation-droidian-surfaceduo (>= 0.21)
 Recommends: curl, wget, rsync, openssh-client, gnome-calls, chatty, gnome-weather
 Homepage: https://github.com/agentsco-lab/item
 Description: item, the two-panel shell for the Surface Duo
