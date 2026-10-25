@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "item-agents"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "libc",
  "regex",
@@ -1192,7 +1192,7 @@ dependencies = [
 
 [[package]]
 name = "item-compositor"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes",
  "async-channel",
