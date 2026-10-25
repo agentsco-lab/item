@@ -82,8 +82,10 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
   panels lighting. The faces enrolled stay on the phone, in
   `/var/lib/item-face`, root's alone; the camera is open only while the lock
   screen is lit.
-- **The first setup** after a clean install: a welcome, a new PIN (the face
-  taken as it is typed, for CV ID), a finger, then a tour.
+- **The first setup** after a clean install: a welcome, Wi-Fi (the networks
+  in reach, a tap joins one; installed with item/grid the phone is already
+  on the computer's network), whether item may go online by itself, a new
+  PIN (the face taken as it is typed, for CV ID), a finger, then a tour.
 - **The phone's sleep** is item's: the lid darkens and lights the screen,
   asleep again 3 s after a wake that lit nothing, woken for alarms, an alarm
   or a call keeps the screen lit.
@@ -185,9 +187,11 @@ its logs and takes it back to stock Android if you want. Its window shows
 the phone as it is held and one button for what to do now. It is the
 computer by the phone that an experiment like this needs. The image it
 puts on is in the [releases](https://github.com/agentsco-lab/item/releases)
-too (`item-duo1-…`: the image, the kernel, the recovery, a manifest with
-the checksums), for item/grid's `~/.local/share/itemgrid/releases/` or
-for doing it by hand.
+too (`item-duo1-…`: the image, the kernel, item/grid's own recovery, a
+manifest with the checksums), for item/grid's
+`~/.local/share/itemgrid/releases/` or for doing it by hand. A phone
+installed this way comes up with the right time, on the computer's Wi-Fi
+and in its time zone.
 
 **By hand**, over a port 0.22.0 or later on Droidian 102:
 
@@ -223,9 +227,12 @@ resume; `item-switch phosh` brings it back.
   Aurora, drawn by the compositor.
 - With an Unsplash key of your own in the keyring (`unsplash`: item/grid's
   Keys, or `item-secret set unsplash`), the wallpaper picker has Shuffle:
-  dark photos from Unsplash's Wallpapers topic, twelve at a time; a tap
-  keeps one in your set with its credit. Without a key there is no Shuffle,
-  and nothing is asked of the network.
+  twelve dark photos at a time, searched among dark themes and kept only if
+  their own pixels are dark; a tap keeps one in your set with its credit.
+  Without a key there is no Shuffle, and nothing is asked of the network.
+- Every gradient item draws is dithered - Aurora, the glass, the accent's
+  glow, the dock's drops - so dark gradients on the OLED panels do not fall
+  into bands.
 - Before the setup has run, and with a picture that cannot be read, the
   screen is black.
 - Tried on one phone. Each step was measured and tried by hand; there is
