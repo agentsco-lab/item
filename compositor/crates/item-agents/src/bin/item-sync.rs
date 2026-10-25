@@ -77,9 +77,15 @@ fn config() -> Config {
     c
 }
 
+/// item-agents beside this program first (a user unit's PATH has no
+/// ~/.local/bin: the sessions were not seen, 2026-10-26), else on the PATH.
+fn agents_program() -> PathBuf {
+    std::env::current_exe().ok().and_then(|me| me.parent().map(|d| d.join("item-agents"))).filter(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("item-agents"))
+}
+
 /// item-agents' sessions here.
 fn agents_list() -> Vec<Value> {
-    let mut c = Command::new("item-agents");
+    let mut c = Command::new(agents_program());
     c.arg("list");
     output_within(c, Duration::from_secs(10)).and_then(|o| serde_json::from_slice::<Vec<Value>>(&o.stdout).ok()).unwrap_or_default()
 }
@@ -152,8 +158,10 @@ fn sync_once(target: &mut Target, paths: &[PathBuf], excludes: &[String]) -> boo
     let t = Instant::now();
     let projects = format!("{}/", home().join(".claude/projects").display());
     let result = (|| {
-        // The transcripts, into the phone owner's home.
-        rsync(&projects, &format!("{host}:.claude/projects/"), &[], &[])?;
+        // The transcripts, into the phone owner's home (the folder made
+        // first: a fresh phone has no ~/.claude, and rsync makes only the
+        // last part of a path).
+        rsync(&projects, &format!("{host}:.claude/projects/"), &[], &["--rsync-path=mkdir -p .claude/projects && rsync".to_owned()])?;
         // The folders, to the same absolute paths (made on the phone first).
         for p in paths.iter().filter(|p| p.is_dir()) {
             let p = p.to_string_lossy();
@@ -180,7 +188,9 @@ fn sync_back(target: &mut Target) {
     let Some(host) = target.pick() else { return };
     let keep: Vec<String> = running_ids().into_iter().map(|id| format!("{id}.jsonl")).collect();
     let projects = format!("{}/", home().join(".claude/projects").display());
-    match rsync(&format!("{host}:.claude/projects/"), &projects, &keep, &[]) {
+    // (The phone's folder made if it is not there yet: nothing to bring, no
+    // error.)
+    match rsync(&format!("{host}:.claude/projects/"), &projects, &keep, &["--rsync-path=mkdir -p .claude/projects && rsync".to_owned()]) {
         Ok(()) => log(&format!("from {host}: transcripts back ({} running here left alone)", keep.len())),
         Err(e) => {
             log(&format!("{host}: back: {e}"));
