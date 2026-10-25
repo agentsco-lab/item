@@ -176,9 +176,19 @@ pub enum Picked {
     ClockMoved((f64, f64)),
     /// The vignette, with a picture on each panel.
     Vignette(Vignette),
-    /// Another batch from Unsplash (unsplash.rs).
+    /// Another batch from Unsplash (unsplash.rs): the group's first tile.
     Shuffle,
+    /// The strip's picture `i` (one kept from Unsplash) out of the set: its
+    /// Remove, after a long press on it.
+    Remove(usize),
+    /// The credit tapped: its link (the photographer's page) opened.
+    Credit,
 }
+
+/// The gap before Unsplash's group in the strip, logical px.
+const GROUP_GAP: f64 = 40.0;
+/// A press this long on a picture kept from Unsplash offers its Remove.
+const LONG_NS: u64 = 600_000_000;
 
 pub struct Picker {
     open: bool,
@@ -202,11 +212,27 @@ pub struct Picker {
     modes: [Label; 2],
     mode_glass: MemoryRenderBuffer,
     mode_lit: MemoryRenderBuffer,
-    /// Unsplash's Shuffle, beside the mode switch: shown with a key in the
-    /// keyring (Some), lit while it fetches (Some(true)); its words.
-    pub shuffle: Option<bool>,
-    shuffle_words: [Label; 2],
-    shuffle_glass: MemoryRenderBuffer,
+    /// Unsplash's group in the strip (with a key in the keyring): where it
+    /// starts (its first tile Shuffle, "Loading…" while it fetches), what
+    /// it says in place of photos (no connection, the limit), the strip's
+    /// pictures kept from Unsplash (a "u" on them), the one offered for
+    /// removal.
+    pub group: Option<usize>,
+    pub group_busy: bool,
+    pub group_note: Option<String>,
+    note_label: std::cell::RefCell<Option<(String, Label)>>,
+    pub kept: std::collections::HashSet<usize>,
+    removing: Option<usize>,
+    shuffle_words: [Label; 3],
+    tile_glass: MemoryRenderBuffer,
+    placeholder: MemoryRenderBuffer,
+    divider: MemoryRenderBuffer,
+    badge: MemoryRenderBuffer,
+    remove_words: Label,
+    u_word: Label,
+    remove_glass: MemoryRenderBuffer,
+    /// When the finger on the strip came down (a long press).
+    pressed_at: u64,
     /// "Dark" and "Glow", the vignette's.
     tints: [Label; 2],
     tint_lit: MemoryRenderBuffer,
@@ -318,9 +344,21 @@ impl Picker {
             modes: [label(13.0, 0.85, "Both panels"), label(13.0, 0.85, "Each panel")],
             mode_glass: crate::grid::rounded(2.0 * MODE_W + 8.0, MODE_H + 8.0, (MODE_H + 8.0) / 2.0, [255, 255, 255, 26]),
             mode_lit: crate::grid::rounded(MODE_W, MODE_H, MODE_H / 2.0, [255, 255, 255, 64]),
-            shuffle: None,
-            shuffle_words: [label(13.0, 0.85, "Shuffle"), label(13.0, 0.6, "Loading…")],
-            shuffle_glass: crate::grid::rounded(MODE_W, MODE_H + 8.0, (MODE_H + 8.0) / 2.0, [255, 255, 255, 26]),
+            group: None,
+            group_busy: false,
+            group_note: None,
+            note_label: Default::default(),
+            kept: Default::default(),
+            removing: None,
+            shuffle_words: [label(15.0, 0.9, "Shuffle"), label(13.0, 0.6, "Loading…"), label(12.0, 0.55, "unsplash")],
+            tile_glass: crate::grid::rounded(THUMB_W, THUMB_H, 26.0 / 2.0, [255, 255, 255, 30]),
+            placeholder: crate::grid::rounded(THUMB_W, THUMB_H, 26.0 / 2.0, [255, 255, 255, 12]),
+            divider: crate::grid::rounded(2.0, THUMB_H - 20.0, 1.0, [255, 255, 255, 40]),
+            badge: crate::grid::rounded(22.0, 22.0, 11.0, [0, 0, 0, 150]),
+            remove_words: label(13.0, 0.95, "Remove"),
+            u_word: label(13.0, 0.9, "u"),
+            remove_glass: crate::grid::rounded(92.0, 32.0, 16.0, [200, 60, 50, 220]),
+            pressed_at: 0,
             tints: [label(13.0, 0.85, "Dark"), label(13.0, 0.85, "Glow")],
             tint_lit: crate::grid::rounded(TINT_W, TINT_H, TINT_H / 2.0, [255, 255, 255, 64]),
             tint_glass: crate::grid::rounded(2.0 * TINT_W + 8.0, TINT_H + 8.0, (TINT_H + 8.0) / 2.0, [255, 255, 255, 26]),
@@ -380,12 +418,6 @@ impl Picker {
         let s = self.strip();
         let x0 = s.loc.x + s.size.w - 22.0 - 2.0 * MODE_W - 4.0;
         Rectangle::new((x0 + 4.0 + i as f64 * MODE_W, s.loc.y + MODE_TOP + 4.0).into(), (MODE_W, MODE_H).into())
-    }
-
-    /// Unsplash's Shuffle, left of the mode switch, logical px, open.
-    fn shuffle_rect(&self) -> Rectangle<f64, Logical> {
-        let m = self.mode(0);
-        Rectangle::new((m.loc.x - 4.0 - 12.0 - MODE_W, m.loc.y - 4.0).into(), (MODE_W, MODE_H + 8.0).into())
     }
 
     /// The strip's rect, logical px, open: over the panel's card, if any.
@@ -462,13 +494,25 @@ impl Picker {
     /// Picture `i`'s rect at the scroll `scroll`, logical px, open.
     fn thumb(&self, i: usize, scroll: f64) -> Rectangle<f64, Logical> {
         let s = self.strip();
-        let x = SIDE + 20.0 + i as f64 * (THUMB_W + GAP) - scroll;
+        let x = self.thumb_x(i) - scroll;
         Rectangle::new((x, s.loc.y + 50.0).into(), (THUMB_W, THUMB_H).into())
     }
 
-    fn max_scroll(count: usize) -> f64 {
-        let content = 2.0 * (SIDE + 20.0) + count as f64 * (THUMB_W + GAP) - GAP;
+    /// Picture `i`'s left edge in the strip unscrolled: Unsplash's group
+    /// after a gap.
+    fn thumb_x(&self, i: usize) -> f64 {
+        let gap = if self.group.is_some_and(|g| i >= g) { GROUP_GAP } else { 0.0 };
+        SIDE + 20.0 + i as f64 * (THUMB_W + GAP) + gap
+    }
+
+    fn max_scroll(&self, count: usize) -> f64 {
+        let content = self.thumb_x(count) - GAP + SIDE + 20.0;
         (content - layout::size().0 as f64).max(0.0)
+    }
+
+    /// The credit's rect, where a tap opens its link.
+    fn info_rect(&self) -> Rectangle<f64, Logical> {
+        Rectangle::new((INFO_AT.0 - 8.0, INFO_AT.1 - 8.0).into(), (700.0, 40.0).into())
     }
 
     /// The panel the panel's card is on.
@@ -747,8 +791,8 @@ impl Picker {
     /// The one on in the middle of the strip, as far as it goes.
     pub fn recenter(&mut self, current: usize, count: usize) {
         let width = layout::size().0 as f64;
-        let at = SIDE + 20.0 + current as f64 * (THUMB_W + GAP) + THUMB_W / 2.0;
-        self.scroll = (at - width / 2.0).clamp(0.0, Self::max_scroll(count));
+        let at = self.thumb_x(current) + THUMB_W / 2.0;
+        self.scroll = (at - width / 2.0).clamp(0.0, self.max_scroll(count));
         self.run = None;
     }
 
@@ -766,7 +810,7 @@ impl Picker {
     }
 
     fn scroll_at(&self, now: u64, count: usize) -> f64 {
-        let max = Self::max_scroll(count);
+        let max = self.max_scroll(count);
         if let Some(h) = &self.hold {
             return (h.from - (h.last.1 - h.start.x)).clamp(0.0, max);
         }
@@ -818,6 +862,7 @@ impl Picker {
             // A card: its taps are taken on the way up.
             if self.clock_card_rect().is_some_and(|r| r.contains(pos)) || self.panel_card().is_some_and(|r| r.contains(pos)) {
                 self.hold = Some(Hold { slot, start: pos, from: self.scroll, last: (time_us, pos.x), velocity: 0.0, moved: false });
+                self.pressed_at = hybris_hwc::now_ns();
                 return true;
             }
         }
@@ -844,6 +889,7 @@ impl Picker {
         self.scroll = self.scroll_at(now, count);
         self.run = None;
         self.hold = Some(Hold { slot, start: pos, from: self.scroll, last: (time_us, pos.x), velocity: 0.0, moved: false });
+        self.pressed_at = hybris_hwc::now_ns();
         true
     }
 
@@ -976,7 +1022,7 @@ impl Picker {
             }
             return None;
         }
-        let scroll = (h.from - (h.last.1 - h.start.x)).clamp(0.0, Self::max_scroll(count));
+        let scroll = (h.from - (h.last.1 - h.start.x)).clamp(0.0, self.max_scroll(count));
         self.scroll = scroll;
         if h.moved {
             if h.velocity.abs() > 0.05 {
@@ -987,9 +1033,6 @@ impl Picker {
         if let Some(i) = (0..2).find(|&i| self.mode(i).contains(h.start)) {
             return Some(Picked::Each(i == 1));
         }
-        if self.shuffle == Some(false) && self.shuffle_rect().contains(h.start) {
-            return Some(Picked::Shuffle);
-        }
         // A swatch: a little more room round it than it shows.
         if let Some(i) = (0..=crate::accent::PALETTE.len()).find(|&i| {
             let r = self.swatch(i);
@@ -997,7 +1040,34 @@ impl Picker {
         }) {
             return Some(Picked::Accent(i.checked_sub(1)));
         }
-        (0..count).find(|&i| self.thumb(i, scroll).contains(h.start)).map(Picked::Wallpaper)
+        // Remove offered: its pill tapped removes; anything else lets it be.
+        if let Some(i) = self.removing.take() {
+            if self.remove_rect(i, scroll).contains(h.start) {
+                return Some(Picked::Remove(i));
+            }
+            return None;
+        }
+        let i = (0..count).find(|&i| self.thumb(i, scroll).contains(h.start))?;
+        if self.group == Some(i) {
+            return (!self.group_busy).then_some(Picked::Shuffle);
+        }
+        // Held long on one kept from Unsplash: its Remove offered.
+        if self.kept.contains(&i) && hybris_hwc::now_ns().saturating_sub(self.pressed_at) > LONG_NS {
+            self.removing = Some(i);
+            return None;
+        }
+        Some(Picked::Wallpaper(i))
+    }
+
+    /// The Remove pill over picture `i`.
+    fn remove_rect(&self, i: usize, scroll: f64) -> Rectangle<f64, Logical> {
+        let r = self.thumb(i, scroll);
+        Rectangle::new((r.loc.x + (r.size.w - 92.0) / 2.0, r.loc.y + (r.size.h - 32.0) / 2.0).into(), (92.0, 32.0).into())
+    }
+
+    /// The credit tapped (picker open, nothing else under the finger).
+    pub fn credit_at(&self, pos: Point<f64, Logical>) -> bool {
+        self.info.is_some() && self.info_rect().contains(pos)
     }
 
     /// After a frame: whether it still moves.
@@ -1171,8 +1241,46 @@ impl Picker {
             if r.loc.x + r.size.w < 0.0 || r.loc.x > width {
                 continue;
             }
-            if let Some(t) = t {
-                put(&mut out, t, r.loc.x, r.loc.y, drop);
+            // Unsplash's group: a line before it, its name over its first
+            // tile, which is Shuffle ("Loading…" while it fetches); what it
+            // says in place of photos after it.
+            if self.group == Some(i) {
+                put(&mut out, &self.divider, r.loc.x - GROUP_GAP / 2.0 - GAP / 2.0 - 1.0, r.loc.y + 10.0, drop);
+                let name = &self.shuffle_words[2];
+                put(&mut out, &name.buffer, r.loc.x + 4.0, r.loc.y - name.extent.h as f64 - 8.0, drop);
+                if let Some(note) = &self.group_note {
+                    let mut cached = self.note_label.borrow_mut();
+                    if cached.as_ref().is_none_or(|(n, _)| n != note) {
+                        *cached = Some((note.clone(), label(13.0, 0.7, note)));
+                    }
+                    if let Some((_, l)) = cached.as_ref() {
+                        put(&mut out, &l.buffer, r.loc.x + r.size.w + GAP + 8.0, r.loc.y + (r.size.h - l.extent.h as f64) / 2.0, drop);
+                    }
+                }
+                let l = &self.shuffle_words[usize::from(self.group_busy)];
+                let (x, y) = centred(l, r);
+                put(&mut out, &l.buffer, x, y, drop);
+                put(&mut out, &self.tile_glass, r.loc.x, r.loc.y, drop);
+                continue;
+            }
+            if self.removing == Some(i) {
+                let p = self.remove_rect(i, scroll);
+                let (x, y) = centred(&self.remove_words, p);
+                put(&mut out, &self.remove_words.buffer, x, y, drop);
+                put(&mut out, &self.remove_glass, p.loc.x, p.loc.y, drop);
+            }
+            // One kept from Unsplash: a "u" in its corner.
+            if self.kept.contains(&i) {
+                let b = Rectangle::<f64, Logical>::new((r.loc.x + r.size.w - 30.0, r.loc.y + 8.0).into(), (22.0, 22.0).into());
+                let (x, y) = centred(&self.u_word, b);
+                put(&mut out, &self.u_word.buffer, x, y - 1.0, drop);
+                put(&mut out, &self.badge, b.loc.x, b.loc.y, drop);
+            }
+            match t {
+                Some(t) => put(&mut out, t, r.loc.x, r.loc.y, drop),
+                // Still coming (Unsplash's batch): its place shown.
+                None if self.group.is_some_and(|g| i > g) => put(&mut out, &self.placeholder, r.loc.x, r.loc.y, drop),
+                None => {}
             }
             if i == current {
                 put(&mut out, &self.ring, r.loc.x - 4.0, r.loc.y - 4.0, drop);
@@ -1209,14 +1317,7 @@ impl Picker {
         put(&mut out, &self.mode_lit, lr.loc.x, lr.loc.y, drop);
         let r0 = self.mode(0);
         put(&mut out, &self.mode_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, drop);
-        // Shuffle (with a key), "Loading…" while it fetches.
-        if let Some(busy) = self.shuffle {
-            let r = self.shuffle_rect();
-            let l = &self.shuffle_words[usize::from(busy)];
-            let (x, y) = centred(l, r);
-            put(&mut out, &l.buffer, x, y, drop);
-            put(&mut out, &self.shuffle_glass, r.loc.x, r.loc.y, drop);
-        }
+
         put(&mut out, &self.glass, strip.loc.x, strip.loc.y, drop);
         out
     }

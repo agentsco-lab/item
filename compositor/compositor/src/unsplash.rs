@@ -3,12 +3,12 @@
 //! picker shows "Shuffle". Without one nothing here runs and nothing is
 //! asked of the network: the package's pictures are the set.
 //!
-//! Shuffle asks Unsplash's "Wallpapers" topic for a page of photos in the
-//! picker's shape (wide for one picture on both panels, tall for one on
-//! each), keeps the dark ones by the colour Unsplash gives each photo
-//! (nothing bright is even fetched), never one shown before, twelve at
-//! most, and fetches their small pictures for the strip, after the set's
-//! own. A tap on one fetches it at the Duo's size into the owner's set
+//! Shuffle searches Unsplash for one of a few dark themes (THEMES: night
+//! skies, mountains, cities at night, fog...) in the picker's shape (wide
+//! for one picture on both panels, tall for one on each), black in
+//! Unsplash's colour filter; each photo not shown before is fetched small
+//! and kept only if its own pixels are dark (`dark`), twelve at most, each
+//! on the strip as it passes, in Unsplash's own group after the set. A tap on one fetches it at the Duo's size into the owner's set
 //! (`~/.local/share/item/walls/unsplash-ID.jpg`), its credit beside it
 //! (`unsplash-ID.txt`: "Photo by NAME on Unsplash" and the links), tells
 //! Unsplash it was downloaded (their API's rule), and puts it on. The
@@ -32,9 +32,6 @@ use smithay::utils::Transform;
 const KEY: &str = "unsplash";
 /// Photos a shuffle shows.
 const BATCH: usize = 12;
-/// The darkest average colour kept (its luma, 0..1): the set is dark, as
-/// item's own pictures are.
-const DARK: f64 = 0.38;
 /// A small picture's size (walls.rs's THUMB_PX).
 const THUMB: (u32, u32) = (360, 202);
 /// The longer side fetched for the wallpaper (the Duo's book is 2784 px
@@ -110,9 +107,10 @@ impl Gallery {
         self.thumbs.len()
     }
 
-    /// What went wrong last, once.
-    pub fn take_error(&self) -> Option<String> {
-        self.shared.lock().unwrap().error.take()
+    /// What the group says in place of photos (no connection, the limit),
+    /// until the next shuffle.
+    pub fn note(&self) -> Option<String> {
+        self.shared.lock().unwrap().error.clone()
     }
 
     /// The photos gone from the strip (the mode changed: another shape).
@@ -123,7 +121,9 @@ impl Gallery {
         self.thumbs.clear();
     }
 
-    /// A new batch, in the shape `tall` (one picture on each panel) or wide.
+    /// A new batch, in the shape `tall` (one picture on each panel) or wide:
+    /// its places shown at once, each filled as its photo passes (dark by
+    /// its own pixels, not seen before), BATCH at most.
     pub fn shuffle(&mut self, tall: bool) {
         {
             let mut s = self.shared.lock().unwrap();
@@ -131,46 +131,43 @@ impl Gallery {
                 return;
             }
             s.shuffling = true;
+            s.error = None;
+            s.photos.clear();
+            s.thumbs = vec![None; BATCH];
+            s.changed = true;
         }
+        self.wake.ping();
         let (shared, wake) = (self.shared.clone(), self.wake.clone());
         std::thread::spawn(move || {
             let seen = shared.lock().unwrap().seen.clone();
-            let got = batch(tall, &seen);
+            let r = batch(tall, &seen, &mut |photo, thumb| {
+                let mut s = shared.lock().unwrap();
+                let at = s.photos.len();
+                s.seen.insert(photo.id.clone());
+                s.photos.push(photo);
+                if at < s.thumbs.len() {
+                    s.thumbs[at] = Some(thumb);
+                }
+                s.changed = true;
+                drop(s);
+                wake.ping();
+            });
             let mut s = shared.lock().unwrap();
             s.shuffling = false;
-            match got {
-                Ok(photos) => {
-                    tracing::info!("unsplash: {} photos shuffled in", photos.len());
-                    s.seen.extend(photos.iter().map(|p| p.id.clone()));
-                    s.thumbs = vec![None; photos.len()];
-                    s.photos = photos.clone();
-                    s.changed = true;
-                    drop(s);
-                    wake.ping();
-                    // Their small pictures, each on the strip as it comes.
-                    for (i, p) in photos.iter().enumerate() {
-                        let url = format!("{}&w={}&h={}&fit=crop&fm=jpg&q=75", p.raw, THUMB.0, THUMB.1);
-                        let small = fetch(&url, None).ok().and_then(|b| crate::walls::decode_bytes(&b));
-                        let mut s = shared.lock().unwrap();
-                        if s.photos.get(i).is_some_and(|q| q.id == p.id) {
-                            s.thumbs[i] = small.map(|(mut px, w, h)| {
-                                crate::walls::round_corners(&mut px, w, h, crate::walls::THUMB_RADIUS);
-                                (px, w, h)
-                            });
-                            s.changed = true;
-                        }
-                        drop(s);
-                        wake.ping();
-                    }
-                }
+            // The places no photo filled go.
+            let n = s.photos.len();
+            s.thumbs.truncate(n);
+            match r {
+                Ok(()) if n > 0 => tracing::info!("unsplash: {n} photos shuffled in"),
+                Ok(()) => s.error = Some("no dark photos this time: shuffle again".into()),
                 Err(e) => {
                     tracing::warn!("unsplash: {e}");
                     s.error = Some(e);
-                    s.changed = true;
-                    drop(s);
-                    wake.ping();
                 }
             }
+            s.changed = true;
+            drop(s);
+            wake.ping();
         });
     }
 
@@ -213,45 +210,77 @@ impl Gallery {
     }
 }
 
-/// A batch: a random page of the topic in the shape asked, the dark ones
-/// not seen before, BATCH at most (another page or two if one gives too
-/// few).
-fn batch(tall: bool, seen: &HashSet<String>) -> Result<Vec<Photo>, String> {
+/// What a batch is searched for, one theme a shuffle in turn: dark
+/// scenes without people, animals, food, devices or lettering in focus (as
+/// the owner chose by hand for coddy-agent's gallery).
+const THEMES: [&str; 10] = ["night sky stars", "dark mountains", "city at night", "foggy forest", "dark abstract", "desert night", "ocean at night", "aurora", "dark minimal architecture", "moon landscape"];
+
+/// A batch: a theme's search, black in Unsplash's colour filter, in the
+/// shape asked; each photo not seen before fetched small and kept if its
+/// own pixels are dark (`dark`), told to `keep` as it passes, BATCH at
+/// most, three pages at most.
+fn batch(tall: bool, seen: &HashSet<String>, keep: &mut dyn FnMut(Photo, (Vec<u8>, u32, u32))) -> Result<(), String> {
     let orientation = if tall { "portrait" } else { "landscape" };
-    let mut out: Vec<Photo> = Vec::new();
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() as usize);
+    let theme = THEMES[nanos % THEMES.len()];
+    let key = key()?;
+    let mut kept = 0;
     let mut ids: HashSet<String> = HashSet::new();
-    for _ in 0..3 {
-        let page = 1 + std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos() % 40);
-        let url = format!("{API}/topics/wallpapers/photos?per_page=30&page={page}&orientation={orientation}");
-        let body = fetch(&url, Some(&key()?))?;
-        let list: serde_json::Value = serde_json::from_slice(&body).map_err(|e| format!("Unsplash's answer: {e}"))?;
-        let Some(list) = list.as_array() else {
-            return Err(format!("Unsplash said: {}", list["errors"].get(0).and_then(|e| e.as_str()).unwrap_or("no photos")));
+    for page in 1..=3 {
+        let page = page + nanos % 3;
+        let url = format!("{API}/search/photos?query={}&color=black&orientation={orientation}&content_filter=high&per_page=30&page={page}", theme.replace(' ', "+"));
+        let body = fetch(&url, Some(&key))?;
+        let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| format!("Unsplash's answer: {e}"))?;
+        let Some(list) = v["results"].as_array() else {
+            return Err(format!("Unsplash said: {}", v["errors"].get(0).and_then(|e| e.as_str()).unwrap_or("no photos")));
         };
+        if list.is_empty() {
+            break;
+        }
         for p in list {
             let id = p["id"].as_str().unwrap_or_default().to_owned();
-            if id.is_empty() || seen.contains(&id) || ids.contains(&id) || luma(p["color"].as_str().unwrap_or("#ffffff")) > DARK {
+            if id.is_empty() || seen.contains(&id) || ids.contains(&id) || luma(p["color"].as_str().unwrap_or("#ffffff")) > 0.45 {
                 continue;
             }
-            let s = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
             ids.insert(id.clone());
-            out.push(Photo {
+            let s = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
+            let photo = Photo {
                 id,
                 author: s(&p["user"]["name"]),
                 author_url: s(&p["user"]["links"]["html"]),
                 page_url: s(&p["links"]["html"]),
                 download_location: s(&p["links"]["download_location"]),
                 raw: s(&p["urls"]["raw"]),
-            });
-            if out.len() == BATCH {
-                return Ok(out);
+            };
+            let url = format!("{}&w={}&h={}&fit=crop&fm=jpg&q=75", photo.raw, THUMB.0, THUMB.1);
+            let Some((mut px, w, h)) = fetch(&url, None).ok().and_then(|b| crate::walls::decode_bytes(&b)) else { continue };
+            if !dark(&px) {
+                continue;
+            }
+            crate::walls::round_corners(&mut px, w, h, crate::walls::THUMB_RADIUS);
+            keep(photo, (px, w, h));
+            kept += 1;
+            if kept == BATCH {
+                return Ok(());
             }
         }
     }
-    if out.is_empty() {
-        return Err("no dark photos on these pages".into());
+    Ok(())
+}
+
+/// Whether a small picture (RGBA) is dark: its mean luma low, and little of
+/// it bright (a dark photo with a bright shop window is not).
+fn dark(px: &[u8]) -> bool {
+    let (mut sum, mut bright, mut n) = (0.0, 0usize, 0usize);
+    for c in px.chunks_exact(4).step_by(3) {
+        let l = (0.2126 * c[0] as f64 + 0.7152 * c[1] as f64 + 0.0722 * c[2] as f64) / 255.0;
+        sum += l;
+        if l > 0.72 {
+            bright += 1;
+        }
+        n += 1;
     }
-    Ok(out)
+    n > 0 && sum / (n as f64) < 0.26 && (bright as f64) < 0.05 * n as f64
 }
 
 /// A photo fetched at the Duo's size into the owner's set with its credit,

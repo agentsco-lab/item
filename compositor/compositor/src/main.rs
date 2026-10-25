@@ -590,7 +590,7 @@ impl Data {
                 let look = crate::clock::style().0;
                 (self.state.picker.brightness, self.state.picker.font, self.state.picker.vignette) = (look.alpha, look.font, self.state.walls.vignette);
                 let current = self.state.walls.shown_current().unwrap_or(0);
-                let count = self.state.walls.shown.len() + self.state.gallery.len();
+                let count = self.state.picker_strip();
                 self.state.picker.open(slot, current, count);
                 // Shuffle offered if the keyring has Unsplash's key.
                 self.state.gallery.check_key();
@@ -1037,7 +1037,7 @@ impl Data {
         if self.state.dialog.settle(self.pacing.target_ns) || self.state.calls.settle(self.pacing.target_ns) || self.state.alert.settle(self.pacing.target_ns) || self.state.layers.sliding() || self.state.tour.settle() {
             self.state.needs_redraw = true;
         }
-        let count = self.state.walls.shown.len() + self.state.gallery.len();
+        let count = self.state.picker_strip();
         if self.state.picker.settle(self.pacing.target_ns, count) {
             self.state.needs_redraw = true;
             self.state.boost.kick(now);
@@ -1434,17 +1434,12 @@ fn main() {
             }
             // Unsplash's photos (unsplash.rs): the strip's batch, a pick
             // become the wallpaper, what went wrong; Shuffle with the key.
-            let shuffle = data.state.gallery.available().then(|| data.state.gallery.busy());
-            if data.state.picker.shuffle != shuffle {
-                data.state.picker.shuffle = shuffle;
+            let was = (data.state.picker.group, data.state.picker.group_busy);
+            data.state.picker_strip();
+            if was != (data.state.picker.group, data.state.picker.group_busy) {
                 data.state.needs_redraw = true;
             }
             if data.state.gallery.take() {
-                data.state.needs_redraw = true;
-            }
-            if let Some(e) = data.state.gallery.take_error() {
-                let current = data.state.walls.current.clone();
-                data.state.picker.set_info(&current, &[e], hybris_hwc::now_ns());
                 data.state.needs_redraw = true;
             }
             if let Some(picked) = data.state.gallery.take_picked() {
@@ -1455,7 +1450,8 @@ fn main() {
                         data.state.walls.choose(&name);
                         data.state.walls.ask_thumbs();
                         let current = data.state.walls.shown_current().unwrap_or(0);
-                        data.state.picker.recenter(current, data.state.walls.shown.len() + data.state.gallery.len());
+                        let count = data.state.picker_strip();
+                        data.state.picker.recenter(current, count);
                     }
                     Err(e) => {
                         let current = data.state.walls.current.clone();

@@ -394,8 +394,19 @@ impl State {
             return;
         }
         // Choosing the wallpaper: every touch is the picker's.
-        let count = self.walls.shown.len() + self.gallery.len();
+        let count = self.picker_strip();
         match &contact {
+            // The credit tapped: its link (the photographer's page) opened.
+            Contact::Down(_, pos, _) if self.picker.is_open() && self.picker.credit_at(*pos) => {
+                let link = self.walls.info_link(&self.walls.current.clone());
+                if let Some(url) = link {
+                    tracing::info!("picker: the credit's link opened");
+                    let panel = crate::layout::panel_at(*pos).unwrap_or(0);
+                    self.launch(&format!("chromium {url}"), &["chromium".to_owned(), "chromium-browser".to_owned()], None, panel);
+                }
+                self.needs_redraw = true;
+                return;
+            }
             Contact::Down(slot, pos, t) if self.picker.is_open() => {
                 self.picker.down(*slot, *pos, *t, count, self.clock.last_rect.get());
                 self.needs_redraw = true;
@@ -409,12 +420,36 @@ impl State {
             Contact::Up(slot, _) if self.picker.holds(*slot) => {
                 match self.picker.up(*slot, count) {
                     // One of Unsplash's batch: fetched into the set, then on.
-                    Some(crate::picker::Picked::Wallpaper(i)) if i >= self.walls.shown.len() => {
-                        self.gallery.pick(i - self.walls.shown.len(), self.walls.each);
+                    Some(crate::picker::Picked::Wallpaper(i)) if i > self.walls.shown.len() => {
+                        self.gallery.pick(i - self.walls.shown.len() - 1, self.walls.each);
                         let current = self.walls.current.clone();
                         self.picker.set_info(&current, &["Fetching the photo…".to_owned()], hybris_hwc::now_ns());
                     }
-                    Some(crate::picker::Picked::Shuffle) => self.gallery.shuffle(self.walls.each),
+                    Some(crate::picker::Picked::Shuffle) => {
+                        self.gallery.shuffle(self.walls.each);
+                        // The strip goes to the group, its places coming.
+                        let own = self.walls.shown.len();
+                        let count = self.picker_strip();
+                        self.picker.recenter(own + 3, count);
+                    }
+                    // One kept from Unsplash out of the set (its credit and
+                    // small picture with it); the one before it on, if it
+                    // was on.
+                    Some(crate::picker::Picked::Remove(i)) => {
+                        let name = self.walls.names[self.walls.shown[i]].clone();
+                        let was_on = name == self.walls.current;
+                        self.walls.remove_own(&name);
+                        if was_on {
+                            let before = self.walls.shown.get(i.saturating_sub(1)).map(|&n| self.walls.names[n].clone());
+                            if let Some(b) = before {
+                                self.walls.choose(&b);
+                            }
+                        }
+                        let current = self.walls.shown_current().unwrap_or(0);
+                        let count = self.picker_strip();
+                        self.picker.recenter(current, count);
+                    }
+                    Some(crate::picker::Picked::Credit) => {}
                     Some(crate::picker::Picked::Wallpaper(i)) => {
                         let name = self.walls.names[self.walls.shown[i]].clone();
                         if name != self.walls.current {

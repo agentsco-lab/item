@@ -605,10 +605,40 @@ impl Walls {
     /// The credits of the picture `name`: the lines of the text beside it
     /// (NAME.txt for NAME.jpg), who took it first.
     pub fn info(&self, name: &str) -> Vec<String> {
+        // Links are not words to read on a phone: the credit's lines before
+        // them (a tap on the credit opens the first, info_link).
+        self.credit(name).lines().map(str::trim).filter(|l| !l.is_empty()).take_while(|l| !l.starts_with("http")).take(5).map(str::to_owned).collect()
+    }
+
+    fn credit(&self, name: &str) -> String {
         let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
-        std::fs::read_to_string(self.path(&format!("{stem}.txt")))
-            .map(|t| t.lines().map(str::trim).filter(|l| !l.is_empty()).take(5).map(str::to_owned).collect())
-            .unwrap_or_default()
+        std::fs::read_to_string(self.path(&format!("{stem}.txt"))).unwrap_or_default()
+    }
+
+    /// The first link in the picture's credit (the photographer's page), if
+    /// it is an https one.
+    pub fn info_link(&self, name: &str) -> Option<String> {
+        self.credit(name).lines().map(str::trim).find(|l| l.starts_with("https://") && !l.contains(char::is_whitespace)).map(str::to_owned)
+    }
+
+    /// A picture of the owner's (never the package's) out of the set: it,
+    /// its credit and its small picture deleted; the set read again.
+    pub fn remove_own(&mut self, name: &str) {
+        let own = home().join(".local/share/item/walls");
+        if name.contains('/') || !own.join(name).exists() {
+            return;
+        }
+        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
+        for f in [name.to_owned(), format!("{stem}.txt"), format!("thumb-{name}")] {
+            let _ = std::fs::remove_file(own.join(f));
+        }
+        tracing::info!("walls: {name} out of the set");
+        let (each, target) = (self.each, self.target);
+        self.reload();
+        self.each = each;
+        self.target = target;
+        self.sync_current();
+        self.ask_thumbs();
     }
 
     /// Where the one on is in the strip, if it is there.

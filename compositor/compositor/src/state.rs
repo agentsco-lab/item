@@ -1146,6 +1146,29 @@ impl State {
 
     /// An app onto a panel, from the dock or the grid: a window of it put
     /// away comes back; else it is launched under the curtain.
+    /// The picker's strip as it is now: the set's pictures, then - with
+    /// Unsplash's key - its group (Shuffle, its batch); the group's state
+    /// and the kept ones told to the picker. Returns the strip's count.
+    pub fn picker_strip(&mut self) -> usize {
+        let own = self.walls.shown.len();
+        let on = self.gallery.available();
+        self.picker.group = on.then_some(own);
+        self.picker.group_busy = self.gallery.busy();
+        self.picker.group_note = self.gallery.note();
+        self.picker.kept = self.walls.shown.iter().enumerate().filter(|(_, &n)| self.walls.names[n].starts_with("unsplash-")).map(|(i, _)| i).collect();
+        own + if on { 1 + self.gallery.len() } else { 0 }
+    }
+
+    /// The strip's small pictures, in its order (picker_strip's).
+    pub fn picker_thumbs(&self) -> Vec<Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>> {
+        let mut t = self.walls.shown_thumbs();
+        if self.gallery.available() {
+            t.push(None);
+            t.extend(self.gallery.thumbs.iter().cloned());
+        }
+        t
+    }
+
     pub fn launch(&mut self, exec: &str, ids: &[String], icon: Option<smithay::backend::renderer::element::memory::MemoryRenderBuffer>, panel: usize) {
         // The frame turned (layout.rs): every launch is the screen's, from
         // whichever half of the taskbar; the curtain rises there.
