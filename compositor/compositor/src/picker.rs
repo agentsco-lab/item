@@ -3,30 +3,27 @@
 //!
 //! A finger held still on a desk for half a second (grid.rs, the watchdog
 //! in main.rs) opens it: the dock dips away, so the wallpaper shows whole
-//! under the clock, and a strip of the wallpapers rises from the bottom
-//! across both panels, on a dark glass. The strip scrolls under the finger
-//! and runs on when let go; a tap on a picture puts it on (it fades in over
-//! the one before); the one on has a light ring. Under the pictures, the
-//! accent's swatches; at the top right "Both panels" and "Each panel".
+//! under the clock, and two sheets of glass rise at the panels' feet, the
+//! same height, none across the hinge (the owner, 2026-10-25: the panel
+//! below the strip looked apart). The left one is the pictures: "Yours"
+//! and, with Unsplash's key, "Unsplash" (its Shuffle at the top right, its
+//! batch below; unsplash.rs), two rows that scroll sideways and run on when
+//! let go; a tap puts one on (it fades in over the one before), the one on
+//! has a light ring, those kept from Unsplash a "u" (a long press offers
+//! Remove). The right one is their look, a row each with its word before
+//! it: Layout (Both panels / Each panel), Zoom (still if the picture's
+//! pixels allow none), with one picture on each panel the vignette's Dark /
+//! Glow, Strength, Size and Softness, and the Accent's swatches.
 //!
 //! Everything else is edited where it is, as on a phone's lock screen:
 //! - **The clock**: a finger moves it on its panel; a tap on it brings a card
 //!   by it with its fonts (each its own "12:34") and its brightness.
-//! - **The panel's card**, under the strip on the panel being chosen for (with a
-//!   picture on each panel; else the one the editing opened on): the zoom,
-//!   if the picture's pixels allow any (walls.rs), and with a picture on
-//!   each panel the vignette - dark or a glow in the accent, its strength,
-//!   how far it reaches, how soft it is.
-//! - **The picture**: above the strip, two fingers zoom it, one moves it -
+//! - **The picture**: above the sheets, two fingers zoom it, one moves it -
 //!   drawn at once on the GPU from the picture itself (output.rs), made at
 //!   full quality when they let go, without a jump.
-//! - A tap above the strip on the other panel chooses for that one (with a
+//! - A tap above the sheets on the other panel chooses for that one (with a
 //!   picture on each); a tap elsewhere closes the clock's card if it is up,
-//!   else the editing - the strip going down and the dock coming back.
-//!
-//! The panel's card is folded to its title ("Zoom & vignette") until a tap
-//! on it opens it, the strip going up to make room; a tap on its title
-//! folds it again. A slider is seen as it moves and kept when it is let go.
+//!   else the editing - the sheets going down and the dock coming back.
 
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
@@ -39,17 +36,15 @@ use crate::shade::ShellElement;
 use crate::text::{Font, Label};
 use crate::walls::Vignette;
 
-/// A picture in the strip, logical px, and between them.
+/// A picture on the pictures' sheet, logical px, and between them.
 const THUMB_W: f64 = 180.0;
 const THUMB_H: f64 = 101.0;
 const GAP: f64 = 16.0;
-/// The strip: its height, its distance from the bottom, its side margin.
-const STRIP_H: f64 = 236.0;
+/// The sheets' distance from the bottom, their side margin.
 /// The accent's row under the pictures (accent.rs): a swatch each, the
 /// first the wallpaper's own colour (drawn as a ring), then the fixed ones.
 const SWATCH: f64 = 34.0;
 const SWATCH_GAP: f64 = 16.0;
-const SWATCHES_Y: f64 = 172.0;
 const STRIP_BOTTOM: f64 = 16.0;
 const SIDE: f64 = 28.0;
 /// Opening and closing.
@@ -65,7 +60,6 @@ const FRICTION: f64 = 0.0035;
 /// The mode switch.
 const MODE_W: f64 = 128.0;
 const MODE_H: f64 = 30.0;
-const MODE_TOP: f64 = 12.0;
 /// The cards: their margin, a row's height, the words' room before a
 /// slider; a slider's track and knob; the clock's fonts' chips; the
 /// panel's card's width; the vignette's Dark and Glow.
@@ -77,13 +71,25 @@ const KNOB: f64 = 26.0;
 const CHIP_W: f64 = 86.0;
 const CHIP_H: f64 = 54.0;
 const CHIP_GAP: f64 = 10.0;
-const PANEL_CARD_W: f64 = 520.0;
 const TINT_W: f64 = 84.0;
-/// The panel's card's title row (always shown; a tap opens or folds the
-/// rest), and how long it takes to open or fold.
-const HEADER: f64 = 40.0;
+/// How long a change of the sheets' height takes.
 const FOLD_NS: f64 = 280e6;
 const TINT_H: f64 = 28.0;
+/// The sheets: their padding, the pictures' header (the tabs, Shuffle),
+/// a tab's and Shuffle's width.
+const SHEET_PAD: f64 = 16.0;
+const HEAD_H: f64 = 44.0;
+const TAB_W: f64 = 104.0;
+const PILL_W: f64 = 112.0;
+
+/// A row of the look's sheet.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Row {
+    Layout,
+    Slider(Knob),
+    Tint,
+    Accent,
+}
 
 /// Fingers above the strip: moving or zooming the picture.
 struct Shape {
@@ -185,8 +191,6 @@ pub enum Picked {
     Credit,
 }
 
-/// The gap before Unsplash's group in the strip, logical px.
-const GROUP_GAP: f64 = 40.0;
 /// A press this long on a picture kept from Unsplash offers its Remove.
 const LONG_NS: u64 = 600_000_000;
 
@@ -200,7 +204,6 @@ pub struct Picker {
     run: Option<(f64, u64, f64)>,
     /// The finger that opened it, held till it lets go.
     opener: Option<TouchSlot>,
-    glass: MemoryRenderBuffer,
     ring: MemoryRenderBuffer,
     /// The fixed swatches; the wallpaper's, drawn again with it (and its
     /// hole); the light ring round the one chosen.
@@ -224,9 +227,7 @@ pub struct Picker {
     pub kept: std::collections::HashSet<usize>,
     removing: Option<usize>,
     shuffle_words: [Label; 3],
-    tile_glass: MemoryRenderBuffer,
     placeholder: MemoryRenderBuffer,
-    divider: MemoryRenderBuffer,
     badge: MemoryRenderBuffer,
     remove_words: Label,
     u_word: Label,
@@ -259,9 +260,12 @@ pub struct Picker {
     pub opened_on: usize,
     /// The clock's card is up.
     clock_card: bool,
-    /// The panel's card open (else folded to its title), since when.
-    card_open: bool,
-    card_since: u64,
+    /// The pictures' tab: Unsplash's batch (else the set).
+    on_unsplash: bool,
+    tab_words: [Label; 2],
+    layout_word: Label,
+    accent_word: Label,
+    sheet_glass: std::cell::RefCell<Option<((u32, u32), MemoryRenderBuffer)>>,
     /// The frame being drawn: the card's opening is timed by it.
     frame: std::cell::Cell<u64>,
     /// The credits of the picture on (who took it, where, with what), as
@@ -269,17 +273,9 @@ pub struct Picker {
     /// still being made).
     info: Option<(String, Vec<Label>)>,
     info_since: u64,
-    /// The card's rows as shown, going from one count to another (a
-    /// picture that zooms or not): from, to, since.
-    rows_shown: std::cell::Cell<(f64, f64, u64)>,
-    /// The panel's card there or not, 0 to 1 as shown (from, to, since),
-    /// and its height when last there: the strip over it never jumps when
-    /// it comes or goes.
+    /// The sheets' height as shown, going from one to another (a vignette's
+    /// rows coming with one picture on each panel): from, to, since.
     lift_shown: std::cell::Cell<(f64, f64, u64)>,
-    card_last_h: std::cell::Cell<f64>,
-    /// Its title, and Show or Hide by it.
-    card_title: std::cell::RefCell<(String, Label)>,
-    arrows: [Label; 2],
     /// Where the clock was last drawn (clock.rs), logical px.
     clock_rect: std::cell::Cell<Option<Rectangle<f64, Logical>>>,
     /// A slider held: which, its slot, its value now.
@@ -327,7 +323,6 @@ fn label(size: f32, alpha: f32, text: &str) -> Label {
 
 impl Picker {
     pub fn new() -> Picker {
-        let width = layout::size().0 as f64 - 2.0 * SIDE;
         Picker {
             open: false,
             since: 0,
@@ -335,7 +330,6 @@ impl Picker {
             hold: None,
             run: None,
             opener: None,
-            glass: crate::grid::rounded(width, STRIP_H, 26.0, [8, 10, 14, 150]),
             ring: crate::grid::rounded(THUMB_W + 8.0, THUMB_H + 8.0, 17.0, [235, 235, 235, 235]),
             swatches: crate::accent::PALETTE.iter().map(|c| crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, *c)).collect(),
             wall_swatch: std::cell::RefCell::new((0, crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()))),
@@ -351,9 +345,7 @@ impl Picker {
             kept: Default::default(),
             removing: None,
             shuffle_words: [label(15.0, 0.9, "Shuffle"), label(13.0, 0.6, "Loading…"), label(12.0, 0.55, "unsplash")],
-            tile_glass: crate::grid::rounded(THUMB_W, THUMB_H, 26.0 / 2.0, [255, 255, 255, 30]),
             placeholder: crate::grid::rounded(THUMB_W, THUMB_H, 26.0 / 2.0, [255, 255, 255, 12]),
-            divider: crate::grid::rounded(2.0, THUMB_H - 20.0, 1.0, [255, 255, 255, 40]),
             badge: crate::grid::rounded(22.0, 22.0, 11.0, [0, 0, 0, 150]),
             remove_words: label(13.0, 0.95, "Remove"),
             u_word: label(13.0, 0.9, "u"),
@@ -384,16 +376,15 @@ impl Picker {
             each_mark: None,
             opened_on: 1,
             clock_card: false,
-            card_open: false,
-            card_since: 0,
+            on_unsplash: false,
+            tab_words: [label(13.0, 0.85, "Yours"), label(13.0, 0.85, "Unsplash")],
+            layout_word: label(13.0, 0.7, "Layout"),
+            accent_word: label(13.0, 0.7, "Accent"),
+            sheet_glass: Default::default(),
             frame: std::cell::Cell::new(0),
             info: None,
             info_since: u64::MAX,
-            rows_shown: std::cell::Cell::new((f64::NAN, f64::NAN, 0)),
             lift_shown: std::cell::Cell::new((f64::NAN, f64::NAN, 0)),
-            card_last_h: std::cell::Cell::new(0.0),
-            card_title: std::cell::RefCell::new((String::new(), Label::new(14.0, [1.0, 1.0, 1.0, 0.9]))),
-            arrows: [label(13.0, 0.6, "Hide"), label(13.0, 0.6, "Show")],
             clock_rect: Default::default(),
             sliding: None,
             clock_hold: None,
@@ -406,108 +397,109 @@ impl Picker {
     }
 
     // ---- where things are ----------------------------------------------
+    //
+    // Two sheets of the same height at the panels' feet, none across the
+    // hinge: the left one the pictures (Yours / Unsplash tabs, two rows that
+    // scroll sideways), the right one their look, a row each with its word
+    // before it (Layout, Zoom; with one on each panel the vignette's Dark /
+    // Glow and its sliders; the accent).
+
+    /// The right sheet's rows, top to bottom.
+    fn look_rows(&self) -> Vec<Row> {
+        let mut rows = vec![Row::Layout, Row::Slider(Knob::Zoom)];
+        if self.each_mark.is_some() {
+            rows.extend([Row::Tint, Row::Slider(Knob::Strength), Row::Slider(Knob::Reach), Row::Slider(Knob::Soft)]);
+        }
+        rows.push(Row::Accent);
+        rows
+    }
+
+    /// The sheets' height: the pictures' or the look's, whichever is more,
+    /// going from one to the other eased.
+    fn sheet_h(&self) -> f64 {
+        let pictures = 2.0 * SHEET_PAD + HEAD_H + 2.0 * THUMB_H + GAP;
+        let look = 2.0 * SHEET_PAD + self.look_rows().len() as f64 * ROW_H;
+        eased(&self.lift_shown, pictures.max(look), self.frame.get())
+    }
+
+    /// Sheet `p` (0 the pictures on the left panel, 1 the look on the
+    /// right), logical px, open.
+    fn sheet(&self, p: usize) -> Rectangle<f64, Logical> {
+        let panel = layout::panels()[p.min(1)].to_f64();
+        let h = self.sheet_h();
+        Rectangle::new((panel.loc.x + SIDE, layout::size().1 as f64 - STRIP_BOTTOM - h).into(), (panel.size.w - 2.0 * SIDE, h).into())
+    }
+
+    /// Where the sheets begin: above it the fingers move the picture.
+    fn sheets_top(&self) -> f64 {
+        self.sheet(0).loc.y
+    }
+
+    /// A row of the look's sheet: its rect, logical px.
+    fn row_rect(&self, row: Row) -> Option<Rectangle<f64, Logical>> {
+        let i = self.look_rows().iter().position(|r| *r == row)?;
+        let s = self.sheet(1);
+        Some(Rectangle::new((s.loc.x + SHEET_PAD, s.loc.y + SHEET_PAD + i as f64 * ROW_H).into(), (s.size.w - 2.0 * SHEET_PAD, ROW_H).into()))
+    }
 
     /// Swatch `i`'s rect (0 the wallpaper's), logical px, open.
     fn swatch(&self, i: usize) -> Rectangle<f64, Logical> {
-        let s = self.strip();
-        Rectangle::new((s.loc.x + 22.0 + i as f64 * (SWATCH + SWATCH_GAP), s.loc.y + SWATCHES_Y).into(), (SWATCH, SWATCH).into())
+        let r = self.row_rect(Row::Accent).unwrap_or_default();
+        Rectangle::new((r.loc.x + LABEL_W + i as f64 * (SWATCH + SWATCH_GAP), r.loc.y + (ROW_H - SWATCH) / 2.0).into(), (SWATCH, SWATCH).into())
     }
 
-    /// The mode switch's halves, logical px, open: 0 "Both panels", 1 "Each".
+    /// The layout's halves, logical px, open: 0 "Both panels", 1 "Each".
     fn mode(&self, i: usize) -> Rectangle<f64, Logical> {
-        let s = self.strip();
-        let x0 = s.loc.x + s.size.w - 22.0 - 2.0 * MODE_W - 4.0;
-        Rectangle::new((x0 + 4.0 + i as f64 * MODE_W, s.loc.y + MODE_TOP + 4.0).into(), (MODE_W, MODE_H).into())
+        let r = self.row_rect(Row::Layout).unwrap_or_default();
+        Rectangle::new((r.loc.x + LABEL_W + 4.0 + i as f64 * MODE_W, r.loc.y + (ROW_H - MODE_H) / 2.0).into(), (MODE_W, MODE_H).into())
     }
 
-    /// The strip's rect, logical px, open: over the panel's card, if any.
-    fn strip(&self) -> Rectangle<f64, Logical> {
-        let (w, h) = (layout::size().0 as f64, layout::size().1 as f64);
-        let card = self.card_there() * (self.card_last_h.get() + 14.0);
-        Rectangle::new((SIDE, h - STRIP_BOTTOM - STRIP_H - card).into(), (w - 2.0 * SIDE, STRIP_H).into())
+    /// The pictures' tabs, logical px, open: 0 Yours, 1 Unsplash (with a key).
+    fn tab(&self, i: usize) -> Rectangle<f64, Logical> {
+        let s = self.sheet(0);
+        Rectangle::new((s.loc.x + SHEET_PAD + 4.0 + i as f64 * TAB_W, s.loc.y + SHEET_PAD + (HEAD_H - MODE_H) / 2.0 - 4.0).into(), (TAB_W, MODE_H).into())
     }
 
-    /// The panel's card there, 0 to 1: coming or going eased.
-    fn card_there(&self) -> f64 {
-        let h = self.panel_card_h();
-        if let Some(h) = h {
-            self.card_last_h.set(h);
-        }
-        eased(&self.lift_shown, if h.is_some() { 1.0 } else { 0.0 }, self.frame.get())
+    /// Unsplash's Shuffle, at the pictures' sheet's top right, logical px.
+    fn shuffle_pill(&self) -> Rectangle<f64, Logical> {
+        let s = self.sheet(0);
+        Rectangle::new((s.loc.x + s.size.w - SHEET_PAD - PILL_W, s.loc.y + SHEET_PAD + (HEAD_H - MODE_H) / 2.0 - 4.0).into(), (PILL_W, MODE_H).into())
     }
 
-    /// How far the panel's card is open, 0 folded to its title to 1, eased.
-    fn card_k(&self) -> f64 {
-        let t = (self.frame.get().saturating_sub(self.card_since) as f64 / FOLD_NS).clamp(0.0, 1.0);
-        let e = t * t * (3.0 - 2.0 * t);
-        if self.card_open { e } else { 1.0 - e }
-    }
-
-    /// The panel's card's rows below its title: the sliders, and the
-    /// vignette's Dark, Glow.
-    fn card_rows(&self) -> f64 {
-        self.panel_knobs().len() as f64 + f64::from(u8::from(self.each_mark.is_some()))
-    }
-
-    /// The panel's card's height as open as it is, if it has anything.
-    fn panel_card_h(&self) -> Option<f64> {
-        if self.panel_knobs().is_empty() {
-            return None;
-        }
-        Some(CARD_PAD + HEADER + 4.0 + (self.rows_now() * ROW_H + CARD_PAD) * self.card_k())
-    }
-
-    /// The card's rows as shown: a change of their count eased in.
-    fn rows_now(&self) -> f64 {
-        let (to, now) = (self.card_rows(), self.frame.get());
-        let (from, was, since) = self.rows_shown.get();
-        let at = |from: f64, was: f64, since: u64| {
-            let t = (now.saturating_sub(since) as f64 / FOLD_NS).clamp(0.0, 1.0);
-            from + (was - from) * t * t * (3.0 - 2.0 * t)
-        };
-        if was.is_nan() || self.card_k() == 0.0 {
-            self.rows_shown.set((to, to, now));
-            return to;
-        }
-        if was != to {
-            let here = at(from, was, since);
-            self.rows_shown.set((here, to, now));
-            return here;
-        }
-        at(from, was, since)
-    }
-
-    /// The panel's card's height open.
-    fn card_full_h(&self) -> f64 {
-        CARD_PAD + HEADER + 4.0 + self.card_rows().max(self.rows_now().ceil()) * ROW_H + CARD_PAD
-    }
-
-    /// Its title: what the card holds.
-    fn card_words(&self) -> &'static str {
-        match (self.zooms(), self.each_mark.is_some()) {
-            (true, true) => "Zoom & vignette",
-            (false, true) => "Vignette",
-            _ => "Zoom",
+    /// The pictures the open tab shows, as indices into the strip's list:
+    /// the set's (before the group), or Unsplash's batch (after its tile).
+    fn tab_items(&self, count: usize) -> std::ops::Range<usize> {
+        match self.group {
+            Some(g) if self.on_unsplash => (g + 1).min(count)..count,
+            Some(g) => 0..g.min(count),
+            None => 0..count,
         }
     }
 
-    /// Picture `i`'s rect at the scroll `scroll`, logical px, open.
+    /// Picture `i`'s rect at the scroll `scroll`, logical px, open (it may
+    /// be outside the sheet: the caller clips by the sheet).
     fn thumb(&self, i: usize, scroll: f64) -> Rectangle<f64, Logical> {
-        let s = self.strip();
-        let x = self.thumb_x(i) - scroll;
-        Rectangle::new((x, s.loc.y + 50.0).into(), (THUMB_W, THUMB_H).into())
+        let s = self.sheet(0);
+        let slot = i.saturating_sub(self.tab_first());
+        let (col, row) = (slot / 2, slot % 2);
+        let x = s.loc.x + SHEET_PAD + col as f64 * (THUMB_W + GAP) - scroll;
+        let y = s.loc.y + SHEET_PAD + HEAD_H + row as f64 * (THUMB_H + GAP);
+        Rectangle::new((x, y).into(), (THUMB_W, THUMB_H).into())
     }
 
-    /// Picture `i`'s left edge in the strip unscrolled: Unsplash's group
-    /// after a gap.
-    fn thumb_x(&self, i: usize) -> f64 {
-        let gap = if self.group.is_some_and(|g| i >= g) { GROUP_GAP } else { 0.0 };
-        SIDE + 20.0 + i as f64 * (THUMB_W + GAP) + gap
+    /// The open tab's first index.
+    fn tab_first(&self) -> usize {
+        match self.group {
+            Some(g) if self.on_unsplash => g + 1,
+            _ => 0,
+        }
     }
 
     fn max_scroll(&self, count: usize) -> f64 {
-        let content = self.thumb_x(count) - GAP + SIDE + 20.0;
-        (content - layout::size().0 as f64).max(0.0)
+        let n = self.tab_items(count).len();
+        let cols = n.div_ceil(2) as f64;
+        let content = cols * (THUMB_W + GAP) - GAP + 2.0 * SHEET_PAD;
+        (content - self.sheet(0).size.w).max(0.0)
     }
 
     /// The credit's rect, where a tap opens its link.
@@ -515,72 +507,33 @@ impl Picker {
         Rectangle::new((INFO_AT.0 - 8.0, INFO_AT.1 - 8.0).into(), (700.0, 40.0).into())
     }
 
-    /// The panel the panel's card is on.
-    fn card_panel(&self) -> usize {
-        self.each_mark.unwrap_or(self.opened_on)
-    }
-
     /// Whether the picture chosen for may zoom at all.
     fn zooms(&self) -> bool {
         self.zoom_max() > 1.01
     }
 
-    /// The sliders on the panel's card, top to bottom: the zoom if the
-    /// picture may zoom; the vignette's with a picture on each panel.
+    /// The sliders on the look's sheet: the zoom (still, if the picture may
+    /// not zoom), the vignette's with a picture on each panel.
     fn panel_knobs(&self) -> Vec<Knob> {
-        let mut k = Vec::new();
-        if self.zooms() {
-            k.push(Knob::Zoom);
-        }
-        if self.each_mark.is_some() {
-            k.extend([Knob::Strength, Knob::Reach, Knob::Soft]);
-        }
-        k
+        self.look_rows().into_iter().filter_map(|r| if let Row::Slider(k) = r { Some(k) } else { None }).filter(|k| *k != Knob::Zoom || self.zooms()).collect()
     }
 
-    /// A panel card's row for a slider: the zoom first, then the vignette's
-    /// title row (Dark, Glow), then its sliders.
-    fn row_of(&self, k: Knob) -> Option<f64> {
-        let zoom = f64::from(u8::from(self.zooms()));
-        match k {
-            Knob::Zoom => self.zooms().then_some(0.0),
-            Knob::Strength => self.each_mark.map(|_| zoom + 1.0),
-            Knob::Reach => self.each_mark.map(|_| zoom + 2.0),
-            Knob::Soft => self.each_mark.map(|_| zoom + 3.0),
-            Knob::Brightness => None,
-        }
-    }
-
-    /// The panel's card, logical px, if it has anything.
-    fn panel_card(&self) -> Option<Rectangle<f64, Logical>> {
-        let h = self.panel_card_h()?;
-        // Under the strip, at the panel's foot: the top is the clock's.
-        let p = layout::panels()[self.card_panel()].to_f64();
-        Some(Rectangle::new((p.loc.x + (p.size.w - PANEL_CARD_W) / 2.0, layout::size().1 as f64 - STRIP_BOTTOM - h).into(), (PANEL_CARD_W, h).into()))
-    }
-
-    /// A slider's track on its card, logical px.
+    /// A slider's track, logical px.
     fn track_rect(&self, k: Knob) -> Option<Rectangle<f64, Logical>> {
-        let (card, y) = if k == Knob::Brightness {
+        let (x0, w, y) = if k == Knob::Brightness {
             let card = self.clock_card_rect()?;
-            (card, card.loc.y + CARD_PAD + CHIP_H + 10.0 + ROW_H / 2.0)
+            (card.loc.x + CARD_PAD + LABEL_W, card.size.w - 2.0 * CARD_PAD - LABEL_W - KNOB / 2.0, card.loc.y + CARD_PAD + CHIP_H + 10.0 + ROW_H / 2.0)
         } else {
-            let card = self.panel_card()?;
-            (card, card.loc.y + CARD_PAD + HEADER + self.row_of(k)? * ROW_H + ROW_H / 2.0)
+            let r = self.row_rect(Row::Slider(k))?;
+            (r.loc.x + LABEL_W, r.size.w - LABEL_W - KNOB / 2.0, r.loc.y + ROW_H / 2.0)
         };
-        let x = card.loc.x + CARD_PAD + LABEL_W;
-        let w = card.size.w - 2.0 * CARD_PAD - LABEL_W - KNOB / 2.0;
-        Some(Rectangle::new((x, y - TRACK_H / 2.0).into(), (w, TRACK_H).into()))
+        Some(Rectangle::new((x0, y - TRACK_H / 2.0).into(), (w, TRACK_H).into()))
     }
 
     /// The vignette's Dark and Glow, logical px.
     fn tint_rect(&self, i: usize) -> Option<Rectangle<f64, Logical>> {
-        self.each_mark?;
-        let card = self.panel_card()?;
-        let row = f64::from(u8::from(self.zooms()));
-        let y = card.loc.y + CARD_PAD + HEADER + row * ROW_H + (ROW_H - TINT_H) / 2.0;
-        let x0 = card.loc.x + card.size.w - CARD_PAD - 2.0 * TINT_W - 4.0;
-        Some(Rectangle::new((x0 + 4.0 + i as f64 * TINT_W, y).into(), (TINT_W, TINT_H).into()))
+        let r = self.row_rect(Row::Tint)?;
+        Some(Rectangle::new((r.loc.x + LABEL_W + 4.0 + i as f64 * TINT_W, r.loc.y + (ROW_H - TINT_H) / 2.0).into(), (TINT_W, TINT_H).into()))
     }
 
     /// The clock's card, under the clock (over it if there is no room),
@@ -597,7 +550,7 @@ impl Picker {
         let p = layout::panel_at(c.loc).or_else(|| layout::panel_at((c.loc.x + c.size.w - 1.0, c.loc.y).into())).map(|i| layout::panels()[i].to_f64()).unwrap_or(whole);
         let x = (c.loc.x + c.size.w - w).clamp(p.loc.x + 12.0, (p.loc.x + p.size.w - w - 12.0).max(p.loc.x + 12.0));
         let below = c.loc.y + c.size.h + 14.0;
-        let y = if below + h < self.strip().loc.y - 10.0 { below } else { (c.loc.y - h - 14.0).max(12.0) };
+        let y = if below + h < self.sheets_top() - 10.0 { below } else { (c.loc.y - h - 14.0).max(12.0) };
         Some(Rectangle::new((x, y).into(), (w, h).into()))
     }
 
@@ -759,9 +712,8 @@ impl Picker {
         self.hold = None;
         self.run = None;
         self.clock_card = false;
-        self.card_open = false;
-        self.card_since = 0;
-        self.rows_shown.set((f64::NAN, f64::NAN, 0));
+        self.on_unsplash = false;
+        self.removing = None;
         self.lift_shown.set((f64::NAN, f64::NAN, 0));
         self.recenter(current, count);
         self.info_since = u64::MAX;
@@ -790,9 +742,19 @@ impl Picker {
 
     /// The one on in the middle of the strip, as far as it goes.
     pub fn recenter(&mut self, current: usize, count: usize) {
-        let width = layout::size().0 as f64;
-        let at = self.thumb_x(current) + THUMB_W / 2.0;
-        self.scroll = (at - width / 2.0).clamp(0.0, self.max_scroll(count));
+        // Its tab open (Unsplash's batch past the group's tile).
+        self.on_unsplash = self.group.is_some_and(|g| current > g);
+        let col = current.saturating_sub(self.tab_first()) / 2;
+        let w = self.sheet(0).size.w;
+        let at = SHEET_PAD + col as f64 * (THUMB_W + GAP) + THUMB_W / 2.0;
+        self.scroll = (at - w / 2.0).clamp(0.0, self.max_scroll(count));
+        self.run = None;
+    }
+
+    /// The pictures' tab turned to Unsplash's batch (Shuffle pressed).
+    pub fn show_unsplash(&mut self) {
+        self.on_unsplash = true;
+        self.scroll = 0.0;
         self.run = None;
     }
 
@@ -839,7 +801,7 @@ impl Picker {
         if self.shape.as_ref().is_none_or(|s| s.fingers.is_empty()) {
             // A slider on a card: anywhere near its track (the panel's card
             // open).
-            let mut knobs = if self.card_k() > 0.95 { self.panel_knobs() } else { Vec::new() };
+            let mut knobs = self.panel_knobs();
             if self.clock_card {
                 knobs.push(Knob::Brightness);
             }
@@ -860,7 +822,7 @@ impl Picker {
                 }
             }
             // A card: its taps are taken on the way up.
-            if self.clock_card_rect().is_some_and(|r| r.contains(pos)) || self.panel_card().is_some_and(|r| r.contains(pos)) {
+            if self.clock_card_rect().is_some_and(|r| r.contains(pos)) || self.sheet(1).contains(pos) {
                 self.hold = Some(Hold { slot, start: pos, from: self.scroll, last: (time_us, pos.x), velocity: 0.0, moved: false });
                 self.pressed_at = hybris_hwc::now_ns();
                 return true;
@@ -868,7 +830,7 @@ impl Picker {
         }
         // Above the strip, or a second finger there: moving or zooming the
         // picture.
-        if pos.y < self.strip().loc.y || self.shape.as_ref().is_some_and(|s| !s.fingers.is_empty()) {
+        if pos.y < self.sheets_top() || self.shape.as_ref().is_some_and(|s| !s.fingers.is_empty()) {
             let room = self.room;
             let shape = self.shape.get_or_insert(Shape { fingers: Vec::new(), pinch_from: None, zoom: 1.0, moved: (0.0, 0.0), changed: false });
             if shape.fingers.len() < 2 {
@@ -1007,20 +969,22 @@ impl Picker {
             }
             return None;
         }
-        if let Some(card) = self.panel_card().filter(|r| r.contains(h.start)) {
-            // Its title: open, or folded again.
-            if h.start.y < card.loc.y + CARD_PAD + HEADER || !self.card_open {
-                let k = self.card_k();
-                self.card_open = !self.card_open;
-                // From where it is, if it was still moving.
-                self.card_since = self.frame.get().saturating_sub(((1.0 - k) * FOLD_NS) as u64);
-                return None;
+        // The look's sheet: the layout's halves, the vignette's Dark and
+        // Glow, the accent's swatches (a little more room round them).
+        if self.sheet(1).contains(h.start) {
+            if let Some(i) = (0..2).find(|&i| self.mode(i).contains(h.start)) {
+                return Some(Picked::Each(i == 1));
             }
             if let Some(i) = (0..2).find(|&i| self.tint_rect(i).is_some_and(|r| r.contains(h.start))) {
                 self.vignette.glow = i == 1;
                 return Some(Picked::Vignette(self.vignette));
             }
-            return None;
+            return (0..=crate::accent::PALETTE.len())
+                .find(|&i| {
+                    let r = self.swatch(i);
+                    Rectangle::<f64, Logical>::new((r.loc.x - 6.0, r.loc.y - 6.0).into(), (r.size.w + 12.0, r.size.h + 12.0).into()).contains(h.start)
+                })
+                .map(|i| Picked::Accent(i.checked_sub(1)));
         }
         let scroll = (h.from - (h.last.1 - h.start.x)).clamp(0.0, self.max_scroll(count));
         self.scroll = scroll;
@@ -1030,15 +994,18 @@ impl Picker {
             }
             return None;
         }
-        if let Some(i) = (0..2).find(|&i| self.mode(i).contains(h.start)) {
-            return Some(Picked::Each(i == 1));
+        // The pictures' header: the tabs, Shuffle.
+        if let Some(i) = (0..2).find(|&i| (i == 0 || self.group.is_some()) && self.tab(i).contains(h.start)) {
+            let to = i == 1;
+            if to != self.on_unsplash {
+                self.on_unsplash = to;
+                self.scroll = 0.0;
+                self.removing = None;
+            }
+            return None;
         }
-        // A swatch: a little more room round it than it shows.
-        if let Some(i) = (0..=crate::accent::PALETTE.len()).find(|&i| {
-            let r = self.swatch(i);
-            Rectangle::<f64, Logical>::new((r.loc.x - 6.0, r.loc.y - 6.0).into(), (r.size.w + 12.0, r.size.h + 12.0).into()).contains(h.start)
-        }) {
-            return Some(Picked::Accent(i.checked_sub(1)));
+        if self.group.is_some() && self.on_unsplash && self.shuffle_pill().contains(h.start) {
+            return (!self.group_busy).then_some(Picked::Shuffle);
         }
         // Remove offered: its pill tapped removes; anything else lets it be.
         if let Some(i) = self.removing.take() {
@@ -1047,10 +1014,8 @@ impl Picker {
             }
             return None;
         }
-        let i = (0..count).find(|&i| self.thumb(i, scroll).contains(h.start))?;
-        if self.group == Some(i) {
-            return (!self.group_busy).then_some(Picked::Shuffle);
-        }
+        let sheet = self.sheet(0);
+        let i = self.tab_items(count).find(|&i| self.thumb(i, scroll).contains(h.start) && sheet.contains(h.start))?;
         // Held long on one kept from Unsplash: its Remove offered.
         if self.kept.contains(&i) && hybris_hwc::now_ns().saturating_sub(self.pressed_at) > LONG_NS {
             self.removing = Some(i);
@@ -1081,7 +1046,7 @@ impl Picker {
             }
         }
         self.frame.set(frame_ns);
-        let folding = frame_ns < self.card_since.max(self.rows_shown.get().2).max(self.lift_shown.get().2) + FOLD_NS as u64;
+        let folding = frame_ns < self.lift_shown.get().2 + FOLD_NS as u64;
         sliding || folding || self.run.is_some() || self.hold.is_some() || self.shape.is_some() || self.clock_hold.is_some() || self.sliding.is_some()
     }
 
@@ -1113,8 +1078,7 @@ impl Picker {
             return out;
         }
         self.frame.set(frame_ns);
-        let drop = (1.0 - k) * (STRIP_H + STRIP_BOTTOM + 10.0);
-        let lift = drop;
+        let lift = (1.0 - k) * (self.sheet_h() + STRIP_BOTTOM + 10.0);
         let alpha = k as f32;
         let s = SCALE as f64;
         // A row fading in as the panel's card opens over it, and a piece of
@@ -1130,33 +1094,30 @@ impl Picker {
             }
         };
         let centred = |l: &Label, r: Rectangle<f64, Logical>| (r.loc.x + (r.size.w - l.extent.w as f64) / 2.0, r.loc.y + (r.size.h - l.extent.h as f64) / 2.0);
-        // The sliders of a card: knob, track, words.
-        let mut sliders = Vec::new();
+        // The look's sheet: each row's word, then its control.
+        let look = self.sheet(1);
+        let word_at = |l: &Label, r: Rectangle<f64, Logical>| (r.loc.x, r.loc.y + (r.size.h - l.extent.h as f64) / 2.0);
+        // Its sliders (the zoom dim, without a knob, if the picture may
+        // not zoom); the clock's card's brightness.
+        let mut sliders: Vec<Knob> = self.look_rows().into_iter().filter_map(|r| if let Row::Slider(k) = r { Some(k) } else { None }).collect();
         if self.clock_card {
             sliders.push(Knob::Brightness);
         }
-        let ck = self.card_k();
-        if ck > 0.0 {
-            sliders.extend(self.panel_knobs());
-        }
-        // How much of a row at `y` (its middle) the panel's card holds.
-        let card_bottom = self.panel_card().map(|c| c.loc.y + c.size.h - CARD_PAD * ck);
-        let there = self.card_there() as f32;
-        let held = |y: f64| there * card_bottom.map_or(1.0, |b| (((b - y) / (ROW_H * 0.5) - 1.0).clamp(0.0, 1.0)) as f32);
         for kk in sliders {
             let Some(t) = self.track_rect(kk) else { continue };
-            fade.set(if kk == Knob::Brightness { 1.0 } else { held(t.loc.y + TRACK_H / 2.0) });
-            if fade.get() <= 0.0 {
-                continue;
-            }
-            if let Some(x) = self.value_x(kk, self.value(kk)) {
-                put(&mut out, &self.knob, x - KNOB / 2.0, t.loc.y + TRACK_H / 2.0 - KNOB / 2.0, lift);
+            let live = kk != Knob::Zoom || self.zooms();
+            fade.set(if live { 1.0 } else { 0.35 });
+            if live {
+                if let Some(x) = self.value_x(kk, self.value(kk)) {
+                    put(&mut out, &self.knob, x - KNOB / 2.0, t.loc.y + TRACK_H / 2.0 - KNOB / 2.0, lift);
+                }
             }
             put(&mut out, &self.sized(t.size.w, TRACK_H, 1), t.loc.x, t.loc.y, lift);
             if let Some((_, l)) = self.words.iter().find(|(w, _)| *w == kk) {
                 put(&mut out, &l.buffer, t.loc.x - LABEL_W, t.loc.y + TRACK_H / 2.0 - l.extent.h as f64 / 2.0, lift);
             }
         }
+        fade.set(1.0);
         // The clock's card: its fonts.
         if let Some(card) = self.clock_card_rect() {
             for (i, l) in self.font_samples.iter().enumerate() {
@@ -1170,47 +1131,56 @@ impl Picker {
             }
             put(&mut out, &self.sized(card.size.w, card.size.h, 0), card.loc.x, card.loc.y, lift);
         }
-        fade.set(1.0);
-        // The panel's card: its title and arrow; open, the vignette's title
-        // and Dark, Glow.
-        if let Some(card) = self.panel_card() {
-            fade.set(there);
-            {
-                let mut t = self.card_title.borrow_mut();
-                if t.0 != self.card_words() {
-                    let mut l = label(14.0, 0.9, self.card_words());
-                    std::mem::swap(&mut t.1, &mut l);
-                    t.0 = self.card_words().to_owned();
-                }
-                let y = card.loc.y + CARD_PAD + (HEADER - t.1.extent.h as f64) / 2.0 - 6.0;
-                put(&mut out, &t.1.buffer, card.loc.x + CARD_PAD, y, lift);
-                let a = &self.arrows[usize::from(!self.card_open)];
-                put(&mut out, &a.buffer, card.loc.x + card.size.w - CARD_PAD - a.extent.w as f64, y + 2.0, lift);
+        // Layout: Both panels / Each panel, the one on lit.
+        if let Some(r) = self.row_rect(Row::Layout) {
+            let (x, y) = word_at(&self.layout_word, r);
+            put(&mut out, &self.layout_word.buffer, x, y, lift);
+            for (i, l) in self.modes.iter().enumerate() {
+                let (x, y) = centred(l, self.mode(i));
+                put(&mut out, &l.buffer, x, y, lift);
             }
-            if let (Some(r0), Some(r1), true) = (self.tint_rect(0), self.tint_rect(1), ck > 0.0) {
-                fade.set(held(r0.loc.y + r0.size.h / 2.0));
-                for (i, l) in self.tints.iter().enumerate() {
-                    let (x, y) = centred(l, if i == 0 { r0 } else { r1 });
-                    put(&mut out, &l.buffer, x, y, lift);
-                }
-                let lit = if self.vignette.glow { r1 } else { r0 };
-                put(&mut out, &self.tint_lit, lit.loc.x, lit.loc.y, lift);
-                put(&mut out, &self.tint_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, lift);
-                put(&mut out, &self.vignette_word.buffer, card.loc.x + CARD_PAD, r0.loc.y + (r0.size.h - self.vignette_word.extent.h as f64) / 2.0, lift);
-                fade.set(there);
+            let lr = self.mode(usize::from(self.each_mark.is_some()));
+            put(&mut out, &self.mode_lit, lr.loc.x, lr.loc.y, lift);
+            let r0 = self.mode(0);
+            put(&mut out, &self.mode_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, lift);
+        }
+        // Vignette: Dark / Glow.
+        if let (Some(r), Some(r0), Some(r1)) = (self.row_rect(Row::Tint), self.tint_rect(0), self.tint_rect(1)) {
+            let (x, y) = word_at(&self.vignette_word, r);
+            put(&mut out, &self.vignette_word.buffer, x, y, lift);
+            for (i, l) in self.tints.iter().enumerate() {
+                let (x, y) = centred(l, if i == 0 { r0 } else { r1 });
+                put(&mut out, &l.buffer, x, y, lift);
             }
-            // Its background: the open one, its top as far as the card goes
-            // and its rounded foot under it.
-            let full = self.card_full_h();
-            let bg = self.sized(card.size.w, full, 0);
-            let foot = 24.0f64.min(card.size.h / 2.0);
-            let w = card.size.w;
-            crop.set(Some(Rectangle::new((0.0, 0.0).into(), (w, card.size.h - foot).into())));
-            put(&mut out, &bg, card.loc.x, card.loc.y, lift);
-            crop.set(Some(Rectangle::new((0.0, full - foot).into(), (w, foot).into())));
-            put(&mut out, &bg, card.loc.x, card.loc.y + card.size.h - foot, lift);
-            crop.set(None);
-            fade.set(1.0);
+            let lit = if self.vignette.glow { r1 } else { r0 };
+            put(&mut out, &self.tint_lit, lit.loc.x, lit.loc.y, lift);
+            put(&mut out, &self.tint_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, lift);
+        }
+        // Accent: the wallpaper's colour as a ring, the fixed ones whole,
+        // the one chosen ringed.
+        if let Some(r) = self.row_rect(Row::Accent) {
+            let (x, y) = word_at(&self.accent_word, r);
+            put(&mut out, &self.accent_word.buffer, x, y, lift);
+            let chosen = crate::accent::chosen().map(|i| i + 1).unwrap_or(0);
+            let wall = {
+                let mut w = self.wall_swatch.borrow_mut();
+                if w.0 != crate::accent::version() {
+                    *w = (crate::accent::version(), crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()));
+                }
+                w.1.clone()
+            };
+            for i in 0..=self.swatches.len() {
+                let r = self.swatch(i);
+                if i == 0 {
+                    put(&mut out, &self.hole, r.loc.x + 6.0, r.loc.y + 6.0, lift);
+                    put(&mut out, &wall, r.loc.x, r.loc.y, lift);
+                } else {
+                    put(&mut out, &self.swatches[i - 1], r.loc.x, r.loc.y, lift);
+                }
+                if i == chosen {
+                    put(&mut out, &self.swatch_ring, r.loc.x - 4.0, r.loc.y - 4.0, lift);
+                }
+            }
         }
         // The picture's credits, top left on the left panel, over a soft
         // glass, coming in once the picture is on.
@@ -1233,92 +1203,83 @@ impl Picker {
                 fade.set(1.0);
             }
         }
-        let strip = self.strip();
-        let scroll = self.scroll_at(frame_ns, thumbs.len());
-        let width = layout::size().0 as f64;
-        for (i, t) in thumbs.iter().enumerate() {
-            let r = self.thumb(i, scroll);
-            if r.loc.x + r.size.w < 0.0 || r.loc.x > width {
-                continue;
-            }
-            // Unsplash's group: a line before it, its name over its first
-            // tile, which is Shuffle ("Loading…" while it fetches); what it
-            // says in place of photos after it.
-            if self.group == Some(i) {
-                put(&mut out, &self.divider, r.loc.x - GROUP_GAP / 2.0 - GAP / 2.0 - 1.0, r.loc.y + 10.0, drop);
-                let name = &self.shuffle_words[2];
-                put(&mut out, &name.buffer, r.loc.x + 4.0, r.loc.y - name.extent.h as f64 - 8.0, drop);
-                if let Some(note) = &self.group_note {
-                    let mut cached = self.note_label.borrow_mut();
-                    if cached.as_ref().is_none_or(|(n, _)| n != note) {
-                        *cached = Some((note.clone(), label(13.0, 0.7, note)));
-                    }
-                    if let Some((_, l)) = cached.as_ref() {
-                        put(&mut out, &l.buffer, r.loc.x + r.size.w + GAP + 8.0, r.loc.y + (r.size.h - l.extent.h as f64) / 2.0, drop);
-                    }
+        // The pictures' sheet: its header (Yours / Unsplash, Shuffle and
+        // what Unsplash said), then the open tab's pictures in two rows,
+        // cut at the sheet's sides.
+        let pics = self.sheet(0);
+        let tabs = if self.group.is_some() { 2 } else { 1 };
+        for i in 0..tabs {
+            let l = &self.tab_words[i];
+            let (x, y) = centred(l, self.tab(i));
+            put(&mut out, &l.buffer, x, y, lift);
+        }
+        if tabs == 2 {
+            let lr = self.tab(usize::from(self.on_unsplash));
+            put(&mut out, &self.mode_lit, lr.loc.x + (TAB_W - MODE_W) / 2.0, lr.loc.y, lift);
+        }
+        if self.group.is_some() && self.on_unsplash {
+            let p = self.shuffle_pill();
+            let l = &self.shuffle_words[usize::from(self.group_busy)];
+            let (x, y) = centred(l, p);
+            put(&mut out, &l.buffer, x, y, lift);
+            put(&mut out, &self.sized(PILL_W, MODE_H, 1), p.loc.x, p.loc.y, lift);
+            if let Some(note) = &self.group_note {
+                let mut cached = self.note_label.borrow_mut();
+                if cached.as_ref().is_none_or(|(n, _)| n != note) {
+                    *cached = Some((note.clone(), label(13.0, 0.7, note)));
                 }
-                let l = &self.shuffle_words[usize::from(self.group_busy)];
-                let (x, y) = centred(l, r);
-                put(&mut out, &l.buffer, x, y, drop);
-                put(&mut out, &self.tile_glass, r.loc.x, r.loc.y, drop);
+                if let Some((_, l)) = cached.as_ref() {
+                    let y = pics.loc.y + SHEET_PAD + HEAD_H + THUMB_H - l.extent.h as f64 / 2.0;
+                    put(&mut out, &l.buffer, pics.loc.x + SHEET_PAD + 4.0, y, lift);
+                }
+            }
+        }
+        let scroll = self.scroll_at(frame_ns, thumbs.len());
+        let (left, right) = (pics.loc.x + 6.0, pics.loc.x + pics.size.w - 6.0);
+        for i in self.tab_items(thumbs.len()) {
+            let r = self.thumb(i, scroll);
+            if r.loc.x + r.size.w <= left || r.loc.x >= right {
                 continue;
             }
-            if self.removing == Some(i) {
+            // Cut at the sheet's sides: the part of it inside.
+            let (x0, x1) = (r.loc.x.max(left), (r.loc.x + r.size.w).min(right));
+            let whole = x0 == r.loc.x && x1 == r.loc.x + r.size.w;
+            let part = Rectangle::<f64, Logical>::new((x0 - r.loc.x, 0.0).into(), (x1 - x0, r.size.h).into());
+            if whole && self.removing == Some(i) {
                 let p = self.remove_rect(i, scroll);
                 let (x, y) = centred(&self.remove_words, p);
-                put(&mut out, &self.remove_words.buffer, x, y, drop);
-                put(&mut out, &self.remove_glass, p.loc.x, p.loc.y, drop);
+                put(&mut out, &self.remove_words.buffer, x, y, lift);
+                put(&mut out, &self.remove_glass, p.loc.x, p.loc.y, lift);
             }
             // One kept from Unsplash: a "u" in its corner.
-            if self.kept.contains(&i) {
+            if whole && self.kept.contains(&i) {
                 let b = Rectangle::<f64, Logical>::new((r.loc.x + r.size.w - 30.0, r.loc.y + 8.0).into(), (22.0, 22.0).into());
                 let (x, y) = centred(&self.u_word, b);
-                put(&mut out, &self.u_word.buffer, x, y - 1.0, drop);
-                put(&mut out, &self.badge, b.loc.x, b.loc.y, drop);
+                put(&mut out, &self.u_word.buffer, x, y - 1.0, lift);
+                put(&mut out, &self.badge, b.loc.x, b.loc.y, lift);
             }
-            match t {
-                Some(t) => put(&mut out, t, r.loc.x, r.loc.y, drop),
+            if whole && i == current {
+                put(&mut out, &self.ring, r.loc.x - 4.0, r.loc.y - 4.0, lift);
+            }
+            crop.set((!whole).then_some(part));
+            match &thumbs[i] {
+                Some(t) => put(&mut out, t, x0, r.loc.y, lift),
                 // Still coming (Unsplash's batch): its place shown.
-                None if self.group.is_some_and(|g| i > g) => put(&mut out, &self.placeholder, r.loc.x, r.loc.y, drop),
-                None => {}
+                None => put(&mut out, &self.placeholder, x0, r.loc.y, lift),
             }
-            if i == current {
-                put(&mut out, &self.ring, r.loc.x - 4.0, r.loc.y - 4.0, drop);
+            crop.set(None);
+        }
+        // The two sheets' glass.
+        for sh in [pics, look] {
+            let key = (sh.size.w.round() as u32, sh.size.h.round() as u32);
+            let mut g = self.sheet_glass.borrow_mut();
+            if g.as_ref().is_none_or(|(k, _)| *k != key) {
+                *g = Some((key, crate::grid::rounded(sh.size.w, sh.size.h, 26.0, [8, 10, 14, 150])));
+            }
+            if let Some((_, b)) = g.as_ref() {
+                put(&mut out, b, sh.loc.x, sh.loc.y, lift);
             }
         }
-        // The accent's row: the wallpaper's colour as a ring, the fixed
-        // ones whole, the one chosen ringed.
-        let chosen = crate::accent::chosen().map(|i| i + 1).unwrap_or(0);
-        let wall = {
-            let mut w = self.wall_swatch.borrow_mut();
-            if w.0 != crate::accent::version() {
-                *w = (crate::accent::version(), crate::grid::rounded(SWATCH, SWATCH, SWATCH / 2.0, crate::accent::wall()));
-            }
-            w.1.clone()
-        };
-        for i in 0..=self.swatches.len() {
-            let r = self.swatch(i);
-            if i == 0 {
-                put(&mut out, &self.hole, r.loc.x + 6.0, r.loc.y + 6.0, drop);
-                put(&mut out, &wall, r.loc.x, r.loc.y, drop);
-            } else {
-                put(&mut out, &self.swatches[i - 1], r.loc.x, r.loc.y, drop);
-            }
-            if i == chosen {
-                put(&mut out, &self.swatch_ring, r.loc.x - 4.0, r.loc.y - 4.0, drop);
-            }
-        }
-        // The mode switch: the half on lit, its words centred in each.
-        for (i, l) in self.modes.iter().enumerate() {
-            let (x, y) = centred(l, self.mode(i));
-            put(&mut out, &l.buffer, x, y, drop);
-        }
-        let lr = self.mode(usize::from(self.each_mark.is_some()));
-        put(&mut out, &self.mode_lit, lr.loc.x, lr.loc.y, drop);
-        let r0 = self.mode(0);
-        put(&mut out, &self.mode_glass, r0.loc.x - 4.0, r0.loc.y - 4.0, drop);
-
-        put(&mut out, &self.glass, strip.loc.x, strip.loc.y, drop);
         out
     }
 }

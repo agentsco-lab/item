@@ -427,10 +427,8 @@ impl State {
                     }
                     Some(crate::picker::Picked::Shuffle) => {
                         self.gallery.shuffle(self.walls.each);
-                        // The strip goes to the group, its places coming.
-                        let own = self.walls.shown.len();
-                        let count = self.picker_strip();
-                        self.picker.recenter(own + 3, count);
+                        // Unsplash's tab, its places coming.
+                        self.picker.show_unsplash();
                     }
                     // One kept from Unsplash out of the set (its credit and
                     // small picture with it); the one before it on, if it
