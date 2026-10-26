@@ -97,7 +97,9 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
 The same Duo 1, timed below both compositors with a uprobe on libhybris'
 `hwc2_compat_display_present` - the call both make to hand hwcomposer a
 frame (`compositor/log/2026-10-01-step-21-ab.md` and the two after it, in
-the history at item-v0.2.1). 0.3.0's own numbers are in its release notes:
+the history at item-v0.2.1). 0.3.1's are in its release notes (the agent's
+hook 147 -> 4 ms a command; item-sync no longer a busy core on the
+computer; with the port 0.22.1 the sound ~40 s sooner in a boot). 0.3.0's own numbers are in its release notes:
 the compositor 712 -> 365 MB resident after the fonts and pictures were
 tamed, Chromium 0.56 s to its window from the dock, one missed frame a
 second typing on the deck.
@@ -145,7 +147,8 @@ How the compositor came to be, step by step with its measurements:
 
 ## What it needs, and what it changes
 
-A Surface Duo 1 on Droidian 102 with the port 0.22.0 or later. item
+A Surface Duo 1 on Droidian 102 with the port 0.22.0 or later (0.22.1
+brings the sound ~40 s sooner in a boot). item
 disables `phosh.service` and runs `item.service` and `item-face.service` in
 its place (`item-fallback.service` starts phosh if item does not come up);
 it sets the kernel's alarm before sleeping, holds a wakelock while the screen
@@ -196,7 +199,7 @@ and in its time zone.
 **By hand**, over a port 0.22.0 or later on Droidian 102:
 
 ```
-sudo apt install ./item_0.3.0_arm64.deb
+sudo apt install ./item_0.3.1_arm64.deb
 sudo item-switch item
 ```
 
