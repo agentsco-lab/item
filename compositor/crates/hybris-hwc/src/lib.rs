@@ -1,12 +1,19 @@
 //! hwcomposer through libhybris, for the Surface Duo: display 0 from hwc2 with
 //! one client layer over it, and a native window whose buffers go to that
 //! layer with their fences. EGL draws into the window; this crate presents.
+//! Or, with ITEM_OUTPUT=kms, item's own output (kms.rs): the same window's
+//! buffers straight to the panels through the kernel's DRM.
 //!
 //! The recipe is libhybris' own `test_hwcomposer` (tests/test_common.cpp).
 //! The libraries are opened with dlopen, so a program using this crate
 //! cross-builds on the PC with nothing of the phone's but glibc.
 
 #![allow(clippy::missing_safety_doc)]
+
+mod colour;
+mod drm;
+mod kms;
+mod profile;
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::ptr::null_mut;
@@ -175,6 +182,12 @@ static HWC: Mutex<Option<Hwc>> = Mutex::new(None);
 static VSYNC_HANDLER: std::sync::OnceLock<Box<dyn Fn(i64) + Send + Sync>> = std::sync::OnceLock::new();
 
 extern "C" fn on_vsync(_: *mut Listener, _: i32, _: u64, timestamp: i64) {
+    vsync(timestamp);
+}
+
+/// A vsync at `timestamp` (CLOCK_MONOTONIC, ns): hwcomposer's, or the own
+/// output's.
+fn vsync(timestamp: i64) {
     VSYNCS.fetch_add(1, Ordering::Relaxed);
     LAST_VSYNC_NS.store(timestamp as u64, Ordering::Relaxed);
     if let Some(handler) = VSYNC_HANDLER.get() {
@@ -241,6 +254,26 @@ static PRESENTED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 pub fn presented_buffers(n: usize) -> Vec<usize> {
     let p = PRESENTED.lock().unwrap();
     p[p.len().saturating_sub(n)..].to_vec()
+}
+
+/// The own output (ITEM_OUTPUT=kms) shows the frames, not hwcomposer.
+static KMS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn note_presented(buffer: *mut c_void) {
+    let mut presented = PRESENTED.lock().unwrap();
+    presented.push(buffer as usize);
+    if presented.len() > 64 {
+        presented.drain(..32);
+    }
+}
+
+fn note_present(now: u64, took: u64) {
+    LAST_PRESENT_NS.store(now, Ordering::Relaxed);
+    LAST_PRESENT_TOOK_NS.store(took, Ordering::Relaxed);
+}
+
+fn note_detail(detail: PresentDetail) {
+    *DETAIL.lock().unwrap() = detail;
 }
 
 static LAST_PRESENT_NS: AtomicU64 = AtomicU64::new(0);
@@ -444,6 +477,9 @@ pub fn vsyncs() -> u64 {
 /// The display on or off (hwc2's power modes ON and OFF): off, the panel and
 /// its backlight go dark; frames are not presented while it is.
 pub fn set_display_power(on: bool) -> bool {
+    if KMS_ON.load(Ordering::Relaxed) {
+        return kms::set_power(on);
+    }
     let guard = PRESENTER.lock().unwrap();
     let Some(p) = guard.as_ref() else { return false };
     let mode = if on { HWC2_POWER_MODE_ON } else { 0 };
@@ -453,6 +489,9 @@ pub fn set_display_power(on: bool) -> bool {
 }
 
 pub fn take_stats() -> FrameStats {
+    if KMS_ON.load(Ordering::Relaxed) {
+        return kms::take_stats();
+    }
     let mut guard = PRESENTER.lock().unwrap();
     let st = std::mem::take(&mut guard.as_mut().expect("presenter").stats);
     let f = st.frames.max(1) as f64;
@@ -470,6 +509,24 @@ impl Output {
     /// Opens hwc2, waits for display 0, powers it on, puts one client layer
     /// over it and makes a native window with `buffers` buffers.
     pub fn open(buffers: i32) -> Output {
+        // The own output (ITEM_OUTPUT=kms), hwcomposer stopped before:
+        // hwcomposer's way if it cannot be.
+        if std::env::var("ITEM_OUTPUT").is_ok_and(|v| v == "kms") {
+            // SAFETY: as below: the window's library, its symbols as hwcomposer.h declares them.
+            let win = unsafe {
+                let hwcw = open_lib("libhybris-hwcomposerwindow.so.1");
+                Win {
+                    create: sym(hwcw, "HWCNativeWindowCreate"),
+                    set_buffer_count: sym(hwcw, "HWCNativeWindowSetBufferCount"),
+                    get_fence: sym(hwcw, "HWCNativeBufferGetFence"),
+                    set_fence: sym(hwcw, "HWCNativeBufferSetFence"),
+                }
+            };
+            match kms::open(buffers, win) {
+                Ok(out) => return out,
+                Err(e) => eprintln!("hybris-hwc: the own output cannot be ({e}): hwcomposer's"),
+            }
+        }
         // SAFETY: the two libraries stay loaded for the program's life, and every `sym` is given the
         // signature hwc2_compatibility_layer.h and hwcomposer.h declare for that name.
         let (hwc, win) = unsafe {

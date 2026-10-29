@@ -4,6 +4,10 @@
 # shell stopped first, and back after, whatever happens. Nothing is installed.
 # The compositor's log is /tmp/item-compositor.log.
 #
+# KMS=1: item's own display output (ITEM_OUTPUT=kms, hybris-hwc's kms.rs):
+# the vendor composer stopped for the run and started again after;
+# ITEM_COLOUR=vivid|srgb|off the panels' calibration (vivid).
+#
 # SESSION=1: the whole session as item.service will run it - session/item-
 # session (from /tmp) starting gnome-session --session=item - with its files
 # in /tmp and the user's runtime systemd directory, all gone after: the
@@ -117,7 +121,16 @@ rollback() {
         log "GPU min clock restored: $(cat $KG)"
     fi
     sleep 1
+    # The composer afresh for the shell after (the run's own drew through
+    # it, or it stayed down for the own output): stopped, started, up
+    # before the shell. Only stopped, nothing brought it back and item
+    # started dark (2026-10-29).
     hwc stop
+    for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
+    hwc start
+    for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
+    log "composer up: $(composers)"
+    sleep 2
     systemctl unmask --runtime phosh >/dev/null 2>&1
     systemctl start ${SHELL_AFTER:-phosh} sfduo-composer-watchdog
     sleep 8
@@ -138,9 +151,18 @@ systemctl mask --runtime phosh >/dev/null
 [ -n "$CVID" ] && face_start
 hwc stop
 for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
-hwc start
-for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
-log "composer up: $(composers)"
+if [ -n "$KMS" ]; then
+    # The kernel lets the dead composer's mastership go a moment after.
+    for i in $(seq 1 50); do
+        awk '$4 == "y" {m=1} END {exit !m}' /sys/kernel/debug/dri/0/clients 2>/dev/null || break
+        sleep 0.1
+    done
+    log "composer down for the own output (KMS=1): $(composers) left, card masters: $(awk '$4 == "y"' /sys/kernel/debug/dri/0/clients 2>/dev/null | wc -l)"
+else
+    hwc start
+    for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
+    log "composer up: $(composers)"
+fi
 session_env
 [ -n "$SESSION" ] && session_files
 [ -n "$KG_OLD" ] && chown $USER_NAME $KG
@@ -163,6 +185,7 @@ systemd-run --wait --collect --unit=item-compositor \
     ${LATE:+-p "Environment=LATE=$LATE"} ${LATE_MARGIN_MS:+-p "Environment=LATE_MARGIN_MS=$LATE_MARGIN_MS"} \
     ${HWC_PRESENT_OR_VALIDATE:+-p "Environment=HWC_PRESENT_OR_VALIDATE=$HWC_PRESENT_OR_VALIDATE"} \
     ${TOUCHSCREEN:+-p "Environment=TOUCHSCREEN=$TOUCHSCREEN"} ${SETUP:+-p "Environment=SETUP=$SETUP"} ${SETUP_DRY:+-p "Environment=SETUP_DRY=$SETUP_DRY"} ${SETUP_AUTO:+-p "Environment=SETUP_AUTO=$SETUP_AUTO"} ${NIGHT:+-p "Environment=NIGHT=$NIGHT"} ${FRAMES_EVERY:+-p "Environment=FRAMES_EVERY=$FRAMES_EVERY"} ${FRAMES_DOCK:+-p "Environment=FRAMES_DOCK=$FRAMES_DOCK"} ${DIALOG_TEST:+-p "Environment=DIALOG_TEST=$DIALOG_TEST"} ${CALL_TEST:+-p "Environment=CALL_TEST=$CALL_TEST"} ${CALL_UNLOCKED:+-p "Environment=CALL_UNLOCKED=1"} ${EDGE_SOFT:+-p "Environment=EDGE_SOFT=$EDGE_SOFT"} ${EDGE_STRENGTH:+-p "Environment=EDGE_STRENGTH=$EDGE_STRENGTH"} ${EDGE_CORNER:+-p "Environment=EDGE_CORNER=$EDGE_CORNER"} ${FRAMES_FULL:+-p "Environment=FRAMES_FULL=1"} ${FRAMES_TOP:+-p "Environment=FRAMES_TOP=1"} ${CAMERA_PEEK:+-p "Environment=CAMERA_PEEK=1"} ${CVID:+-p "Environment=CVID=1"} ${IDLE_DELAY:+-p "Environment=IDLE_DELAY=$IDLE_DELAY"} ${TOUR:+-p "Environment=TOUR=1"} ${NO_SUSPEND:+-p "Environment=NO_SUSPEND=1"} ${FRAMES_COUNT:+-p "Environment=FRAMES_COUNT=$FRAMES_COUNT"} ${LOG_WAVE:+-p "Environment=LOG_WAVE=$LOG_WAVE"} ${PACE_DEBUG:+-p "Environment=PACE_DEBUG=$PACE_DEBUG"} ${LOG_TIMES:+-p "Environment=LOG_TIMES=$LOG_TIMES"} ${CANVAS:+-p "Environment=CANVAS=$CANVAS"} ${LOG_BUFFERS:+-p "Environment=LOG_BUFFERS=$LOG_BUFFERS"} ${INSTANCING:+-p "Environment=INSTANCING=$INSTANCING"} ${NO_LOGIN_SHELL:+-p "Environment=NO_LOGIN_SHELL=$NO_LOGIN_SHELL"} ${SERVER_DEBUG:+-p "Environment=WAYLAND_DEBUG=server"} \
+    ${LOG_FRAMES:+-p "Environment=LOG_FRAMES=$LOG_FRAMES"} ${KMS:+-p "Environment=ITEM_OUTPUT=kms"} ${KMS_FENCES:+-p "Environment=KMS_FENCES=1"} ${ITEM_COLOUR:+-p "Environment=ITEM_COLOUR=$ITEM_COLOUR"} \
     ${RUST_LOG:+-p "Environment=RUST_LOG=$RUST_LOG"} ${ASAP:+-p "Environment=ASAP=$ASAP"} ${GPU_BOOST:+-p "Environment=GPU_BOOST=$GPU_BOOST"} ${CALLBACKS:+-p "Environment=CALLBACKS=$CALLBACKS"} \
     ${OSK_DEBUG:+-p "Environment=OSK_DEBUG=$OSK_DEBUG"} ${NO_OSK:+-p "Environment=NO_OSK=$NO_OSK"} ${NO_OSK_RESIZE:+-p "Environment=NO_OSK_RESIZE=$NO_OSK_RESIZE"} \
     ${SESSION:+-p "Environment=ITEM_COMPOSITOR=/tmp/item-compositor"} \
