@@ -606,7 +606,7 @@ fn cmd_open(args: &[String]) -> ! {
         }
         cmd_run(&[cwd, "--resume".into(), sid.unwrap_or_default()]);
     }
-    for dev in devices().into_iter().filter(|d| d.name == *dev_name) {
+    if let Some(dev) = devices().into_iter().find(|d| d.name == *dev_name) {
         for host in &dev.hosts {
             let mut c = Command::new("ssh");
             c.args(ssh_args(3)).arg(host).arg("true");
