@@ -143,7 +143,9 @@ it ships as one Debian package built on the computer for aarch64
 (`compositor/tools/package-deb.sh`).
 
 How the compositor came to be, step by step with its measurements:
-[docs/COMPOSITOR.md](docs/COMPOSITOR.md).
+[docs/COMPOSITOR.md](docs/COMPOSITOR.md). Its own output - the panels
+through the kernel's DRM with their factory colour, no hwcomposer
+(`sudo item-switch output kms`): [docs/OUTPUT.md](docs/OUTPUT.md).
 
 ## What it needs, and what it changes
 
@@ -247,7 +249,7 @@ resume; `item-switch phosh` brings it back.
 |---|---|
 | `compositor/` | item-compositor, its session, `item-face` (CV ID), `pen-split`, the package build (`tools/package-deb.sh`), the steps and measurements in `compositor/log/` |
 | `apps/settings/` | item Settings (Rust, GTK4 and libadwaita), in the package |
-| `docs/` | [COMPOSITOR.md](docs/COMPOSITOR.md), [SETTINGS.md](docs/SETTINGS.md), [SHELL.md](docs/SHELL.md) (item-shell 0.1 on phosh) |
+| `docs/` | [COMPOSITOR.md](docs/COMPOSITOR.md), [OUTPUT.md](docs/OUTPUT.md), [SETTINGS.md](docs/SETTINGS.md), [SHELL.md](docs/SHELL.md) (item-shell 0.1 on phosh) |
 | `docs/img/item-shell-0.1/`, [SHELL.md](docs/SHELL.md) | what is left here of item-shell 0.1, the shell as patches on the port's phoc and phosh (released as item-shell 0.1.0, 2026-09-29): its screenshots and its write-up. The code is in the branch and tag `item-shell-0.1`, superseded by the compositor |
 
 ## License

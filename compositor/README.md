@@ -157,9 +157,11 @@ whatever happens. Nothing is installed on the phone. The compositor's log is
   `calls`, `sleep`, `idle`, `boost`, `bus`, `mirror`, `pace`, `text`,
   `prefs`, `voice`
 - `crates/hybris-hwc` - hwcomposer through libhybris: display 0, a client
-  layer, a native window presenting with fences
+  layer, a native window presenting with fences; or the own output
+  (`ITEM_OUTPUT=kms`: kms.rs, drm.rs, colour.rs, profile.rs -
+  [../docs/OUTPUT.md](../docs/OUTPUT.md))
 - `crates/smithay-hybris` - smithay's native EGL traits for libhybris without GBM
-- `probes/` - the probes: `hwc-frame` (B), `smithay-frame` (C1), `wl-panels` (C2, C3)
+- `probes/` - the probes: `hwc-frame` (B), `smithay-frame` (C1), `wl-panels` (C2, C3), `kms-frame` (the own output's, `tools/kms-run.sh`)
 - `tools/session-run.sh` - item-compositor in the user's session on the phone
 - `tools/probe-run.sh` - a probe on the phone with the shell stopped
 - `tools/boost-bench.sh`, `tools/boost-one.sh` - the benchmarks with minimum
@@ -194,6 +196,7 @@ system unit, the user's environment.d does not reach it); with
 - `TURN_MS` - the turn's length (output.rs); `LOG_FRAMES=1` - the per-second frame report in the journal
 - `FRAMES_EVERY`, `FRAMES_COUNT`, `FRAMES_DOCK`, `FRAMES_FULL`, `FRAMES_TOP` - frames dumped to the runtime directory for the benches (output.rs, main.rs)
 - `LOG_TIMES`, `LOG_BUFFERS`, `LOG_WAVE`, `PACE_DEBUG`, `SERVER_DEBUG` - more in the log (output.rs, pace.rs)
+- `ITEM_OUTPUT=kms|hwc` - the output (item-session sets it from `/run/item-output`); `ITEM_COLOUR=vivid|srgb|off` - the own output's calibration; `KMS_STATS=1` - its per-second report
 - `HWC_PRESENT_OR_VALIDATE=1`, `HWC_SKIP_VALIDATE=1` - hwcomposer's shorter paths (crates/hybris-hwc)
 - `NO_SCHED=1` - no real-time priority for the input thread (sched.rs); `NO_LOGIN_SHELL=1` - apps spawned without a login shell
 - `CLIENT_ENV` - variables handed to every app spawned; `TOUCHSCREEN` - the touch device for a bench; `DOCK_SILVER`, `NIGHT`, `EDGE_*`, `INSTANCING`, `CANVAS`, `LATE`, `LATE_MARGIN_MS`, `ASAP`, `CALLBACKS` - the rendering and pacing experiments, each read where it is named in the sources
