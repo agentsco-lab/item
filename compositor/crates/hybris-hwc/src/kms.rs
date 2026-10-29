@@ -5,13 +5,14 @@
 //! present callback differs.
 //!
 //! - the first frame sets each panel's mode (SETCRTC, its half of the frame);
-//! - every frame after is one atomic commit for both panels, not waited
-//!   for: the GPU's fence goes to the kernel with the buffer (input_fence),
-//!   which shows it once drawn; the commit's own fences (OUT_FENCE_PTR, one
-//!   a panel, merged) go onto the buffer shown before, freeing it for the
-//!   GPU once the new one is up - hwcomposer's present fence, as before;
-//! - a commit while the last is still on its way waits for that one's
-//!   flips (rare: frames are paced to the vsync).
+//! - every frame after goes to a committer thread, `present` waiting for
+//!   nothing: one atomic commit for both panels as soon as the last one's
+//!   flips are done (a command-mode panel takes a frame ~11 ms), the newest
+//!   frame if one came meanwhile (the one passed over is free at once);
+//! - the GPU's fence goes to the kernel with the buffer (SDE's input_fence),
+//!   which sends it once drawn; the commit's release fences (SDE's
+//!   output_fence, one a panel, merged) go onto the buffer itself, freeing it
+//!   once it has gone into the panels.
 //!
 //! The vsync comes from the first panel's vblank events, read on a thread of
 //! the output's own with the flips' events; synthesised from the period
@@ -47,6 +48,10 @@ struct Stats {
     sum_ms: f64,
     max_ms: f64,
     errors: u32,
+    /// Frames passed over for a newer one before their commit.
+    passed: u32,
+    commits: u32,
+    commit_ns: u64,
 }
 
 struct Kms {
@@ -76,7 +81,6 @@ static FLIPS_LEFT: AtomicU64 = AtomicU64::new(0);
 static POWER_ON: AtomicBool = AtomicBool::new(true);
 /// The last flip's time: the synthesised vsync's phase.
 static LAST_FLIP_NS: AtomicU64 = AtomicU64::new(0);
-static FRAME_NO: AtomicU64 = AtomicU64::new(0);
 
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
 const PRIV_FLAGS_UBWC_ALIGNED: i32 = 0x0800_0000;
@@ -164,6 +168,7 @@ pub(crate) fn open(buffers: i32, win: Win) -> Result<Output, String> {
     *KMS.lock().unwrap() = Some(Kms { card: card.clone(), profile, win, panels, fbs: HashMap::new(), started: false, shown_fb: 0, last: null_mut(), last_ns: 0, stats: Stats::default() });
     crate::KMS_ON.store(true, Ordering::Relaxed);
     std::thread::Builder::new().name("kms-events".into()).spawn(move || events(card, vblank_crtc, period)).map_err(|e| e.to_string())?;
+    std::thread::Builder::new().name("kms-commit".into()).spawn(committer).map_err(|e| e.to_string())?;
 
     let window = (win.create)(width, height, crate::HAL_PIXEL_FORMAT_RGBA_8888, present, null_mut());
     if window.is_null() {
@@ -318,9 +323,12 @@ fn wait_fence(fd: i32) {
 }
 
 /// A frame for both panels: `fb`, once `acquire` has signalled. The
-/// panels' fences for when it is up, merged (-1 on none).
+/// panels' release fences, merged (-1 on none): SDE's `output_fence`, which
+/// signals once the frame has gone into the panels (~8 ms after the
+/// transfer begins, 2026-10-29) - a command-mode panel keeps the picture in
+/// its own memory after, and the buffer is the GPU's again.
 fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
-    let mut out = vec![-1i32; k.panels.len()];
+    let mut release = vec![-1i32; k.panels.len()];
     let mut changes: Vec<(u32, u32, &str, u64)> = Vec::new();
     for (i, p) in k.panels.iter().enumerate() {
         let (w, h) = (p.mode.hdisplay as u64, p.mode.vdisplay as u64);
@@ -336,35 +344,22 @@ fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
             (p.plane, OBJ_PLANE, "CRTC_W", w),
             (p.plane, OBJ_PLANE, "CRTC_H", h),
             // The GPU's fence: SDE's own property (it waits on this one;
-            // the standard IN_FENCE_FD it left unwaited, 2026-10-29: the
-            // panels were sent frames the GPU was still drawing - dark blue
-            // at the edge of the system panel opening).
+            // the standard IN_FENCE_FD it leaves unwaited).
             (p.plane, OBJ_PLANE, "input_fence", acquire.max(0) as u64),
-            // Opaque, as hwcomposer's client layer was (blend NONE): a
-            // frame's alpha (the shade's glass in motion) blended over the
-            // CRTC's background showed dark blue.
+            // Opaque, as hwcomposer's client layer was (blend NONE).
             (p.plane, OBJ_PLANE, "blend_op", 1),
-            (p.crtc, OBJ_CRTC, "OUT_FENCE_PTR", &mut out[i] as *mut i32 as u64),
+            (p.crtc, OBJ_CRTC, "output_fence", &mut release[i] as *mut i32 as u64),
         ]);
         for &(name, v) in k.profile.votes {
             changes.push((p.crtc, OBJ_CRTC, name, v));
         }
     }
-    // KMS_FENCES=1: frames 300 to 330 timed - when each of the commit's
-    // fences signals, against the commit and the flips (the log).
-    let n = FRAME_NO.fetch_add(1, Ordering::Relaxed);
-    let timed = (300..330).contains(&n) && std::env::var_os("KMS_FENCES").is_some();
-    let mut release = -1i32;
-    if timed {
-        changes.push((k.panels[0].crtc, OBJ_CRTC, "output_fence", &mut release as *mut i32 as u64));
-    }
     FLIPS_LEFT.store(k.panels.len() as u64, Ordering::Release);
     set_pending(true);
     let flags = drm::ATOMIC_NONBLOCK | drm::ATOMIC_PAGE_FLIP_EVENT;
-    let t_commit = now_ns();
     let mut r = k.card.commit(&changes, flags);
     if r.as_ref().is_err_and(|e| e.raw_os_error() == Some(libc::EBUSY)) {
-        // The last commit still on its way: once it is done, again.
+        // The last commit still on its way after all: once it is done, again.
         wait_idle(50);
         FLIPS_LEFT.store(k.panels.len() as u64, Ordering::Release);
         set_pending(true);
@@ -375,24 +370,9 @@ fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
         set_pending(false);
         return Err(format!("the frame's commit: {e}"));
     }
-    if timed {
-        // SAFETY: dups of the kernel's fence fds, the thread's to close.
-        let (o, r) = unsafe { (libc::dup(out[0]), release) };
-        std::thread::spawn(move || {
-            let when = |fd: i32| {
-                wait_fence(fd);
-                // SAFETY: ours.
-                unsafe { libc::close(fd) };
-                (now_ns() - t_commit) as f64 / 1e6
-            };
-            let (a, b) = (when(o), if r >= 0 { when(r) } else { -1.0 });
-            let flip = (LAST_FLIP_NS.load(Ordering::Relaxed) as f64 - t_commit as f64) / 1e6;
-            println!("hybris-hwc: kms: frame {n}: OUT_FENCE_PTR at {a:.2} ms, output_fence at {b:.2} ms, the last flip at {flip:.2} ms (from the commit)");
-        });
-    }
-    let merged = if out.len() == 2 { drm::merge_fences(out[0], out[1]) } else { out[0] };
-    if out.len() == 2 {
-        for f in out {
+    let merged = if release.len() == 2 { drm::merge_fences(release[0], release[1]) } else { release[0] };
+    if release.len() == 2 {
+        for f in release {
             if f >= 0 {
                 // SAFETY: the kernel's fence fds, ours; merged already.
                 unsafe { libc::close(f) };
@@ -402,62 +382,149 @@ fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
     Ok(merged)
 }
 
-/// The window's present callback, for the own output.
+/// A frame handed over by the window and not yet committed.
+struct Job {
+    buffer: *mut c_void,
+    fb: u32,
+    acquire: i32,
+}
+
+// SAFETY: the buffer is the window's (no thread's); the job is only reached
+// under MAILBOX's mutex, then by the committer alone.
+unsafe impl Send for Job {}
+
+/// The next frame to commit: one only, the newest - a frame the last
+/// commit kept waiting is passed over for the one after it.
+static MAILBOX: (Mutex<Option<Job>>, Condvar) = (Mutex::new(None), Condvar::new());
+
+fn hold(buffer: *mut c_void) {
+    // SAFETY: the window's ANativeWindowBuffer, NativeBase first.
+    unsafe {
+        let base = buffer as *mut NativeBase;
+        ((*base).inc_ref)(base);
+    }
+}
+
+fn let_go(buffer: *mut c_void) {
+    // SAFETY: as hold's; a buffer held before.
+    unsafe {
+        let base = buffer as *mut NativeBase;
+        ((*base).dec_ref)(base);
+    }
+}
+
+/// A job dropped: its fence closed, its buffer let go (never shown, it is
+/// the GPU's again at once).
+fn drop_job(job: Job) {
+    if job.acquire >= 0 {
+        // SAFETY: the window's fence, handed to us.
+        unsafe { libc::close(job.acquire) };
+    }
+    let_go(job.buffer);
+}
+
+/// The committer's thread: the newest frame committed as soon as the last
+/// commit's flips are done; the buffer it shows given its release fence and
+/// kept until the next one shows.
+fn committer() {
+    loop {
+        {
+            let (lock, cv) = &MAILBOX;
+            let mut g = lock.lock().unwrap();
+            while g.is_none() {
+                g = cv.wait(g).unwrap();
+            }
+        }
+        wait_idle(100);
+        let mut guard = KMS.lock().unwrap();
+        let k = guard.as_mut().expect("kms output");
+        let Some(job) = MAILBOX.0.lock().unwrap().take() else { continue };
+        if !POWER_ON.load(Ordering::Relaxed) {
+            drop_job(job);
+            continue;
+        }
+        let t = now_ns();
+        match commit(k, job.fb, job.acquire) {
+            Ok(release) => {
+                (k.win.set_fence)(job.buffer, release);
+                if !k.last.is_null() {
+                    let_go(k.last);
+                }
+                k.last = job.buffer;
+                k.shown_fb = job.fb;
+                if job.acquire >= 0 {
+                    // SAFETY: the window's fence; the kernel took its own.
+                    unsafe { libc::close(job.acquire) };
+                }
+            }
+            Err(e) => {
+                if k.stats.errors < 5 {
+                    eprintln!("hybris-hwc: kms: {e}");
+                }
+                k.stats.errors += 1;
+                drop_job(job);
+            }
+        }
+        k.stats.commit_ns += now_ns() - t;
+        k.stats.commits += 1;
+    }
+}
+
+/// The window's present callback, for the own output: the frame handed to
+/// the committer, nothing waited for (the first frame excepted, which sets
+/// the modes).
 pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *mut c_void) {
     let t_start = now_ns();
     let mut guard = KMS.lock().unwrap();
     let k = guard.as_mut().expect("kms output");
     crate::note_presented(buffer);
     let acquire = (k.win.get_fence)(buffer);
-    // The window's fence is ours now; the buffer has none until the next
-    // frame's commit gives it the one for its leaving the panels.
+    // The window's fence is ours now; the buffer gets its release fence
+    // from its commit (or none, passed over).
     (k.win.set_fence)(buffer, -1);
     let mut detail = PresentDetail { gpu_pending: crate::fence_pending(acquire), ..Default::default() };
 
-    let mut done = -1;
-    if POWER_ON.load(Ordering::Relaxed) {
-        let t = now_ns();
-        let shown = framebuffer(k, buffer).and_then(|fb| {
-            let r = if k.started { commit(k, fb, acquire) } else { start(k, fb, acquire).map(|_| -1) };
-            k.shown_fb = fb;
-            r
-        });
-        detail.present_ns = now_ns() - t;
-        match shown {
-            Ok(f) => done = f,
-            Err(e) => {
+    let t = now_ns();
+    let fb = if POWER_ON.load(Ordering::Relaxed) { framebuffer(k, buffer) } else { Err(String::new()) };
+    match fb {
+        Ok(fb) if !k.started => {
+            if let Err(e) = start(k, fb, acquire) {
+                eprintln!("hybris-hwc: kms: {e}");
+                k.stats.errors += 1;
+            } else {
+                hold(buffer);
+                k.last = buffer;
+                k.shown_fb = fb;
+            }
+            if acquire >= 0 {
+                // SAFETY: the window's fence, waited for.
+                unsafe { libc::close(acquire) };
+            }
+        }
+        Ok(fb) => {
+            hold(buffer);
+            let (lock, cv) = &MAILBOX;
+            let passed = lock.lock().unwrap().replace(Job { buffer, fb, acquire });
+            cv.notify_one();
+            if let Some(old) = passed {
+                drop_job(old);
+                k.stats.passed += 1;
+            }
+        }
+        Err(e) => {
+            if !e.is_empty() {
                 if k.stats.errors < 5 {
                     eprintln!("hybris-hwc: kms: {e}");
                 }
                 k.stats.errors += 1;
             }
-        }
-    }
-    if acquire >= 0 {
-        // SAFETY: the window's fence, handed to us; the kernel took its own.
-        unsafe { libc::close(acquire) };
-    }
-
-    // The buffer shown before is free once this one is up.
-    // SAFETY: `buffer` and `k.last` are the window's ANativeWindowBuffers
-    // (NativeBase first); the kept one lives from its inc_ref to the
-    // dec_ref here; the fences closed are ours.
-    unsafe {
-        if !k.last.is_null() {
-            let old = (k.win.get_fence)(k.last);
-            if old >= 0 {
-                libc::close(old);
+            if acquire >= 0 {
+                // SAFETY: the window's fence, handed to us.
+                unsafe { libc::close(acquire) };
             }
-            (k.win.set_fence)(k.last, done);
-            let base = k.last as *mut NativeBase;
-            ((*base).dec_ref)(base);
-        } else if done >= 0 {
-            libc::close(done);
         }
-        let base = buffer as *mut NativeBase;
-        ((*base).inc_ref)(base);
     }
-    k.last = buffer;
+    detail.present_ns = now_ns() - t;
 
     let now = now_ns();
     crate::note_present(now, now - t_start);
@@ -499,5 +566,8 @@ pub(crate) fn take_stats() -> crate::FrameStats {
     let mut guard = KMS.lock().unwrap();
     let st = std::mem::take(&mut guard.as_mut().expect("kms output").stats);
     let f = st.frames.max(1) as f64;
+    if std::env::var_os("KMS_STATS").is_some() && st.commits > 0 {
+        println!("hybris-hwc: kms: {} commits ({:.2} ms each), {} frames passed over", st.commits, st.commit_ns as f64 / 1e6 / st.commits as f64, st.passed);
+    }
     crate::FrameStats { fast: 0, skipped: 0, frames: st.frames, over_20ms: st.long, mean_ms: st.sum_ms / f, max_ms: st.max_ms, errors: st.errors }
 }
