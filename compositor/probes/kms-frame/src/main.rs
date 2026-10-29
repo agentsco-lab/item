@@ -425,6 +425,37 @@ fn main() {
         (gl.disable)(GL_SCISSOR_TEST);
         (egl.swap_buffers)(dpy, surface);
 
+        // KMS_BLINK=1: at 5 s both panels off (ACTIVE 0), at 7 s on again,
+        // the backlights' state read at each step (item's lid closing and
+        // opening, as the kernel sees it).
+        if std::env::var_os("KMS_BLINK").is_some() {
+            let step = |what: &str| {
+                let bl: Vec<String> = ["panel0-backlight", "panel1-backlight"]
+                    .iter()
+                    .map(|b| {
+                        let r = |f: &str| std::fs::read_to_string(format!("/sys/class/backlight/{b}/{f}")).unwrap_or_default().trim().to_owned();
+                        format!("{b}: brightness {} bl_power {}", r("brightness"), r("bl_power"))
+                    })
+                    .collect();
+                println!("{t:5.1} s {what}: {}", bl.join("; "));
+            };
+            for (at, on) in [(5.0, false), (7.0, true)] {
+                if t >= at && t < at + 0.02 {
+                    step("before");
+                    let mut guard = PRESENTER.lock().unwrap();
+                    let p = guard.as_mut().unwrap();
+                    for panel in &p.card.panels {
+                        if let Err(e) = p.card.set(panel.crtc, "ACTIVE", on as u64) {
+                            println!("ACTIVE {on}: {e}");
+                        }
+                    }
+                    drop(guard);
+                    step(if on { "on" } else { "off" });
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    step("0.5 s after");
+                }
+            }
+        }
         let now = now_ns();
         if now >= next_report {
             let mut guard = PRESENTER.lock().unwrap();

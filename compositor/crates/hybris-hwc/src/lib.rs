@@ -485,7 +485,10 @@ pub fn set_display_power(on: bool) -> bool {
     let mode = if on { HWC2_POWER_MODE_ON } else { 0 };
     // The next frame validates again.
     VALIDATED.store(false, Ordering::Relaxed);
-    (p.hwc.set_power_mode)(p.display, mode) == HWC2_ERROR_NONE
+    let t = now_ns();
+    let ok = (p.hwc.set_power_mode)(p.display, mode) == HWC2_ERROR_NONE;
+    println!("hybris-hwc: the display {} in {:.1} ms", if on { "on" } else { "off" }, (now_ns() - t) as f64 / 1e6);
+    ok
 }
 
 pub fn take_stats() -> FrameStats {
@@ -503,6 +506,13 @@ pub fn now_ns() -> u64 {
     // SAFETY: `ts` is a live local of the kernel's timespec layout (two i64 on aarch64).
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
     ts.sec as u64 * 1_000_000_000 + ts.nsec as u64
+}
+
+/// Whether the vendor composer runs (a process named composer@...).
+fn composer_running() -> bool {
+    std::fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
+        std::fs::read_to_string(e.path().join("comm")).is_ok_and(|c| c.starts_with("composer@"))
+    })
 }
 
 impl Output {
@@ -524,7 +534,17 @@ impl Output {
             };
             match kms::open(buffers, win) {
                 Ok(out) => return out,
-                Err(e) => eprintln!("hybris-hwc: the own output cannot be ({e}): hwcomposer's"),
+                Err(e) => {
+                    // Said for item-composer-fresh: the composer's way from
+                    // the next start on, this boot.
+                    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+                    let _ = std::fs::write(format!("{dir}/item-kms-failed"), format!("{e}\n"));
+                    if !composer_running() {
+                        eprintln!("hybris-hwc: the own output cannot be ({e}), and the composer is down: out, for the next start to bring it up");
+                        std::process::exit(1);
+                    }
+                    eprintln!("hybris-hwc: the own output cannot be ({e}): hwcomposer's");
+                }
             }
         }
         // SAFETY: the two libraries stay loaded for the program's life, and every `sym` is given the

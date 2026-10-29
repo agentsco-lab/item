@@ -1,6 +1,7 @@
 #!/bin/sh
 # item-switch item|phosh|status: which shell the phone starts, changed now
-# and for the boots after; keyboard item|stevia: which keyboard item uses.
+# and for the boots after; keyboard item|stevia: which keyboard item uses;
+# output kms|hwc: which output item draws through (/etc/item/output).
 set -e
 case "$1" in
 item)
@@ -26,12 +27,25 @@ phosh)
     systemctl unmask iio-sensor-proxy.service 2>/dev/null || true
     systemctl start iio-sensor-proxy.service 2>/dev/null || true
     systemctl enable phosh.service
-    /usr/libexec/item/item-composer-fresh
+    /usr/libexec/item/item-composer-fresh hwc
     # The user's session environment back to phosh's.
     U=$(systemctl show -p User --value item.service)
     runuser -u "${U:-droidian}" -- env XDG_RUNTIME_DIR=/run/user/$(id -u "${U:-droidian}") \
         systemctl --user unset-environment XDG_CURRENT_DESKTOP XDG_CONFIG_DIRS WAYLAND_DISPLAY 2>/dev/null || true
     systemctl start phosh.service
+    ;;
+output)
+    # Which output item draws through: its own (kms: the panels through
+    # DRM, their factory colour) or the vendor composer (hwc); from now.
+    case "$2" in
+    kms|hwc) ;;
+    *) echo "item-switch output kms|hwc (now: $(cat /run/item-output 2>/dev/null || echo hwc), chosen: $(cat /etc/item/output 2>/dev/null || echo hwc))" >&2; exit 2 ;;
+    esac
+    mkdir -p /etc/item
+    printf '%s\n' "$2" > /etc/item/output
+    rm -f /run/user/*/item-kms-failed
+    systemctl restart item.service
+    echo "output: $2"
     ;;
 keyboard)
     # Which keyboard item uses: its own, or the port's stevia (kbd.rs reads

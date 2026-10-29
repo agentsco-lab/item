@@ -1,13 +1,50 @@
 #!/bin/sh
-# item-composer-fresh: run as root before item starts (item.service). The
-# first start in a boot takes the vendor composer as the boot brought it up;
-# any later one - after a crash, after phosh - starts it afresh first, as
-# tools/session-run.sh does: a new compositor on the old composer reset the
-# phone (2026-10-03).
+# item-composer-fresh [hwc]: run as root before item starts (item.service),
+# and before phosh takes over (item-fallback, item-switch: with `hwc`).
+#
+# Which output item draws through: /etc/item/output says (`kms`: item's
+# own, the panels through DRM; `hwc`, or no file: the vendor composer). The
+# choice made is left in /run/item-output for item-session. The own output
+# having failed this boot ($XDG_RUNTIME_DIR/item-kms-failed, the
+# compositor's), the composer's.
+#
+# The composer's way: the first start in a boot takes the vendor composer
+# as the boot brought it up; any later one - after a crash, after phosh -
+# starts it afresh first, as tools/session-run.sh does: a new compositor on
+# the old composer reset the phone (2026-10-03). A composer that is not
+# running (the own output had it stopped) is started.
+#
+# The own output's way: the composer stopped, Android's way and forced
+# (systemd's stop of it reset the phone), its watchdog first (it would
+# bounce a composer it finds without the card); then the card let go -
+# the kernel holds a dead composer's mastership a moment (2026-10-29: a
+# start in that moment had the panels dark).
 MARK=/run/item-composer-used
 SVC='(vendor.hwcomposer-.*|vendor.qti.hardware.display.composer)'
 composers() { ps -eo comm | grep -c "composer@"; }
 hwc() { ANDROID_SERVICE_FORCE_KILL=yes ANDROID_SERVICE="$SVC" /usr/lib/halium-wrappers/android-service.sh hwcomposer $1 >/dev/null 2>&1; }
+masters() { awk '$4 == "y"' /sys/kernel/debug/dri/0/clients 2>/dev/null | wc -l; }
+
+OUTPUT=$(cat /etc/item/output 2>/dev/null | tr -d ' \n')
+[ "$1" = hwc ] && OUTPUT=hwc
+if [ "$OUTPUT" = kms ] && ls /run/user/*/item-kms-failed >/dev/null 2>&1; then
+    echo "item-composer-fresh: the own output failed this boot: the composer's"
+    OUTPUT=hwc
+fi
+[ "$OUTPUT" = kms ] || OUTPUT=hwc
+
+if [ "$OUTPUT" = kms ]; then
+    systemctl stop sfduo-composer-watchdog 2>/dev/null
+    if [ "$(composers)" -gt 0 ]; then
+        hwc stop
+        for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
+    fi
+    for i in $(seq 1 50); do [ "$(masters)" = 0 ] && break; sleep 0.1; done
+    echo "item-composer-fresh: the own output: composer $(composers), card masters $(masters)"
+    echo kms > /run/item-output
+    touch $MARK
+    exit 0
+fi
 
 # Afresh only if the composer is older than item's last start: one systemd
 # has just started (item.service restarted, PartOf) is left alone - started
@@ -19,7 +56,11 @@ old() {
     AGE=$(( $(date +%s) - $(stat -c %Y $MARK) ))
     [ "${UP:-0}" -ge "$AGE" ]
 }
-if old; then
+if [ "$(composers)" = 0 ]; then
+    echo "item-composer-fresh: the composer was down: started"
+    hwc start
+    for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
+elif old; then
     echo "item-composer-fresh: the composer started afresh"
     hwc stop
     for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
@@ -36,4 +77,5 @@ for i in $(seq 1 50); do
     [ "${UP:-0}" -ge $SETTLE ] && break
     sleep 0.1
 done
+echo hwc > /run/item-output
 touch $MARK

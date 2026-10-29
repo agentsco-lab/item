@@ -81,6 +81,8 @@ static FLIPS_LEFT: AtomicU64 = AtomicU64::new(0);
 static POWER_ON: AtomicBool = AtomicBool::new(true);
 /// The last flip's time: the synthesised vsync's phase.
 static LAST_FLIP_NS: AtomicU64 = AtomicU64::new(0);
+/// When the panels came on, until the first flip after (for the log).
+static FIRST_FLIP_AFTER_ON: AtomicU64 = AtomicU64::new(0);
 
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
 const PRIV_FLAGS_UBWC_ALIGNED: i32 = 0x0800_0000;
@@ -254,6 +256,10 @@ fn events(card: Arc<Card>, crtc_index: u32, period: u64) {
                 }
                 2 => {
                     LAST_FLIP_NS.store(e.time_ns, Ordering::Relaxed);
+                    let on_at = FIRST_FLIP_AFTER_ON.swap(0, Ordering::Relaxed);
+                    if on_at != 0 {
+                        println!("hybris-hwc: kms: the first flip after the panels came on, {:.1} ms after", (now_ns() - on_at) as f64 / 1e6);
+                    }
                     if FLIPS_LEFT.fetch_sub(1, Ordering::AcqRel) <= 1 {
                         FLIPS_LEFT.store(0, Ordering::Release);
                         set_pending(false);
@@ -553,8 +559,15 @@ pub(crate) fn set_power(on: bool) -> bool {
         return true;
     }
     let changes: Vec<(u32, u32, &str, u64)> = k.panels.iter().map(|p| (p.crtc, OBJ_CRTC, "ACTIVE", on as u64)).collect();
+    let t = now_ns();
     match k.card.commit(&changes, drm::ATOMIC_ALLOW_MODESET) {
-        Ok(()) => true,
+        Ok(()) => {
+            println!("hybris-hwc: kms: the panels {} in {:.1} ms", if on { "on" } else { "off" }, (now_ns() - t) as f64 / 1e6);
+            if on {
+                FIRST_FLIP_AFTER_ON.store(now_ns(), Ordering::Relaxed);
+            }
+            true
+        }
         Err(e) => {
             eprintln!("hybris-hwc: kms: the panels {}: {e}", if on { "on" } else { "off" });
             false

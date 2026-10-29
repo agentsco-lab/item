@@ -14,6 +14,10 @@ COMPOSITOR=${ITEM_COMPOSITOR:-/usr/libexec/item/item-compositor}
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=item:GNOME
 export XDG_SESSION_DESKTOP=item
+# The output item-composer-fresh chose (/etc/item/output, unless the own
+# one failed this boot): the own one is the compositor's to open.
+[ "$(cat /run/item-output 2>/dev/null)" = kms ] && export ITEM_OUTPUT=kms
+
 # Hybris' EGL for the compositor; its clients are told wayland (state.rs).
 export EGL_PLATFORM=hwcomposer
 export __EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/10_libhybris.json

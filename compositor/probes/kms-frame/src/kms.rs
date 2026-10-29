@@ -223,6 +223,11 @@ impl Card {
         if unsafe { libc::ioctl(fd, SET_MASTER as _, 0) } < 0 {
             return Err(format!("not the card's master (is hwcomposer still up?): {}", std::io::Error::last_os_error()));
         }
+        // Atomic's properties (ACTIVE) settable, all planes listed.
+        for cap in [2u64, 3] {
+            let mut c = [cap, 1u64];
+            ioctl(fd, ioc(1, 0x0d, 16), &mut c).map_err(|e| format!("client cap {cap}: {e}"))?;
+        }
         let mut res = CardRes::default();
         ioctl(fd, GETRESOURCES, &mut res).map_err(|e| format!("resources: {e}"))?;
         let mut crtcs = vec![0u32; res.count_crtcs as usize];
