@@ -508,6 +508,22 @@ pub fn now_ns() -> u64 {
     ts.sec as u64 * 1_000_000_000 + ts.nsec as u64
 }
 
+/// Said for item-composer-fresh: the composer's way from the next start on,
+/// this boot.
+pub(crate) fn mark_kms_failed(e: &str) {
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let _ = std::fs::write(format!("{dir}/item-kms-failed"), format!("{e}\n"));
+}
+
+/// The own output failed after it opened (the panels refused the first
+/// frame, or every frame since): marked, and out - the next start is the
+/// composer's, rather than dark panels for the rest of the boot.
+pub(crate) fn kms_gave_up(e: &str) -> ! {
+    mark_kms_failed(e);
+    eprintln!("hybris-hwc: the own output gave up ({e}): out, for the next start to take the composer's");
+    std::process::exit(1);
+}
+
 /// Whether the vendor composer runs (a process named composer@...).
 fn composer_running() -> bool {
     std::fs::read_dir("/proc").into_iter().flatten().flatten().any(|e| {
@@ -535,10 +551,7 @@ impl Output {
             match kms::open(buffers, win) {
                 Ok(out) => return out,
                 Err(e) => {
-                    // Said for item-composer-fresh: the composer's way from
-                    // the next start on, this boot.
-                    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
-                    let _ = std::fs::write(format!("{dir}/item-kms-failed"), format!("{e}\n"));
+                    mark_kms_failed(&e);
                     if !composer_running() {
                         eprintln!("hybris-hwc: the own output cannot be ({e}), and the composer is down: out, for the next start to bring it up");
                         std::process::exit(1);

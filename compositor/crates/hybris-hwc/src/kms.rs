@@ -63,6 +63,8 @@ struct Kms {
     fbs: HashMap<usize, u32>,
     /// The modes are set (the first frame shown).
     started: bool,
+    /// Frames refused in a row (the first frame's modes, or commits).
+    refused: u32,
     /// The last framebuffer shown: the panels on again show it.
     shown_fb: u32,
     last: *mut c_void,
@@ -167,14 +169,16 @@ pub(crate) fn open(buffers: i32, win: Win) -> Result<Output, String> {
     }
 
     let vblank_crtc = panels[0].crtc_index;
-    *KMS.lock().unwrap() = Some(Kms { card: card.clone(), profile, win, panels, fbs: HashMap::new(), started: false, shown_fb: 0, last: null_mut(), last_ns: 0, stats: Stats::default() });
+    *KMS.lock().unwrap() = Some(Kms { card: card.clone(), profile, win, panels, fbs: HashMap::new(), started: false, refused: 0, shown_fb: 0, last: null_mut(), last_ns: 0, stats: Stats::default() });
     crate::KMS_ON.store(true, Ordering::Relaxed);
     std::thread::Builder::new().name("kms-events".into()).spawn(move || events(card, vblank_crtc, period)).map_err(|e| e.to_string())?;
     std::thread::Builder::new().name("kms-commit".into()).spawn(committer).map_err(|e| e.to_string())?;
 
     let window = (win.create)(width, height, crate::HAL_PIXEL_FORMAT_RGBA_8888, present, null_mut());
     if window.is_null() {
-        return Err("HWCNativeWindowCreate failed".into());
+        // The card is ours and its threads run: no way back to the
+        // composer in this process.
+        crate::kms_gave_up("HWCNativeWindowCreate failed");
     }
     (win.set_buffer_count)(window, buffers);
     Ok(Output { width: width as i32, height: height as i32, vsync_period_ns: period as i64, window })
@@ -334,7 +338,9 @@ fn wait_fence(fd: i32) {
 /// transfer begins, 2026-10-29) - a command-mode panel keeps the picture in
 /// its own memory after, and the buffer is the GPU's again.
 fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
-    let mut release = vec![-1i32; k.panels.len()];
+    // 64 bits each: SDE writes the fd back as a u64 (sde_crtc.c), an i32
+    // here had the second panel's written past the end.
+    let mut release = vec![-1i64; k.panels.len()];
     let mut changes: Vec<(u32, u32, &str, u64)> = Vec::new();
     for (i, p) in k.panels.iter().enumerate() {
         let (w, h) = (p.mode.hdisplay as u64, p.mode.vdisplay as u64);
@@ -354,7 +360,7 @@ fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
             (p.plane, OBJ_PLANE, "input_fence", acquire.max(0) as u64),
             // Opaque, as hwcomposer's client layer was (blend NONE).
             (p.plane, OBJ_PLANE, "blend_op", 1),
-            (p.crtc, OBJ_CRTC, "output_fence", &mut release[i] as *mut i32 as u64),
+            (p.crtc, OBJ_CRTC, "output_fence", &mut release[i] as *mut i64 as u64),
         ]);
         for &(name, v) in k.profile.votes {
             changes.push((p.crtc, OBJ_CRTC, name, v));
@@ -365,27 +371,38 @@ fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
     let flags = drm::ATOMIC_NONBLOCK | drm::ATOMIC_PAGE_FLIP_EVENT;
     let mut r = k.card.commit(&changes, flags);
     if r.as_ref().is_err_and(|e| e.raw_os_error() == Some(libc::EBUSY)) {
-        // The last commit still on its way after all: once it is done, again.
+        // The last commit still on its way after all: once it is done, again
+        // (the fences the refused one was given closed first).
+        close_fences(&mut release);
         wait_idle(50);
         FLIPS_LEFT.store(k.panels.len() as u64, Ordering::Release);
         set_pending(true);
         r = k.card.commit(&changes, flags);
     }
     if let Err(e) = r {
+        close_fences(&mut release);
         FLIPS_LEFT.store(0, Ordering::Release);
         set_pending(false);
         return Err(format!("the frame's commit: {e}"));
     }
-    let merged = if release.len() == 2 { drm::merge_fences(release[0], release[1]) } else { release[0] };
-    if release.len() == 2 {
-        for f in release {
-            if f >= 0 {
-                // SAFETY: the kernel's fence fds, ours; merged already.
-                unsafe { libc::close(f) };
-            }
-        }
+    if release.len() == 1 {
+        return Ok(release[0] as i32);
     }
+    let merged = drm::merge_fences(release[0] as i32, release[1] as i32);
+    close_fences(&mut release);
     Ok(merged)
+}
+
+/// The panels' release fences closed, if SDE made them (it makes them as
+/// the property is set, so a refused commit has them too); -1 after.
+fn close_fences(release: &mut [i64]) {
+    for f in release.iter_mut() {
+        if *f >= 0 {
+            // SAFETY: the kernel's fence fds, ours.
+            unsafe { libc::close(*f as i32) };
+        }
+        *f = -1;
+    }
 }
 
 /// A frame handed over by the window and not yet committed.
@@ -452,6 +469,7 @@ fn committer() {
         let t = now_ns();
         match commit(k, job.fb, job.acquire) {
             Ok(release) => {
+                k.refused = 0;
                 (k.win.set_fence)(job.buffer, release);
                 if !k.last.is_null() {
                     let_go(k.last);
@@ -469,6 +487,11 @@ fn committer() {
                 }
                 k.stats.errors += 1;
                 drop_job(job);
+                // A second of frames, none taken: no picture is coming.
+                k.refused += 1;
+                if k.refused >= 60 {
+                    crate::kms_gave_up(&e);
+                }
             }
         }
         k.stats.commit_ns += now_ns() - t;
@@ -497,7 +520,12 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
             if let Err(e) = start(k, fb, acquire) {
                 eprintln!("hybris-hwc: kms: {e}");
                 k.stats.errors += 1;
+                k.refused += 1;
+                if k.refused >= 3 {
+                    crate::kms_gave_up(&e);
+                }
             } else {
+                k.refused = 0;
                 hold(buffer);
                 k.last = buffer;
                 k.shown_fb = fb;

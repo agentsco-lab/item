@@ -44,7 +44,8 @@ output)
     mkdir -p /etc/item
     printf '%s\n' "$2" > /etc/item/output
     rm -f /run/user/*/item-kms-failed
-    systemctl restart item.service
+    # Only if item is the shell running: under phosh, from item's next start.
+    systemctl try-restart item.service
     echo "output: $2"
     ;;
 keyboard)

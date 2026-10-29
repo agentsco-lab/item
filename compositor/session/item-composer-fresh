@@ -12,7 +12,8 @@
 # as the boot brought it up; any later one - after a crash, after phosh -
 # starts it afresh first, as tools/session-run.sh does: a new compositor on
 # the old composer reset the phone (2026-10-03). A composer that is not
-# running (the own output had it stopped) is started.
+# running after item's first start (the own output had it stopped) is
+# started; at the first, Android's is waited for.
 #
 # The own output's way: the composer stopped, Android's way and forced
 # (systemd's stop of it reset the phone), its watchdog first (it would
@@ -66,7 +67,13 @@ old() {
     AGE=$(( $(date +%s) - $(stat -c %Y $MARK) ))
     [ "${UP:-0}" -ge "$AGE" ]
 }
-if [ "$(composers)" = 0 ]; then
+if [ "$(composers)" = 0 ] && [ ! -e $MARK ]; then
+    # The first start in a boot: Android's init brings the composer up,
+    # late at times - waited for, never started alongside it (started twice
+    # at once, it reset the phone).
+    for i in $(seq 1 120); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
+    echo "item-composer-fresh: the boot's composer: $(composers)"
+elif [ "$(composers)" = 0 ]; then
     echo "item-composer-fresh: the composer was down: started"
     hwc start
     for i in $(seq 1 40); do [ "$(composers)" -gt 0 ] && break; sleep 0.25; done
