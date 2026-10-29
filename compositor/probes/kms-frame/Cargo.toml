@@ -1,0 +1,8 @@
+[package]
+name = "kms-frame"
+version = "0.1.0"
+edition = "2021"
+description = "Probe: a GL frame on the Surface Duo's panels through the kernel's DRM, with no hwcomposer - and the panels' factory calibration"
+
+[dependencies]
+libc = "0.2"
