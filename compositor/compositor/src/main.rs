@@ -1505,7 +1505,8 @@ fn main() {
     // after a boot.
     if args.session.is_some() && setup::wanted() {
         state.setup.start(fingers);
-    } else if args.session.is_some() && !lock::opened_since_boot() {
+    } else if args.session.is_some() && (!lock::opened_since_boot() || secrets::login_locked() == Some(true)) {
+        // After a boot, or a restart that left the keyring locked: the PIN.
         state.lock.after_boot();
     } else if args.session.is_some() {
         // A session again since the phone was opened with the PIN: locked,

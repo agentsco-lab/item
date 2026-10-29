@@ -15,7 +15,6 @@ const SERVICE: &str = "org.freedesktop.secrets";
 const PATH: &str = "/org/freedesktop/secrets";
 const IFACE: &str = "org.freedesktop.Secret.Service";
 const ITEM: &str = "org.freedesktop.Secret.Item";
-#[allow(dead_code)] // item-secret's (bin/item-secret.rs)
 const COLLECTION: &str = "/org/freedesktop/secrets/aliases/default";
 const SCHEMA: &str = "lab.agentsco.item.Secret";
 
@@ -55,6 +54,24 @@ pub fn get(name: &str) -> Result<Option<String>, String> {
     let session = open_session(&conn)?;
     let secret: Secret = Proxy::new(&conn, SERVICE, item.clone(), ITEM).map_err(err)?.call("GetSecret", &(session,)).map_err(err)?;
     Ok(Some(String::from_utf8_lossy(&secret.2).trim().to_owned()))
+}
+
+/// Whether the login keyring is locked, asked for 2 s at most (None: no
+/// answer). item's PAM session starts gnome-keyring and ends it with the
+/// session, so after item restarts the keyring is a new one, locked until
+/// the PIN - a finger opens the phone, not the keyring.
+#[allow(dead_code)] // the compositor's (main.rs)
+pub fn login_locked() -> Option<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let locked = (|| {
+            let conn = crate::bus::session().ok()?;
+            let collection = Proxy::new(&conn, SERVICE, COLLECTION, "org.freedesktop.Secret.Collection").ok()?;
+            collection.get_property::<bool>("Locked").ok()
+        })();
+        let _ = tx.send(locked);
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(2)).ok().flatten()
 }
 
 /// The names of the secrets kept here (item's own schema), sorted.
