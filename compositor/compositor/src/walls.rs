@@ -351,8 +351,12 @@ pub(crate) fn decode_bytes(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// The wallpaper before one is chosen (a clean install, the first setup):
-/// black for now, until a default picture comes with item's pictures.
-const DEFAULT: &str = BLACK;
+/// the owner's own choice of 2026-10-29 - Yuri Krupenin's wide picture on
+/// both panels, at the zoom and about the point chosen on the phone - the
+/// panels each black until given their own; the vignette its default (the
+/// same). Black, should the picture be missing.
+const DEFAULT: View = View { name: String::new(), zoom: 1.072, cx: 0.4705, cy: 0.4967 };
+const DEFAULT_NAME: &str = "wide-001-yuri-krupenin.jpg";
 /// No picture: the screen black.
 const BLACK: &str = "black";
 
@@ -473,14 +477,14 @@ impl Walls {
         files.sort();
         let mut names = vec![AURORA.to_owned()];
         names.extend(files);
-        let fallback = if DEFAULT == BLACK || names.iter().any(|n| n == DEFAULT) { DEFAULT } else { BLACK };
+        let both = if names.iter().any(|n| n == DEFAULT_NAME) { View { name: DEFAULT_NAME.to_owned(), ..DEFAULT } } else { View::of(BLACK) };
         let mut walls = Walls {
             dirs,
             names,
             current: String::new(),
             each: false,
             target: Side::Left,
-            views: [View::of(fallback), View::of(fallback), View::of(fallback)],
+            views: [both, View::of(BLACK), View::of(BLACK)],
             sizes: Default::default(),
             cache: Default::default(),
             loaded: Default::default(),

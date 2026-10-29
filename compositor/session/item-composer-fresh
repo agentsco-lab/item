@@ -35,10 +35,20 @@ fi
 
 if [ "$OUTPUT" = kms ]; then
     systemctl stop sfduo-composer-watchdog 2>/dev/null
-    if [ "$(composers)" -gt 0 ]; then
-        hwc stop
-        for i in $(seq 1 30); do [ "$(composers)" = 0 ] && break; sleep 0.5; done
-    fi
+    # Down for 3 s on end, or 30 s at most: at boot Android's init starts
+    # the composer late, and again after its first start fails (2026-10-29:
+    # none at the check, one up the same second, the card its).
+    quiet=0
+    for i in $(seq 1 60); do
+        if [ "$(composers)" -gt 0 ]; then
+            hwc stop
+            quiet=0
+        else
+            quiet=$((quiet + 1))
+            [ $quiet -ge 6 ] && break
+        fi
+        sleep 0.5
+    done
     for i in $(seq 1 50); do [ "$(masters)" = 0 ] && break; sleep 0.1; done
     echo "item-composer-fresh: the own output: composer $(composers), card masters $(masters)"
     echo kms > /run/item-output
