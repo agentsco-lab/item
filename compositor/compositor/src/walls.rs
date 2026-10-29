@@ -288,12 +288,16 @@ fn frost(rgba: &[u8], w: u32, h: u32) -> (Vec<u8>, u32, u32) {
             }
         }
     }
-    // Darkened toward the night's blue, matte: text reads on it.
+    // Darkened toward the night's blue, matte: text reads on it. The blue
+    // added as the picture is lit (pane.frag's way): over black it made a
+    // dark blue page (the system screen on the owner's black wallpaper,
+    // 2026-10-29); black stays black.
     const DARK: [f32; 3] = [16.0, 19.0, 27.0];
     let mut out = vec![0u8; fw * fh * 4];
     for (i, p) in px.iter().enumerate() {
+        let lit = ((p[0] * 0.299 + p[1] * 0.587 + p[2] * 0.114) / 255.0 * 8.0).min(1.0);
         for c in 0..3 {
-            out[i * 4 + c] = (p[c] * 0.38 + DARK[c] * 0.62).round().clamp(0.0, 255.0) as u8;
+            out[i * 4 + c] = (p[c] * 0.38 + DARK[c] * 0.62 * lit).round().clamp(0.0, 255.0) as u8;
         }
         out[i * 4 + 3] = 255;
     }
