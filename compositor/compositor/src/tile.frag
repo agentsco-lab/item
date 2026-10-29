@@ -71,6 +71,10 @@ void main() {
         float d = length(vec2(cx, round - p.y)) - round;
         cover = 1.0 - smoothstep(-1.0, 0.5, d);
     }
-    vec3 c = frosted(q) * (1.0 - veil) + TINT * veil;
+    // The tint added as the picture under it is lit (pane.frag): black
+    // stays black.
+    vec3 under = frosted(q);
+    float lit = min(1.0, dot(under, vec3(0.299, 0.587, 0.114)) * 8.0);
+    vec3 c = under * (1.0 - veil) + TINT * veil * lit;
     gl_FragColor = vec4(dither(c), 1.0) * alpha * cover;
 }

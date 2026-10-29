@@ -4,8 +4,8 @@
 //! `/usr/share/item/walls` (the user's first, by name), each with a small
 //! picture beside it for choosing (`thumb-NAME.jpg`, made from the picture
 //! - 16:9; a tall one's `thumbt-NAME.jpg`, 3:4 as a panel is -
-//! when it is missing). Before them comes Aurora, the wallpaper drawn by the
-//! compositor itself (its small picture `thumb-aurora`).
+//! when it is missing). Before them come Aurora, the wallpaper drawn by the
+//! compositor itself (its small picture `thumb-aurora`), and black.
 //!
 //! What is on: one picture on both panels, or one on each ("each"), each
 //! seen at a zoom (1 the whole picture covering its part; up to as far as
@@ -475,7 +475,9 @@ impl Walls {
             }
         }
         files.sort();
-        let mut names = vec![AURORA.to_owned()];
+        // Aurora, then black (the owner's: a choice of its own, 2026-10-29),
+        // then the pictures.
+        let mut names = vec![AURORA.to_owned(), BLACK.to_owned()];
         names.extend(files);
         let both = if names.iter().any(|n| n == DEFAULT_NAME) { View { name: DEFAULT_NAME.to_owned(), ..DEFAULT } } else { View::of(BLACK) };
         let mut walls = Walls {
@@ -518,7 +520,7 @@ impl Walls {
         walls.read_kept();
         walls.sync_current();
         *walls.outside.borrow_mut() = outside();
-        tracing::info!("walls: {} pictures; {}", walls.names.len() - 1, walls.describe());
+        tracing::info!("walls: {} pictures; {}", walls.names.len() - 2, walls.describe());
         walls.make(false, true);
         // The strip's small pictures ready before it is first opened.
         walls.ask_thumbs();
@@ -603,7 +605,14 @@ impl Walls {
         // The strip: the tall pictures with one on each panel, the wide ones
         // (and Aurora) with one on both; all, if none fits.
         let each = self.each;
-        self.shown = (0..self.names.len()).filter(|&i| if self.names[i] == AURORA { !each } else { self.tall.contains(&self.names[i]) == each }).collect();
+        self.shown = (0..self.names.len())
+            .filter(|&i| match self.names[i].as_str() {
+                AURORA => !each,
+                // Black goes on a panel as on both.
+                BLACK => true,
+                n => self.tall.contains(n) == each,
+            })
+            .collect();
         if self.shown.is_empty() {
             self.shown = (0..self.names.len()).collect();
         }
@@ -946,6 +955,11 @@ impl Walls {
                 let small = decode(thumb).or_else(|| {
                     if names[i] == AURORA {
                         return None;
+                    }
+                    // Black's small picture: black, as it is on the panels.
+                    if names[i] == BLACK {
+                        let (w, h) = THUMB_PX;
+                        return Some(([0u8, 0, 0, 255].repeat((w * h) as usize), w, h));
                     }
                     let (src, sw, sh) = decode(picture)?;
                     let (w, h) = if tall[i] { THUMB_TALL_PX } else { THUMB_PX };

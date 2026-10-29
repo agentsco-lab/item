@@ -76,5 +76,9 @@ void main() {
     }
     // Clear, a touch of the blurred picture so what is on the sheet reads.
     vec3 c = mix(sharp(q), frosted(q), 0.25);
-    gl_FragColor = vec4(dither(c * (1.0 - TINT_A) + TINT * TINT_A), 1.0) * alpha;
+    // The tint added as the picture under it is lit: on black it was a
+    // dark blue sheet over black, its edge plain in motion (the owner's
+    // black wallpaper, 2026-10-29); black stays black.
+    float lit = min(1.0, dot(c, vec3(0.299, 0.587, 0.114)) * 8.0);
+    gl_FragColor = vec4(dither(c * (1.0 - TINT_A) + TINT * TINT_A * lit), 1.0) * alpha;
 }
