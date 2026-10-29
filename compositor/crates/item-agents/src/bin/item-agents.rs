@@ -361,15 +361,18 @@ fn cmd_devices() {
 }
 
 /// The phone's traps: a command matching one is refused, with the reason.
+/// A word is in a command's place after `;`, `&`, `$(`, `||` or a pipe
+/// with a space, and only when a space, a separator or the end follows:
+/// `(mkfs|sgdisk)` in a grep pattern is not one.
 const TRAPS: &[(&str, &str)] = &[
     (r"/sys/kernel/debug/gpio", "reading /sys/kernel/debug/gpio resets the Duo at once (the port's SAFETY.md)"),
     (r"(^|[\s;&|])dd\s[^|;]*of=/dev/", "dd onto a device: the Duo has no EDL loader, a bad write bricks it"),
-    (r"(^|[;&|]\s*|\$\(\s*)(sudo\s+)?(mkfs|wipefs|sgdisk|parted|fdisk)\b", "writing a partition table or a filesystem on the Duo: no way back without EDL"),
+    (r#"(^|[;&]\s*|\|\s+|\|\|\s*|\$\(\s*)(sudo\s+)?(mkfs|wipefs|sgdisk|parted|fdisk)(\.\w+)?([\s;&'")]|$)"#, "writing a partition table or a filesystem on the Duo: no way back without EDL"),
     (r">\s*/dev/(block|sd|mmcblk)", "writing a block device: the Duo has no EDL loader"),
     (r"fastboot\s+(flash|erase|format|oem)", "flashing from the agent: item/grid flashes, by its rules (RAM boot first, one change per boot)"),
     (r"systemctl\s+(stop|restart|kill)\s+.*(hwcomposer|android-service|lxc@android)", "stopping or restarting the vendor composer resets the phone about one time in three"),
     (r"rm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+)+(/|/\*|/userdata|/home)(\s|$)", "wiping the root or userdata"),
-    (r"(^|[;&|]\s*|\$\(\s*)(sudo\s+)?(reboot|poweroff|halt|shutdown)\b", "restarting the phone ends the session: ask the owner"),
+    (r#"(^|[;&]\s*|\|\s+|\|\|\s*|\$\(\s*)(sudo\s+)?(reboot|poweroff|halt|shutdown)([\s;&'")]|$)"#, "restarting the phone ends the session: ask the owner"),
 ];
 
 /// The trap a command falls into, if any.
@@ -665,6 +668,13 @@ mod tests {
             ("echo $(shutdown -h now)", true),
             ("grep -n reboot file.rs", false),
             ("itemgrid reboot", false),
+            ("echo $(reboot)", true),
+            ("sudo reboot; ls", true),
+            ("sgdisk -o /dev/sda", true),
+            ("ls && sudo mkfs.ext4 -F /dev/sda5", true),
+            ("grep -rhoE '(mkfs|mke2fs|dd|sgdisk|blockdev)' src", false),
+            ("grep -E 'reboot|poweroff' log", false),
+            ("rg '(halt|shutdown)' src", false),
         ] {
             assert_eq!(trap(cmd).is_some(), trapped, "{cmd}");
         }
