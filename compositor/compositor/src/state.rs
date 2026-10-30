@@ -1080,14 +1080,7 @@ impl State {
             }
             self.warm_begun = true;
             // Chromium is resident on its own (item-chromium.service), known by its ids.
-            // ITEM_WARM_SKIP: desktop files (comma-separated) left cold.
-            let skip = std::env::var("ITEM_WARM_SKIP").unwrap_or_default();
-            let skip: Vec<&str> = skip.split(',').filter(|s| !s.is_empty()).collect();
-            self.warm_queue = crate::dock::configured_desktops()
-                .into_iter()
-                .filter(|d| !crate::apps::entry(d).is_some_and(|e| e.ids.iter().any(|i| crate::kbd::is_browser(i))))
-                .filter(|d| !skip.iter().any(|s| d.trim_end_matches(".desktop") == s.trim_end_matches(".desktop")))
-                .collect();
+            self.warm_queue = crate::dock::configured_desktops().into_iter().filter(|d| !crate::apps::entry(d).is_some_and(|e| e.ids.iter().any(|i| crate::kbd::is_browser(i)))).collect();
             self.warm_next_ns = now;
         }
         // A warming app that never came is forgotten; an arrived one is

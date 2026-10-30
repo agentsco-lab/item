@@ -89,42 +89,6 @@ static LAST_FLIP_NS: AtomicU64 = AtomicU64::new(0);
 /// When the panels were asked on, until the mode set that lights them.
 static POWERED_ON_AT: AtomicU64 = AtomicU64::new(0);
 
-/// KMS_SYNC=1: each frame committed in the present callback itself; 2:
-/// and the GPU's fence waited for there first.
-fn sync_level() -> u32 {
-    static SYNC: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *SYNC.get_or_init(|| std::env::var("KMS_SYNC").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
-}
-
-fn sync() -> bool {
-    sync_level() >= 1
-}
-
-/// KMS_STEADY=1: the panels sent a frame every period, the last one again
-/// when nothing new came.
-fn steady() -> bool {
-    static STEADY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *STEADY.get_or_init(|| std::env::var_os("KMS_STEADY").is_some_and(|v| v == "1"))
-}
-
-/// The frame shown, committed again (its release fence not wanted).
-fn again() {
-    if FLIPS_LEFT.load(Ordering::Acquire) > 0 || !POWER_ON.load(Ordering::Relaxed) {
-        return;
-    }
-    let guard = KMS.lock().unwrap();
-    let Some(k) = guard.as_ref() else { return };
-    if !k.started || k.shown_fb == 0 {
-        return;
-    }
-    if let Ok(release) = commit(k, k.shown_fb, -1) {
-        if release >= 0 {
-            // SAFETY: the merged release fence, ours.
-            unsafe { libc::close(release) };
-        }
-    }
-}
-
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
 const PRIV_FLAGS_UBWC_ALIGNED: i32 = 0x0800_0000;
 
@@ -370,37 +334,9 @@ fn framebuffer(k: &mut Kms, buffer: *mut c_void) -> Result<u32, String> {
 /// here, once), and the plane that shows it found.
 fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<(), String> {
     wait_fence(acquire);
-    // KMS_PLANES=a,b: the planes to show each panel's half on, in place of
-    // the primary one SETCRTC took (hwcomposer's were others).
-    let chosen: Vec<u32> = std::env::var("KMS_PLANES").unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
-    for (i, p) in k.panels.iter_mut().enumerate() {
+    for p in &mut k.panels {
         k.card.set_crtc(p.crtc, p.connector, p.mode, fb, p.x)?;
         p.plane = k.card.plane_on(p.crtc)?;
-        if let Some(&other) = chosen.get(i) {
-            if other != p.plane {
-                let primary = p.plane;
-                p.plane = other;
-                let (w, h) = (p.mode.hdisplay as u64, p.mode.vdisplay as u64);
-                let changes = [
-                    (other, OBJ_PLANE, "FB_ID", fb as u64),
-                    (other, OBJ_PLANE, "CRTC_ID", p.crtc as u64),
-                    (other, OBJ_PLANE, "SRC_X", (p.x as u64) << 16),
-                    (other, OBJ_PLANE, "SRC_Y", 0),
-                    (other, OBJ_PLANE, "SRC_W", w << 16),
-                    (other, OBJ_PLANE, "SRC_H", h << 16),
-                    (other, OBJ_PLANE, "CRTC_X", 0),
-                    (other, OBJ_PLANE, "CRTC_Y", 0),
-                    (other, OBJ_PLANE, "CRTC_W", w),
-                    (other, OBJ_PLANE, "CRTC_H", h),
-                    (other, OBJ_PLANE, "rotation", 1),
-                    (other, OBJ_PLANE, "blend_op", 1),
-                    (primary, OBJ_PLANE, "FB_ID", 0),
-                    (primary, OBJ_PLANE, "CRTC_ID", 0),
-                ];
-                k.card.commit(&changes, drm::ATOMIC_ALLOW_MODESET).map_err(|e| format!("plane {other} for crtc {}: {e}", p.crtc))?;
-                println!("hybris-hwc: kms: panel {i} on plane {other} (not {primary})");
-            }
-        }
     }
     k.started = true;
     let asked = POWERED_ON_AT.swap(0, Ordering::Relaxed);
@@ -544,18 +480,7 @@ fn committer() {
             let (lock, cv) = &MAILBOX;
             let mut g = lock.lock().unwrap();
             while g.is_none() {
-                if !steady() {
-                    g = cv.wait(g).unwrap();
-                    continue;
-                }
-                // KMS_STEADY=1: no new frame a period on, the one shown again.
-                let (g2, timeout) = cv.wait_timeout(g, std::time::Duration::from_micros(17_000)).unwrap();
-                g = g2;
-                if timeout.timed_out() && g.is_none() {
-                    drop(g);
-                    again();
-                    g = lock.lock().unwrap();
-                }
+                g = cv.wait(g).unwrap();
             }
         }
         wait_idle(100);
@@ -624,10 +549,6 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
     } else if detail.gpu_pending {
         k.stats.gpu_busy += 1;
     }
-    // KMS_SYNC=2: the GPU waited for here, whatever its fence says.
-    if sync_level() >= 2 && acquire >= 0 {
-        wait_fence(acquire);
-    }
 
     let t = now_ns();
     let fb = if POWER_ON.load(Ordering::Relaxed) { framebuffer(k, buffer) } else { Err(String::new()) };
@@ -653,13 +574,6 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
                 // SAFETY: the window's fence, waited for.
                 unsafe { libc::close(acquire) };
             }
-        }
-        Ok(fb) if sync() => {
-            // KMS_SYNC=1: committed here, its release fence on the buffer
-            // before the window can hand it to the GPU again.
-            hold(buffer);
-            wait_idle(100);
-            show(k, Job { buffer, fb, acquire });
         }
         Ok(fb) => {
             hold(buffer);
