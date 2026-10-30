@@ -42,6 +42,10 @@ const DUO: Profile = Profile {
         ("llcc_ib", 0),
         ("dram_ab", 1_164_041_856),
         ("dram_ib", 1_600_000_000),
+        // The rotator unused, as under hwcomposer (2026-10-30: its stop left
+        // 460 MHz and 22.8 GB/s voted for it).
+        ("rot_clk", 0),
+        ("rot_prefill_bw", 0),
     ],
 };
 
