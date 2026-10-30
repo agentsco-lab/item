@@ -370,9 +370,37 @@ fn framebuffer(k: &mut Kms, buffer: *mut c_void) -> Result<u32, String> {
 /// here, once), and the plane that shows it found.
 fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<(), String> {
     wait_fence(acquire);
-    for p in &mut k.panels {
+    // KMS_PLANES=a,b: the planes to show each panel's half on, in place of
+    // the primary one SETCRTC took (hwcomposer's were others).
+    let chosen: Vec<u32> = std::env::var("KMS_PLANES").unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
+    for (i, p) in k.panels.iter_mut().enumerate() {
         k.card.set_crtc(p.crtc, p.connector, p.mode, fb, p.x)?;
         p.plane = k.card.plane_on(p.crtc)?;
+        if let Some(&other) = chosen.get(i) {
+            if other != p.plane {
+                let primary = p.plane;
+                p.plane = other;
+                let (w, h) = (p.mode.hdisplay as u64, p.mode.vdisplay as u64);
+                let changes = [
+                    (other, OBJ_PLANE, "FB_ID", fb as u64),
+                    (other, OBJ_PLANE, "CRTC_ID", p.crtc as u64),
+                    (other, OBJ_PLANE, "SRC_X", (p.x as u64) << 16),
+                    (other, OBJ_PLANE, "SRC_Y", 0),
+                    (other, OBJ_PLANE, "SRC_W", w << 16),
+                    (other, OBJ_PLANE, "SRC_H", h << 16),
+                    (other, OBJ_PLANE, "CRTC_X", 0),
+                    (other, OBJ_PLANE, "CRTC_Y", 0),
+                    (other, OBJ_PLANE, "CRTC_W", w),
+                    (other, OBJ_PLANE, "CRTC_H", h),
+                    (other, OBJ_PLANE, "rotation", 1),
+                    (other, OBJ_PLANE, "blend_op", 1),
+                    (primary, OBJ_PLANE, "FB_ID", 0),
+                    (primary, OBJ_PLANE, "CRTC_ID", 0),
+                ];
+                k.card.commit(&changes, drm::ATOMIC_ALLOW_MODESET).map_err(|e| format!("plane {other} for crtc {}: {e}", p.crtc))?;
+                println!("hybris-hwc: kms: panel {i} on plane {other} (not {primary})");
+            }
+        }
     }
     k.started = true;
     let asked = POWERED_ON_AT.swap(0, Ordering::Relaxed);
@@ -418,6 +446,9 @@ fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
             (p.plane, OBJ_PLANE, "input_fence", acquire.max(0) as u64),
             // Opaque, as hwcomposer's client layer was (blend NONE).
             (p.plane, OBJ_PLANE, "blend_op", 1),
+            // Not turned: DRM_MODE_ROTATE_0, as hwcomposer had it (0, unset,
+            // is no rotation at all).
+            (p.plane, OBJ_PLANE, "rotation", 1),
             (p.crtc, OBJ_CRTC, "output_fence", &mut release[i] as *mut i64 as u64),
         ]);
         for &(name, v) in k.profile.votes {
