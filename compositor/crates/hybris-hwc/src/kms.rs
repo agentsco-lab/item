@@ -233,17 +233,29 @@ fn apply_colour(card: &Card, profile: &Profile, panels: &[Panel], mode: &str) {
 /// The card's events: the first panel's vblanks (the vsync, asked for again
 /// after each) and the flips done (a commit's last frees the next).
 fn events(card: Arc<Card>, crtc_index: u32, period: u64) {
-    let mut vblank_ok = card.request_vblank(crtc_index, 1).is_ok();
+    // One vblank asked for at a time: each asked while one was on its way
+    // started a chain of its own (2026-10-30: the panels on again, half as
+    // many vsyncs more, the frames late).
+    let mut asked = false;
+    let ask = |asked: &mut bool| -> bool {
+        if *asked {
+            return true;
+        }
+        *asked = card.request_vblank(crtc_index, 1).is_ok();
+        *asked
+    };
+    let mut vblank_ok = ask(&mut asked);
     if !vblank_ok {
         eprintln!("hybris-hwc: kms: no vblank events: the vsync synthesised from the flips");
     }
     let mut next_synth = now_ns() + period;
     let mut was_on = true;
+    let mut last_vblank = now_ns();
     loop {
         let on = POWER_ON.load(Ordering::Relaxed);
         if on && !was_on {
             // The panels on again: their vblanks asked for anew.
-            vblank_ok = card.request_vblank(crtc_index, 1).is_ok();
+            vblank_ok = ask(&mut asked);
             next_synth = now_ns() + period;
         }
         was_on = on;
@@ -254,9 +266,9 @@ fn events(card: Arc<Card>, crtc_index: u32, period: u64) {
             match e.kind {
                 1 => {
                     crate::vsync(e.time_ns as i64);
-                    if card.request_vblank(crtc_index, 1).is_err() {
-                        vblank_ok = false;
-                    }
+                    last_vblank = now_ns();
+                    asked = false;
+                    vblank_ok = ask(&mut asked);
                 }
                 2 => {
                     LAST_FLIP_NS.store(e.time_ns, Ordering::Relaxed);
@@ -267,6 +279,13 @@ fn events(card: Arc<Card>, crtc_index: u32, period: u64) {
                 }
                 _ => {}
             }
+        }
+        // On, and the one asked for never came (lost with a CRTC let go):
+        // asked again.
+        if on && asked && now_ns() - last_vblank > 500_000_000 {
+            asked = false;
+            last_vblank = now_ns();
+            vblank_ok = ask(&mut asked);
         }
         if !vblank_ok && on {
             let now = now_ns();
@@ -281,7 +300,7 @@ fn events(card: Arc<Card>, crtc_index: u32, period: u64) {
             }
             // Asked for again now and then: they may come yet.
             if now % 1_000_000_000 < period {
-                vblank_ok = card.request_vblank(crtc_index, 1).is_ok();
+                vblank_ok = ask(&mut asked);
             }
         }
     }
