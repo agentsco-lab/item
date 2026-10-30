@@ -355,12 +355,12 @@ pub(crate) fn decode_bytes(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
 }
 
 /// The wallpaper before one is chosen (a clean install, the first setup):
-/// the owner's own choice of 2026-10-29 - Yuri Krupenin's wide picture on
-/// both panels, at the zoom and about the point chosen on the phone - the
-/// panels each black until given their own; the vignette its default (the
-/// same). Black, should the picture be missing.
-const DEFAULT: View = View { name: String::new(), zoom: 1.072, cx: 0.4705, cy: 0.4967 };
-const DEFAULT_NAME: &str = "wide-001-yuri-krupenin.jpg";
+/// the owner's own choice of 2026-10-30 - Olia Bondarenko's wide picture on
+/// both panels, whole and centred, as chosen on the phone - the panels each
+/// black until given their own; the vignette its default (the same). Black,
+/// should the picture be missing.
+const DEFAULT: View = View { name: String::new(), zoom: 1.0, cx: 0.5, cy: 0.5 };
+const DEFAULT_NAME: &str = "wide-006-olia-bondarenko.jpg";
 /// No picture: the screen black.
 const BLACK: &str = "black";
 

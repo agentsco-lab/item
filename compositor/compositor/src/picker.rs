@@ -1341,9 +1341,6 @@ impl Picker {
                 put(&mut out, &self.u_word.buffer, x, y - 1.0, lift);
                 put(&mut out, &self.badge, b.loc.x, b.loc.y, lift);
             }
-            if whole && (i == current || self.ring_extra == Some(i)) {
-                put(&mut out, if self.tall() { &self.ring_tall } else { &self.ring }, r.loc.x - 4.0, r.loc.y - 4.0, lift);
-            }
             crop.set((!whole).then_some(part));
             match thumbs.get(i).cloned().flatten().as_ref() {
                 Some(t) => put(&mut out, t, x0, r.loc.y, lift),
@@ -1351,6 +1348,11 @@ impl Picker {
                 None => put(&mut out, if self.tall() { &self.placeholder_tall } else { &self.placeholder }, x0, r.loc.y, lift),
             }
             crop.set(None);
+            // The ring behind the picture (the list is front to back): only
+            // its 4 px round it show.
+            if whole && (i == current || self.ring_extra == Some(i)) {
+                put(&mut out, if self.tall() { &self.ring_tall } else { &self.ring }, r.loc.x - 4.0, r.loc.y - 4.0, lift);
+            }
         }
         // The two sheets' glass.
         for sh in [pics, look] {
