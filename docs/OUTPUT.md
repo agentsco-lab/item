@@ -30,11 +30,13 @@ The choice is kept in `/etc/item/output` (`kms` or `hwc`, no file: `hwc`).
   hwcomposer's validate and present, 2.7 ms a frame and more with a second
   layer), the newest frame wins when one is late, and each buffer goes back
   to the GPU on the panels' own release fence.
-- **The panels' power** on the lid: on in about 0.53 s, the first frame
-  28 ms after - as fast as with hwcomposer.
+- **The panels' power** on the lid: lit with their first frame in about
+  0.76 s.
 
-Measured on the owner's Duo 1 (2026-10-29): 60 frames a second steady,
-the same use as under hwcomposer with a quarter of the missed vsyncs.
+Measured on the owner's Duo 1: 60 frames a second steady, the same use as
+under hwcomposer with a quarter of the missed vsyncs (2026-10-29); a night
+asleep with the lid shut at about 1.0 % of the battery an hour, against
+hwcomposer's 1.27 (2026-10-30).
 
 ## When it fails
 
@@ -60,10 +62,7 @@ two 1344×1892 panels up to 90 Hz) is laid for and needs its own reading.
 
 ## Not yet checked
 
-- The battery overnight against hwcomposer's 1.27 % an hour.
-- Android's side without hwcomposer: the camera's preview and the video
-  decoder's surfaces.
-- Long everyday use: the runs so far were minutes long, with two reboots.
+- Long everyday use: days, not hours.
 
 ## Next
 
@@ -93,6 +92,19 @@ each a dark screen or a refused commit until found:
   does.
 - The kernel holds a dead hwcomposer's mastership of the card a moment.
 - The planes must be opaque.
+- The panels on again by the CRTC's ACTIVE alone flip every frame and stay
+  black: SDE assigns its blocks in the mode set, which ACTIVE alone does
+  not run. Off, each CRTC is let go whole; on, the next frame sets the
+  modes as the first one does.
+- The DRM events' times are mostly CLOCK_BOOTTIME's, some
+  CLOCK_MONOTONIC's: each is taken as the clock it is nearer to. Taking the
+  sleep off them all, after a night (more slept than awake) some came to 0,
+  and frames timed at the clock's start drew a call screen's fade-out over
+  everything.
+- One vblank asked for at a time: a second asked while one is on its way
+  starts a chain of its own.
+- hwcomposer, stopped, leaves the rotator's votes at the maximum too
+  (460 MHz, 22.8 GB/s): set to 0.
 
 The probe that found the way is `compositor/probes/kms-frame`
 (`tools/kms-run.sh`).
