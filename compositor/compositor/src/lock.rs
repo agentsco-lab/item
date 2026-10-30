@@ -899,7 +899,7 @@ impl Lock {
     pub fn settle(&mut self, frame_ns: u64) -> bool {
         // The pad put away: drawn till its drops have gathered and gone.
         if self.pad_leaving {
-            if self.pad.drops(frame_ns, (0.0, 0.0), 0.0).is_some() {
+            if self.pad.drops(frame_ns, (0.0, 0.0), 0.0, 0.0).is_some() {
                 return true;
             }
             self.pad_leaving = false;
@@ -1154,7 +1154,7 @@ impl Lock {
         if !self.entering && !self.pad_leaving {
             return None;
         }
-        let (groups, _) = self.pad.drops(frame_ns, (0.0, 0.0), 0.0)?;
+        let (groups, _) = self.pad.drops(frame_ns, (0.0, 0.0), 0.0, 0.0)?;
         Some(
             groups
                 .into_iter()

@@ -2,12 +2,15 @@
 //! first setup (setup.rs): the digits typed as dots, a line under them, the
 //! keys; it comes in softly and shakes at a wrong PIN.
 //!
-//! In the setup its keys are water (`water`): drops born of the setup's
-//! drop over the pad - a stream comes down from it into the pad's middle,
-//! parts into a drop for each row, and each row's into its three keys,
-//! threads between them as they part; the digits come up on them once they
-//! stand. Pressed, a key's drop gives under the finger and comes alive; let
-//! go, it springs back. Leaving, they gather back the way they came.
+//! In the setup its keys are water (`water`): born of the setup's drop,
+//! come down into the pad's middle (setup.rs) - it draws out into a column,
+//! the column pinches into a drop for each row, and each row's buds into
+//! its three keys, threads between them as they part; the digits come up
+//! on them once they stand. Each phase begins as the last left the water:
+//! no drop goes or comes at once, the water only grows as it spreads.
+//! Pressed, a key's drop gives under the finger and comes alive; let go, it
+//! springs back. Leaving, they gather back the way they came, into the one
+//! drop.
 
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
 use smithay::backend::renderer::element::Kind;
@@ -25,14 +28,24 @@ const KEY_GAP: f64 = 22.0;
 const PAD_TOP: f64 = 330.0;
 const DOTS_Y: f64 = 220.0;
 const MAX_PIN: usize = 16;
-/// The keys born of a drop: the stream down, the rows, the keys.
+/// The keys born of a drop: drawn out into a column, the rows, the keys.
 const STREAM_NS: f64 = 380e6;
 const ROWS_NS: f64 = 340e6;
 const KEYS_NS: f64 = 400e6;
 pub const SPLIT_NS: u64 = (STREAM_NS + ROWS_NS + KEYS_NS) as u64;
-/// A key's drop; the stream's at its fullest.
+/// A key's drop; the stream's at its fullest (the lock screen's bloom).
 const KEY_DROP_R: f64 = 33.0;
 const STREAM_R: f64 = 42.0;
+/// The column the setup's drop draws out into: how far its rows are
+/// spread then (of the whole), and their drops' size.
+const COLUMN_SPREAD: f64 = 0.45;
+const COLUMN_R: f64 = 0.95 * KEY_DROP_R;
+/// A side key's drop as it buds from its row's (of a key's): so much
+/// smaller than the row's it adds nothing to it at first.
+const BUD: f64 = 0.35;
+/// How alive the water is while it parts; the setup's keys at rest.
+const PART_LIFE: f64 = 0.7;
+const REST_LIFE: f64 = 0.15;
 /// Melting together while parting, apart at rest.
 const PART_MELT: f64 = 26.0;
 const REST_MELT: f64 = 0.8;
@@ -189,10 +202,10 @@ impl PinPad {
         !self.water || (self.gather_at.is_none() && self.born(frame_ns) == Some(SPLIT_NS as f64))
     }
 
-    /// The keys as drops at `frame_ns`, the setup's drop (its middle and
-    /// radius) where they come from; whether that drop is drawn with them
-    /// (and not on its own).
-    pub fn drops(&self, frame_ns: u64, mother: (f64, f64), mother_r: f64) -> Option<(Vec<Group>, bool)> {
+    /// The keys as drops at `frame_ns`, the setup's drop (its middle,
+    /// radius and life) where they come from; whether that drop is drawn
+    /// with them (and not on its own).
+    pub fn drops(&self, frame_ns: u64, mother: (f64, f64), mother_r: f64, mother_life: f64) -> Option<(Vec<Group>, bool)> {
         let t = self.born(frame_ns)?;
         let centre = |i: usize| {
             let r = Self::key_rect(i);
@@ -210,25 +223,34 @@ impl PinPad {
             let k = ease(t / STREAM_NS);
             return Some((vec![Group { drops: vec![((middle.0 + dx, middle.1), STREAM_R * 0.75 * k, (1.0, 1.0))], melt: PART_MELT, life: 0.7 }], false));
         }
+        // The drop's life as it was, into the parting's.
+        let from_life = |k: f64| lerp(mother_life, PART_LIFE, k);
         if t < STREAM_NS {
-            // The stream comes down from the drop, growing.
+            // The drop draws out into a column: its rows' drops, one on
+            // another and not melted at first (the drop as it was), spread
+            // a little and melt into one long body.
             let k = ease(t / STREAM_NS);
-            let stream = ((lerp(mother.0, middle.0, k), lerp(mother.1, middle.1, k)), lerp(mother_r * 0.6, STREAM_R, k), (1.0, 1.0 + 0.25 * (1.0 - k) * k * 4.0));
-            let melt = lerp(PART_MELT * 1.4, PART_MELT, k);
-            return Some((vec![Group { drops: vec![(mother, mother_r, (1.0, 1.0)), stream], melt, life: 0.7 }], true));
+            let at = (lerp(mother.0, middle.0, k) + dx, lerp(mother.1, middle.1, k));
+            let drops = rows.iter().map(|&y| ((at.0, at.1 + (y - middle.1) * COLUMN_SPREAD * k), lerp(mother_r, COLUMN_R, k), (1.0, 1.0))).collect();
+            return Some((vec![Group { drops, melt: lerp(0.0, PART_MELT * 1.4, k), life: from_life(k) }], false));
         }
         if t < STREAM_NS + ROWS_NS {
-            // It parts into a drop for each row.
+            // The column pinches into a drop for each row.
+            // (The lock's from the one drop it bloomed from.)
             let k = ease((t - STREAM_NS) / ROWS_NS);
-            let drops = rows.iter().map(|&y| ((middle.0 + dx, lerp(middle.1, y, k)), lerp(STREAM_R * 0.75, KEY_DROP_R, k), (1.0, 1.0))).collect();
-            return Some((vec![Group { drops, melt: lerp(PART_MELT, PART_MELT * 0.7, k), life: 0.7 }], false));
+            let (spread, r0, melt0) = if self.bloom { (0.0, STREAM_R * 0.75, PART_MELT) } else { (COLUMN_SPREAD, COLUMN_R, PART_MELT * 1.4) };
+            let spread = lerp(spread, 1.0, k);
+            let drops = rows.iter().map(|&y| ((middle.0 + dx, middle.1 + (y - middle.1) * spread), lerp(r0, KEY_DROP_R, k), (1.0, 1.0))).collect();
+            return Some((vec![Group { drops, melt: lerp(melt0, PART_MELT * 0.7, k), life: PART_LIFE }], false));
         }
-        // Each row's into its three keys; then they stand, each giving
-        // under a finger and springing back.
+        // Each row's buds into its three keys (the side ones small at
+        // first, so the row's drop is as it was); then they stand, each
+        // giving under a finger and springing back.
         let k = ease((t - STREAM_NS - ROWS_NS) / KEYS_NS);
+        let rest = if self.bloom { 0.0 } else { REST_LIFE };
         let groups = (0..4)
             .map(|row| {
-                let mut life: f64 = if k < 1.0 { 0.7 * (1.0 - k) } else { 0.0 };
+                let mut life: f64 = lerp(PART_LIFE, rest, k);
                 let drops = (0..3)
                     .filter(|&col| self.has_key(3 * row + col))
                     .map(|col| {
@@ -241,7 +263,8 @@ impl PinPad {
                             sq = (1.07, 0.9);
                         }
                         life = life.max((1.0 - since(self.poked[i]) / ALIVE_NS).max(0.0));
-                        ((lerp(mx, x, k) + dx, y), KEY_DROP_R, sq)
+                        let r = if i % 3 == 1 || self.bloom { KEY_DROP_R } else { KEY_DROP_R * lerp(BUD, 1.0, k) };
+                        ((lerp(mx, x, k) + dx, y), r, sq)
                     })
                     .collect();
                 Group { drops, melt: lerp(PART_MELT * 0.7, REST_MELT, k), life }
@@ -299,6 +322,12 @@ impl PinPad {
         // lower in the book's tall panel than in the turned frame's short one.
         let top = p.loc.y as f64 + if layout::turned() { 40.0 } else { PAD_TOP };
         Rectangle::new((x0 + col * (KEY + KEY_GAP), top + row * (KEY + KEY_GAP)).into(), (KEY, KEY).into())
+    }
+
+    /// The keys' middle: where the setup's drop comes to be them.
+    pub fn middle() -> (f64, f64) {
+        let (a, b) = (Self::key_rect(1), Self::key_rect(10));
+        (a.loc.x + KEY / 2.0, (a.loc.y + b.loc.y + KEY) / 2.0)
     }
 
     /// The OK key's middle: an unlock's wave starts there.

@@ -138,8 +138,10 @@ const WELCOME_R: f64 = 74.0;
 /// plain to see (dock.frag's, never looping), elsewhere faint.
 const LIFE_WELCOME: f64 = 0.5;
 const LIFE_REST: f64 = 0.15;
-/// The drop over the PIN pad.
+/// The drop over the Wi-Fi's networks.
 const PIN_DROP_R: f64 = 26.0;
+/// The drop in the PIN pad's middle, the keys to be: a little swollen.
+const PAD_DROP_R: f64 = 40.0;
 /// A digit pressed: the drop alive, calming over this.
 const POKE_NS: f64 = 1.4e9;
 const PIN_MARK_Y: f64 = 120.0;
@@ -390,6 +392,9 @@ pub struct Setup {
     pad: PinPad,
     /// The new PIN, between its two entries.
     first: String,
+    /// What the PIN's line says instead of what to type, till the step
+    /// changes.
+    pin_said: Option<&'static str>,
     /// Answers from threads: whether the PIN is Droidian's; whether the PIN
     /// was set (or checked).
     is_default: Arc<Mutex<Option<bool>>>,
@@ -487,6 +492,7 @@ impl Setup {
                 pad
             },
             first: String::new(),
+            pin_said: None,
             is_default: Default::default(),
             wifi_known: Default::default(),
             saved: Default::default(),
@@ -591,12 +597,9 @@ impl Setup {
     /// the first).
     fn words(&self) -> StepWords {
         let s = |v: &str| v.to_owned();
-        let cvid = |mut foot: Vec<String>| {
-            if self.cvid {
-                foot.push(s("your face, as you type, is kept for cv id"));
-            }
-            foot
-        };
+        let cvid = || if self.cvid { vec![s("face kept for cv id")] } else { Vec::new() };
+        // The PIN's line: what to type, or what went wrong (pin_said).
+        let pin = |d: &str| vec![s(self.pin_said.unwrap_or(d))];
         // Saving: the words of the PIN being saved.
         let pin_new = self.step == Step::PinNew || self.step == Step::PinAgain || (self.step == Step::Saving && !self.first.is_empty());
         match self.step {
@@ -605,15 +608,17 @@ impl Setup {
             // The PIN found out in a moment: its title only (words typed
             // then erased at once flickered).
             Step::Checking => StepWords(vec!["pin"], Vec::new(), Vec::new(), None, None),
-            _ if pin_new => StepWords(vec!["pin"], vec![s("four new digits")], cvid(vec![s("it opens the phone after a restart")]), None, None),
-            Step::PinCurrent | Step::Saving => StepWords(vec!["pin"], vec![s("the one you use now")], cvid(vec![s("it opens the phone after a restart")]), None, None),
+            Step::PinNew => StepWords(vec!["pin"], pin("four digits"), cvid(), None, None),
+            Step::PinAgain => StepWords(vec!["pin"], pin("again"), cvid(), None, None),
+            _ if pin_new => StepWords(vec!["pin"], pin("saving"), cvid(), None, None),
+            Step::PinCurrent => StepWords(vec!["pin"], pin("your pin"), cvid(), None, None),
+            Step::Saving => StepWords(vec!["pin"], pin("checking"), cvid(), None, None),
             Step::Finger => StepWords(vec!["finger"], vec![s("touch the power key, lift, touch again")], Vec::new(), Some(s("› later")), None),
             Step::FingerKnown => {
                 let known = if self.fingers == 1 { s("one is added: it opens the phone") } else { format!("{} are added: they open the phone", self.fingers) };
                 StepWords(vec!["finger"], vec![known], Vec::new(), Some(s("› go on")), Some(s("› add another")))
             }
             Step::Done => StepWords(vec!["all", "set"], Vec::new(), Vec::new(), Some(s("› start")), None),
-            _ => StepWords(Vec::new(), Vec::new(), Vec::new(), None, None),
         }
     }
 
@@ -758,10 +763,17 @@ impl Setup {
         self.lines.iter().filter(|l| l.tag.is_none()).map(Line::done_at).max().unwrap_or(now).min(now + 1_500_000_000)
     }
 
+    /// The PIN's line says what went wrong, in its squares.
+    fn pin_says(&mut self, text: &'static str) {
+        self.pin_said = Some(text);
+        self.lay();
+    }
+
     fn go(&mut self, step: Step) {
         tracing::info!("setup: {step:?}");
         let was = self.step;
         self.step = step;
+        self.pin_said = None;
         // No OK: a new PIN is taken at its length, the one there at the
         // length it was last unlocked with (with OK while that is unknown).
         self.pad.auto_len = match step {
@@ -805,18 +817,17 @@ impl Setup {
             Step::PinNew => {
                 let at = self.right_at();
                 self.pad.show_at(at);
-                self.pad.say("Enter a new 4-digit PIN");
+                self.pad.say("");
             }
             Step::PinAgain => {
                 self.pad.show();
-                self.pad.say("Enter it again");
+                self.pad.say("");
             }
             Step::PinCurrent => {
                 let at = self.right_at();
                 self.pad.show_at(at);
-                self.pad.say("Enter PIN");
+                self.pad.say("");
             }
-            Step::Saving => self.pad.say("Saving…"),
             Step::Finger => {
                 self.progress = 0;
                 self.lit = 0.0;
@@ -903,9 +914,12 @@ impl Setup {
             Step::Welcome => orb,
             // A small drop over the networks, empty.
             Step::Wifi => Orb { x: middle(1), y: PIN_MARK_Y - 10.0, r: PIN_DROP_R, ..orb },
-            // A drop over the pad, clear (no colour in the water: the
-            // owner's, 2026-10-29).
-            Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => Orb { x: middle(1), y: PIN_MARK_Y, r: PIN_DROP_R, ..orb },
+            // Down into the pad's middle, clear (no colour in the water: the
+            // owner's, 2026-10-29): the keys come of it there.
+            Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
+                let (x, y) = PinPad::middle();
+                Orb { x, y, r: PAD_DROP_R, ..orb }
+            }
             Step::Finger => {
                 // A drop by the reader with the print inside; a touch
                 // swells it a little, and it lets go.
@@ -929,7 +943,7 @@ impl Setup {
         if !self.active || self.leaving.is_some() {
             return None;
         }
-        self.pad.drops(frame_ns, (self.orb.x, self.orb.y), self.orb.r)
+        self.pad.drops(frame_ns, (self.orb.x + self.tilt.0, self.orb.y + self.tilt.1), self.orb.r, self.life(frame_ns))
     }
 
     /// How alive the drop is: a little at rest,
@@ -1025,7 +1039,7 @@ impl Setup {
                     let back = if self.first.is_empty() { Step::PinCurrent } else { Step::PinNew };
                     self.first.clear();
                     self.go(back);
-                    self.pad.say(if back == Step::PinCurrent { "Wrong PIN" } else { "Couldn't set the PIN" });
+                    self.pin_says(if back == Step::PinCurrent { "not this one" } else { "not saved, again" });
                     self.pad.shake();
                     crate::fingerprint::buzz("bell-terminal");
                 }
@@ -1336,7 +1350,7 @@ impl Setup {
     fn pin_entered(&mut self, pin: String) {
         match self.step {
             Step::PinNew if pin.len() < MIN_PIN => {
-                self.pad.say("Use at least 4 digits");
+                self.pin_says("at least four");
                 self.pad.shake();
             }
             Step::PinNew => {
@@ -1346,7 +1360,7 @@ impl Setup {
             Step::PinAgain if pin != self.first => {
                 self.first.clear();
                 self.go(Step::PinNew);
-                self.pad.say("The PINs didn't match");
+                self.pin_says("not the same");
                 self.pad.shake();
                 crate::fingerprint::buzz("bell-terminal");
             }
@@ -1363,7 +1377,6 @@ impl Setup {
             }
             Step::PinCurrent => {
                 self.go(Step::Saving);
-                self.pad.say("Checking…");
                 let (slot, wake) = (self.saved.clone(), self.wake.clone());
                 std::thread::spawn(move || {
                     let result = if crate::pam::check(&pin) { Ok(pin) } else { Err("refused".into()) };
