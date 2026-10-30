@@ -145,8 +145,9 @@ it ships as one Debian package built on the computer for aarch64
 
 How the compositor came to be, step by step with its measurements:
 [docs/COMPOSITOR.md](docs/COMPOSITOR.md). Its own output - the panels
-through the kernel's DRM with their factory colour, no hwcomposer
-(`sudo item-switch output kms`): [docs/OUTPUT.md](docs/OUTPUT.md).
+through the kernel's DRM with their factory colour, no hwcomposer, by
+default (`sudo item-switch output hwc` for hwcomposer's):
+[docs/OUTPUT.md](docs/OUTPUT.md).
 
 ## What it needs, and what it changes
 

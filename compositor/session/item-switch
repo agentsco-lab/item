@@ -39,7 +39,7 @@ output)
     # DRM, their factory colour) or the vendor composer (hwc); from now.
     case "$2" in
     kms|hwc) ;;
-    *) echo "item-switch output kms|hwc (now: $(cat /run/item-output 2>/dev/null || echo hwc), chosen: $(cat /etc/item/output 2>/dev/null || echo hwc))" >&2; exit 2 ;;
+    *) echo "item-switch output kms|hwc (now: $(cat /run/item-output 2>/dev/null || echo hwc), chosen: $(cat /etc/item/output 2>/dev/null || echo kms))" >&2; exit 2 ;;
     esac
     mkdir -p /etc/item
     printf '%s\n' "$2" > /etc/item/output

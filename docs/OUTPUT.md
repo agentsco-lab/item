@@ -1,9 +1,9 @@
 # item's own output
 
-item draws each frame on the GPU and, by default, hands it to Android's
-hwcomposer (through libhybris), which owns the display. Since 0.4 it can
-also show the frame itself: the panels through the kernel's DRM, with no
-hwcomposer at all. The two give the same picture, but the own output adds
+item draws each frame on the GPU and shows it itself: the panels through
+the kernel's DRM, with no hwcomposer at all - by default since 0.4. Before
+it, and as the way back, it handed each frame to Android's hwcomposer
+(through libhybris), which owned the display. The two give the same picture, but the own output adds
 the panels' factory colour and a shorter path to the screen.
 
 ```
@@ -12,7 +12,7 @@ sudo item-switch output hwc     # hwcomposer's again
 sudo item-switch output         # which one is in use, which one is chosen
 ```
 
-The choice is kept in `/etc/item/output` (`kms` or `hwc`, no file: `hwc`).
+The choice is kept in `/etc/item/output` (`kms` or `hwc`; no file: `kms`).
 
 ## What it gives
 

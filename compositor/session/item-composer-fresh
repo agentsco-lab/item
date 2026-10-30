@@ -2,8 +2,8 @@
 # item-composer-fresh [hwc]: run as root before item starts (item.service),
 # and before phosh takes over (item-fallback, item-switch: with `hwc`).
 #
-# Which output item draws through: /etc/item/output says (`kms`: item's
-# own, the panels through DRM; `hwc`, or no file: the vendor composer). The
+# Which output item draws through: /etc/item/output says (`kms`, or no
+# file: item's own, the panels through DRM; `hwc`: the vendor composer). The
 # choice made is left in /run/item-output for item-session. The own output
 # having failed this boot ($XDG_RUNTIME_DIR/item-kms-failed, the
 # compositor's), the composer's.
@@ -27,6 +27,7 @@ hwc() { ANDROID_SERVICE_FORCE_KILL=yes ANDROID_SERVICE="$SVC" /usr/lib/halium-wr
 masters() { awk '$4 == "y"' /sys/kernel/debug/dri/0/clients 2>/dev/null | wc -l; }
 
 OUTPUT=$(cat /etc/item/output 2>/dev/null | tr -d ' \n')
+[ -n "$OUTPUT" ] || OUTPUT=kms
 [ "$1" = hwc ] && OUTPUT=hwc
 if [ "$OUTPUT" = kms ] && ls /run/user/*/item-kms-failed >/dev/null 2>&1; then
     echo "item-composer-fresh: the own output failed this boot: the composer's"
