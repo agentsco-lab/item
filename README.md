@@ -85,7 +85,7 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
 - **The first setup** after a clean install: a welcome, Wi-Fi (the networks
   in reach, a tap joins one; left out when installed with item/grid: the
   phone is already on the computer's network), a new
-  PIN (the face taken as it is typed, for CV ID), a finger, then a tour.
+  PIN (the face taken as it is typed, for CV ID), a finger; no tour after it.
 - **The phone's sleep** is item's: the lid darkens and lights the screen,
   asleep again 3 s after a wake that lit nothing, woken for alarms, an alarm
   or a call keeps the screen lit.

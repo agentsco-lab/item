@@ -1,5 +1,7 @@
-//! The tour, once, after the first setup: the gestures, one at a time, each
-//! going when the user has done it.
+//! The tour of the gestures, one at a time, each going when the user has
+//! done it. Not after the first setup any more (the owner's, 2026-10-30:
+//! nothing over the desktop once the user has pressed start); TOUR=1 shows
+//! it.
 //!
 //! On the right panel, under the clock: what to do and why, and a faint
 //! drop showing the finger's way, again and again. Done - the grid up, the

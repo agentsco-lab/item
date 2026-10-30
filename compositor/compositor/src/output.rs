@@ -550,7 +550,7 @@ impl Screen {
             elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         }
         let table = state.setup.table(frame_ns).and_then(|t| self.setup_table(&t).map(|tex| (tex, t)));
-        state.dock.clear.set(state.setup.active);
+        state.dock.clear.set(state.setup.active && !state.setup.leaving());
         let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns, table.as_ref().map(|t| &t.0))).unwrap_or_default();
         // Under the dialog the setup's words and rows are not drawn (they
         // showed through it): its dark and wallpaper only.
@@ -561,6 +561,15 @@ impl Screen {
         if state.setup.active {
             if !dialog_over_setup {
                 elements.extend(setup_drop);
+            }
+            // Going: the dock, born of the drop as it falls, over the table
+            // and bending it.
+            if state.setup.leaving() {
+                let running = state.running();
+                let bent = table.as_ref().map(|t| (&t.0, (crate::layout::size().0 as f64, crate::layout::size().1 as f64), 0.0));
+                let wall = bent.or_else(|| self.wall.as_ref().map(|t| (t, (wall_width() as f64, crate::layout::LANDSCAPE.1 as f64), crate::state::WALL_LEFT)));
+                let dock = state.dock.elements(&mut self.renderer, frame_ns, &running, wall);
+                elements.extend(dock.into_iter().map(FrameElement::from));
             }
             match table {
                 Some((tex, t)) => elements.extend(self.setup_table_element(tex, &t)),
@@ -890,8 +899,8 @@ impl Screen {
         // itself, dock.rs). The clock is its desk's: carried with it.
         let shift_now = crate::state::wallpaper_shift(state.ribbon.position(frame_ns));
         let wall_for_drops = self.wall.as_ref().map(|t| (t, (wall_width() as f64, crate::layout::LANDSCAPE.1 as f64), crate::state::WALL_LEFT + shift_now));
-        // Not while the first setup is up: under its table as it went at the
-        // end, the dock showed, then went for the drop it is born of.
+        // Not while the first setup is up: going, it is drawn over its table
+        // (above); else under the table it showed through as it went.
         if !state.setup.active {
             elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running, wall_for_drops).into_iter().map(FrameElement::from));
         }

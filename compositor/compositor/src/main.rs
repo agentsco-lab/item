@@ -720,7 +720,6 @@ impl Data {
         // The setup gone: the dock is born of its drop.
         if let Some((at, centre, r)) = self.state.setup.take_drop() {
             self.state.dock.born(at, centre, r);
-            self.state.tour.start(at + 2_500_000_000);
             self.state.needs_redraw = true;
         }
         if let Some(pin) = self.state.setup.take_pin() {

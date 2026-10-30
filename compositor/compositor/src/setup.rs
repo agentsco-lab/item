@@ -924,8 +924,13 @@ impl Setup {
     /// The circle now, for the output to draw (orb.frag), with the setup's
     /// alpha.
     pub fn orb(&self) -> Option<Orb> {
-        // Kept while the table goes at the end: the dock is born of it after.
-        (self.active && self.orb.r > 0.3).then_some(self.orb)
+        // Gone at the start: the dock is born of it then.
+        (self.active && self.leaving.is_none() && self.orb.r > 0.3).then_some(self.orb)
+    }
+
+    /// Whether it is going (start pressed): the dock, born, over its table.
+    pub fn leaving(&self) -> bool {
+        self.active && self.leaving.is_some()
     }
 
     /// Answers from the threads, and the made-up reader; whether anything
@@ -1333,10 +1338,12 @@ impl Setup {
         // The warm-ups item-session held back while the setup was up.
         let _ = std::process::Command::new("systemctl").args(["--user", "start", "--no-block", "item-warm.service", "item-chromium.service"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
         // The words erased, the squares become the wallpaper's pixels
-        // (table()); the drop goes on to the dock after.
+        // (table()); the drop falls at once, and the dock is born of it
+        // (dock.rs) as the view pulls back (the owner's, 2026-10-30).
         let now = hybris_hwc::now_ns();
         self.going.extend(std::mem::take(&mut self.lines).into_iter().map(|l| (l, now)));
         self.leaving = Some(now);
+        self.handed = Some((now, (self.orb.x, self.orb.y), self.orb.r));
     }
 
     /// The drop the setup went with, once: the dock is born of it.
@@ -1363,7 +1370,6 @@ impl Setup {
             if frame_ns >= t + PULL_NS {
                 self.active = false;
                 self.leaving = None;
-                self.handed = Some((frame_ns, (self.orb.x, self.orb.y), self.orb.r));
             }
             return true;
         }

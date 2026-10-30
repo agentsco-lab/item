@@ -355,7 +355,6 @@ impl State {
                         // Gone: the dock is born of its drop at once.
                         if let Some((at, centre, r)) = self.setup.take_drop() {
                             self.dock.born(at, centre, r);
-                            self.tour.start(at + 2_500_000_000);
                         }
                     }
                 }
