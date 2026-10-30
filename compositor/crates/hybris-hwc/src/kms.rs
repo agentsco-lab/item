@@ -67,8 +67,6 @@ struct Kms {
     refused: u32,
     /// The last framebuffer shown: the panels on again show it.
     shown_fb: u32,
-    /// The calibration's mode (vivid, srgb, off), loaded again with the panels.
-    colour: String,
     last: *mut c_void,
     last_ns: u64,
     stats: Stats,
@@ -159,8 +157,7 @@ pub(crate) fn open(buffers: i32, win: Win) -> Result<Output, String> {
             }
         }
     }
-    let colour = std::env::var("ITEM_COLOUR").unwrap_or_else(|_| "vivid".into());
-    apply_colour(&card, &profile, &panels, &colour);
+    apply_colour(&card, &profile, &panels, &std::env::var("ITEM_COLOUR").unwrap_or_else(|_| "vivid".into()));
     println!(
         "hybris-hwc: kms: {} - {} panels, frame {width}x{height}, {:.3} ms a frame",
         profile.name,
@@ -172,7 +169,7 @@ pub(crate) fn open(buffers: i32, win: Win) -> Result<Output, String> {
     }
 
     let vblank_crtc = panels[0].crtc_index;
-    *KMS.lock().unwrap() = Some(Kms { card: card.clone(), profile, win, panels, fbs: HashMap::new(), started: false, refused: 0, shown_fb: 0, colour, last: null_mut(), last_ns: 0, stats: Stats::default() });
+    *KMS.lock().unwrap() = Some(Kms { card: card.clone(), profile, win, panels, fbs: HashMap::new(), started: false, refused: 0, shown_fb: 0, last: null_mut(), last_ns: 0, stats: Stats::default() });
     crate::KMS_ON.store(true, Ordering::Relaxed);
     std::thread::Builder::new().name("kms-events".into()).spawn(move || events(card, vblank_crtc, period)).map_err(|e| e.to_string())?;
     std::thread::Builder::new().name("kms-commit".into()).spawn(committer).map_err(|e| e.to_string())?;
@@ -595,10 +592,6 @@ pub(crate) fn set_power(on: bool) -> bool {
         Ok(()) => {
             println!("hybris-hwc: kms: the panels {} in {:.1} ms", if on { "on" } else { "off" }, (now_ns() - t) as f64 / 1e6);
             if on {
-                // A night's deep sleep powers the display's blocks down and
-                // takes their colour with it (2026-10-30: the panels on, the
-                // frames flipping, the screen black): loaded again each time.
-                apply_colour(&k.card, &k.profile, &k.panels, &k.colour);
                 FIRST_FLIP_AFTER_ON.store(now_ns(), Ordering::Relaxed);
             }
             true
