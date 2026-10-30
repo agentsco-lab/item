@@ -529,13 +529,20 @@ impl Card {
         // (ahead of CLOCK_MONOTONIC by the time the phone has slept: 254 s
         // on 2026-10-29, and every vsync seemed that old to the pacing):
         // brought to CLOCK_MONOTONIC, the clock of everything else here.
+        // Not all of them: some come in CLOCK_MONOTONIC already, and after a
+        // night's sleep (16640 s slept, 9360 s awake, 2026-10-30) taking
+        // the sleep off those left 0 - frames timed at the clock's start,
+        // and the call screen's fade-out drawn over everything. Each is
+        // taken as the clock it is nearer to now.
         let clock = |id| {
             let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
             // SAFETY: a timespec of ours.
             unsafe { libc::clock_gettime(id, &mut ts) };
             ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
         };
-        let slept = clock(libc::CLOCK_BOOTTIME).saturating_sub(clock(libc::CLOCK_MONOTONIC));
+        let boot = clock(libc::CLOCK_BOOTTIME);
+        let mono = clock(libc::CLOCK_MONOTONIC);
+        let slept = boot.saturating_sub(mono);
         let mut out = Vec::new();
         let mut at = 0usize;
         let u32_at = |i: usize| u32::from_ne_bytes(buf[i..i + 4].try_into().unwrap());
@@ -544,7 +551,8 @@ impl Card {
             // struct drm_event_vblank: base, user_data (u64), tv_sec,
             // tv_usec, sequence, crtc_id.
             if (kind == 1 || kind == 2) && len >= 32 && at + 32 <= n as usize {
-                let time_ns = (u32_at(at + 16) as u64 * 1_000_000_000 + u32_at(at + 20) as u64 * 1000).saturating_sub(slept);
+                let t = u32_at(at + 16) as u64 * 1_000_000_000 + u32_at(at + 20) as u64 * 1000;
+                let time_ns = if t.abs_diff(boot) < t.abs_diff(mono) { t.saturating_sub(slept) } else { t };
                 out.push(Event { kind, time_ns });
             }
             at += len.max(8);

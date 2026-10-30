@@ -278,6 +278,12 @@ impl Calls {
     }
 
     fn k(&self, frame_ns: u64) -> f64 {
+        // Never shown: nothing to fade out, whatever the frame's time (a
+        // frame timed near the clock's start drew the fade-out of no call,
+        // 2026-10-30).
+        if !self.shown && self.since == 0 {
+            return 0.0;
+        }
         let t = ((frame_ns.saturating_sub(self.since)) as f64 / FADE_NS).min(1.0);
         crate::pinpad::ease(if self.shown { t } else { 1.0 - t })
     }
