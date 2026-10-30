@@ -86,6 +86,12 @@ static LAST_FLIP_NS: AtomicU64 = AtomicU64::new(0);
 /// When the panels were asked on, until the mode set that lights them.
 static POWERED_ON_AT: AtomicU64 = AtomicU64::new(0);
 
+/// KMS_SYNC=1: each frame committed in the present callback itself.
+fn sync() -> bool {
+    static SYNC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SYNC.get_or_init(|| std::env::var_os("KMS_SYNC").is_some_and(|v| v == "1"))
+}
+
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
 const PRIV_FLAGS_UBWC_ALIGNED: i32 = 0x0800_0000;
 
@@ -486,37 +492,43 @@ fn committer() {
             drop_job(job);
             continue;
         }
-        let t = now_ns();
-        match commit(k, job.fb, job.acquire) {
-            Ok(release) => {
-                k.refused = 0;
-                (k.win.set_fence)(job.buffer, release);
-                if !k.last.is_null() {
-                    let_go(k.last);
-                }
-                k.last = job.buffer;
-                k.shown_fb = job.fb;
-                if job.acquire >= 0 {
-                    // SAFETY: the window's fence; the kernel took its own.
-                    unsafe { libc::close(job.acquire) };
-                }
+        show(k, job);
+    }
+}
+
+/// A frame committed: the buffer given the commit's release fence and kept
+/// until the next one shows; refused, it is let go.
+fn show(k: &mut Kms, job: Job) {
+    let t = now_ns();
+    match commit(k, job.fb, job.acquire) {
+        Ok(release) => {
+            k.refused = 0;
+            (k.win.set_fence)(job.buffer, release);
+            if !k.last.is_null() {
+                let_go(k.last);
             }
-            Err(e) => {
-                if k.stats.errors < 5 {
-                    eprintln!("hybris-hwc: kms: {e}");
-                }
-                k.stats.errors += 1;
-                drop_job(job);
-                // A second of frames, none taken: no picture is coming.
-                k.refused += 1;
-                if k.refused >= 60 {
-                    crate::kms_gave_up(&e);
-                }
+            k.last = job.buffer;
+            k.shown_fb = job.fb;
+            if job.acquire >= 0 {
+                // SAFETY: the window's fence; the kernel took its own.
+                unsafe { libc::close(job.acquire) };
             }
         }
-        k.stats.commit_ns += now_ns() - t;
-        k.stats.commits += 1;
+        Err(e) => {
+            if k.stats.errors < 5 {
+                eprintln!("hybris-hwc: kms: {e}");
+            }
+            k.stats.errors += 1;
+            drop_job(job);
+            // A second of frames, none taken: no picture is coming.
+            k.refused += 1;
+            if k.refused >= 60 {
+                crate::kms_gave_up(&e);
+            }
+        }
     }
+    k.stats.commit_ns += now_ns() - t;
+    k.stats.commits += 1;
 }
 
 /// The window's present callback, for the own output: the frame handed to
@@ -557,6 +569,13 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
                 // SAFETY: the window's fence, waited for.
                 unsafe { libc::close(acquire) };
             }
+        }
+        Ok(fb) if sync() => {
+            // KMS_SYNC=1: committed here, its release fence on the buffer
+            // before the window can hand it to the GPU again.
+            hold(buffer);
+            wait_idle(100);
+            show(k, Job { buffer, fb, acquire });
         }
         Ok(fb) => {
             hold(buffer);
