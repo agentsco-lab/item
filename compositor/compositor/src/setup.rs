@@ -597,14 +597,16 @@ impl Setup {
     /// the first).
     fn words(&self) -> StepWords {
         let s = |v: &str| v.to_owned();
-        let cvid = || if self.cvid { vec![s("face kept for cv id")] } else { Vec::new() };
+        let cvid = || if self.cvid { vec![s("cv id sees you")] } else { Vec::new() };
         // The PIN's line: what to type, or what went wrong (pin_said).
         let pin = |d: &str| vec![s(self.pin_said.unwrap_or(d))];
         // Saving: the words of the PIN being saved.
         let pin_new = self.step == Step::PinNew || self.step == Step::PinAgain || (self.step == Step::Saving && !self.first.is_empty());
         match self.step {
-            Step::Welcome => StepWords(vec!["hello"], vec![s("a minute, and this duo is yours")], Vec::new(), Some(s("› begin")), None),
-            Step::Wifi => StepWords(vec!["wi-fi"], vec![s("pick a network")], vec![s("the clock is set from it")], Some(s(if self.joined().is_some() { "› next" } else { "› skip" })), None),
+            // (Each line whole in the left panel's 16 squares: a line
+            // broken in a phrase reads badly.)
+            Step::Welcome => StepWords(vec!["hello"], vec![s("make it yours")], Vec::new(), Some(s("› begin")), None),
+            Step::Wifi => StepWords(vec!["wi-fi"], vec![s("pick a network")], vec![s("sets the clock")], Some(s(if self.joined().is_some() { "› next" } else { "› skip" })), None),
             // The PIN found out in a moment: its title only (words typed
             // then erased at once flickered).
             Step::Checking => StepWords(vec!["pin"], Vec::new(), Vec::new(), None, None),
@@ -613,9 +615,9 @@ impl Setup {
             _ if pin_new => StepWords(vec!["pin"], pin("saving"), cvid(), None, None),
             Step::PinCurrent => StepWords(vec!["pin"], pin("your pin"), cvid(), None, None),
             Step::Saving => StepWords(vec!["pin"], pin("checking"), cvid(), None, None),
-            Step::Finger => StepWords(vec!["finger"], vec![s("touch the power key, lift, touch again")], Vec::new(), Some(s("› later")), None),
+            Step::Finger => StepWords(vec!["finger"], vec![s("touch power key,"), s("lift, again")], Vec::new(), Some(s("› later")), None),
             Step::FingerKnown => {
-                let known = if self.fingers == 1 { s("one is added: it opens the phone") } else { format!("{} are added: they open the phone", self.fingers) };
+                let known = if self.fingers == 1 { s("one finger added") } else { format!("{} fingers added", self.fingers) };
                 StepWords(vec!["finger"], vec![known], Vec::new(), Some(s("› go on")), Some(s("› add another")))
             }
             Step::Done => StepWords(vec!["all", "set"], Vec::new(), Vec::new(), Some(s("› start")), None),
@@ -623,12 +625,13 @@ impl Setup {
     }
 
     /// The table's words laid out for the step as it stands: the left
-    /// panel says, the right is where you act. A moment worth it (the
-    /// welcome, all set) is zoomed on.
+    /// panel says, the right is where you act.
     fn lay(&mut self) {
         let Some((thin, _)) = &self.fonts else { return };
         let StepWords(title, detail, foot, go, two) = self.words();
-        let zoom = if matches!(self.step, Step::Welcome | Step::Done) { squares::zoom_for(&title) } else { 1.0 };
+        // One size of square all along (the owner's, 2026-10-31: the words
+        // alike on every step); only the end's pull back changes it.
+        let zoom = 1.0;
         let g = Grid::at(zoom);
         let panel = layout::panels()[0];
         let (w, h) = (panel.size.w as f64, panel.size.h as f64);
@@ -847,7 +850,16 @@ impl Setup {
     /// `h`), going from where it was to the step's place.
     fn lamp_at(&self, frame_ns: u64, w: f64, h: f64) -> (f64, f64) {
         let (a, to, at) = self.lamp;
-        let b = if to <= 0.0 || to >= 1.0 { (1.5 * w, WELCOME_Y) } else { ((LAMP_IN + to * (2.0 - 2.0 * LAMP_IN)) * w, LAMP_Y * h) };
+        let pad = way(Step::PinNew);
+        let b = if to <= 0.0 || to >= 1.0 {
+            (1.5 * w, WELCOME_Y)
+        } else if to == pad {
+            // Under the pad (a screen point on the right: into the table's).
+            let (x, y) = self.pad.middle();
+            squares::to_table(x, y)
+        } else {
+            ((LAMP_IN + to * (2.0 - 2.0 * LAMP_IN)) * w, LAMP_Y * h)
+        };
         // (Not yet anywhere: at its place at once.)
         if a.0.is_nan() {
             return b;
@@ -917,7 +929,7 @@ impl Setup {
             // Down into the pad's middle, clear (no colour in the water: the
             // owner's, 2026-10-29): the keys come of it there.
             Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
-                let (x, y) = PinPad::middle();
+                let (x, y) = self.pad.middle();
                 Orb { x, y, r: PAD_DROP_R, ..orb }
             }
             Step::Finger => {

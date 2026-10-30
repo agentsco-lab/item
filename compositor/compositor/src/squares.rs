@@ -2,9 +2,9 @@
 //! item/grid and its recovery write theirs: a letter a square, lowercase -
 //! a title a letter on 2x2 of them - typed in a square at a time and erased
 //! the same way; nothing cut. The table is one over both panels (the hinge
-//! taken out), 18 squares across a panel, and may be zoomed about the
-//! title's first square for a moment worth it: then the squares are bigger
-//! and the words with them, laid out again for the squares there are.
+//! taken out), 18 squares across a panel. It can be zoomed about the
+//! title's first square (the squares bigger, the words laid out again for
+//! them); the setup keeps one zoom now, its words alike on every step.
 //!
 //! A line knows where it stands on the screen at the zoom it was laid out
 //! for; the setup only shows lines of the zoom it is at (they are erased
@@ -194,19 +194,6 @@ pub fn wrap(text: &str, wide: usize) -> Vec<String> {
     out
 }
 
-/// How much bigger the squares are for a title of these words: as far as
-/// its longest word still fits a letter on 2x2 from the second square, and
-/// only if that is a real change (12 squares across at most); else 1.
-pub fn zoom_for(title: &[&str]) -> f64 {
-    let n = title.iter().map(|w| w.chars().count()).max().unwrap_or(1);
-    let across = (2 * n + 2).max(8);
-    if across <= 12 {
-        ACROSS / across as f64
-    } else {
-        1.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,12 +202,5 @@ mod tests {
     fn words_wrap_whole() {
         assert_eq!(wrap("this duo is yours in a minute", 11), vec!["this duo is", "yours in a", "minute"]);
         assert_eq!(wrap("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
-    }
-
-    #[test]
-    fn a_short_title_zooms() {
-        assert_eq!(zoom_for(&["hello"]), 1.5);
-        assert_eq!(zoom_for(&["all", "set"]), 2.25);
-        assert_eq!(zoom_for(&["fingerprint"]), 1.0);
     }
 }

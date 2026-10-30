@@ -27,6 +27,10 @@ const KEY: f64 = 76.0;
 const KEY_GAP: f64 = 22.0;
 const PAD_TOP: f64 = 330.0;
 const DOTS_Y: f64 = 220.0;
+/// On the setup's squares: the keys' middle column and first row (the
+/// squares' corners, counted on the right panel).
+const GRID_MIDDLE_COL: f64 = 9.0;
+const GRID_FIRST_ROW: f64 = 10.0;
 const MAX_PIN: usize = 16;
 /// The keys born of a drop: drawn out into a column, the rows, the keys.
 const STREAM_NS: f64 = 380e6;
@@ -116,6 +120,8 @@ pub struct PinPad {
     /// As water, born from the pad's middle each time it comes (the lock
     /// screen's), not of a drop above it (the setup's).
     bloom: bool,
+    /// The keys on the setup's squares (grid_rect).
+    on_grid: bool,
     split_at: Option<u64>,
     gather_at: Option<u64>,
     poked: [u64; 12],
@@ -154,12 +160,21 @@ impl PinPad {
             gather_at: None,
             poked: [0; 12],
             popped: [0; 12],
+            on_grid: false,
         }
     }
 
-    /// Its keys as water (the first setup's).
+    /// Its keys as water (the first setup's): on the setup's squares, the
+    /// digits in its words' thin face.
     pub fn water(&mut self) {
         self.water = true;
+        self.on_grid = true;
+        if let Some(f) = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf"]) {
+            for (l, k) in self.keys.iter_mut().zip(KEYS) {
+                *l = Label::new(30.0, [1.0, 1.0, 1.0, 0.95]);
+                l.set(&f, k);
+            }
+        }
     }
 
     /// Its keys as water, born from the pad's middle each time it comes in
@@ -208,7 +223,7 @@ impl PinPad {
     pub fn drops(&self, frame_ns: u64, mother: (f64, f64), mother_r: f64, mother_life: f64) -> Option<(Vec<Group>, bool)> {
         let t = self.born(frame_ns)?;
         let centre = |i: usize| {
-            let r = Self::key_rect(i);
+            let r = self.key_rect(i);
             (r.loc.x + KEY / 2.0, r.loc.y + KEY / 2.0)
         };
         let dx = self.shaken_at.map(|t| shake(frame_ns.saturating_sub(t))).unwrap_or(0.0);
@@ -232,7 +247,7 @@ impl PinPad {
             let k = ease(t / STREAM_NS);
             let at = (lerp(mother.0, middle.0, k) + dx, lerp(mother.1, middle.1, k));
             let drops = rows.iter().map(|&y| ((at.0, at.1 + (y - middle.1) * COLUMN_SPREAD * k), lerp(mother_r, COLUMN_R, k), (1.0, 1.0))).collect();
-            return Some((vec![Group { drops, melt: lerp(0.0, PART_MELT * 1.4, k), life: from_life(k) }], false));
+            return Some((vec![Group { drops, melt: lerp(0.0, PART_MELT * 1.4, k), life: from_life(k) }], true));
         }
         if t < STREAM_NS + ROWS_NS {
             // The column pinches into a drop for each row.
@@ -241,7 +256,7 @@ impl PinPad {
             let (spread, r0, melt0) = if self.bloom { (0.0, STREAM_R * 0.75, PART_MELT) } else { (COLUMN_SPREAD, COLUMN_R, PART_MELT * 1.4) };
             let spread = lerp(spread, 1.0, k);
             let drops = rows.iter().map(|&y| ((middle.0 + dx, middle.1 + (y - middle.1) * spread), lerp(r0, KEY_DROP_R, k), (1.0, 1.0))).collect();
-            return Some((vec![Group { drops, melt: lerp(melt0, PART_MELT * 0.7, k), life: PART_LIFE }], false));
+            return Some((vec![Group { drops, melt: lerp(melt0, PART_MELT * 0.7, k), life: PART_LIFE }], !self.bloom));
         }
         // Each row's buds into its three keys (the side ones small at
         // first, so the row's drop is as it was); then they stand, each
@@ -270,7 +285,8 @@ impl PinPad {
                 Group { drops, melt: lerp(PART_MELT * 0.7, REST_MELT, k), life }
             })
             .collect();
-        Some((groups, false))
+        // (The setup's drop is these keys now: not drawn on its own.)
+        Some((groups, !self.bloom))
     }
 
     /// The line under the dots.
@@ -313,7 +329,26 @@ impl PinPad {
     }
 
     /// Key `i`'s rect on the right panel, logical px.
-    fn key_rect(i: usize) -> Rectangle<f64, smithay::utils::Logical> {
+    fn key_rect(&self, i: usize) -> Rectangle<f64, smithay::utils::Logical> {
+        if self.on_grid {
+            return Self::grid_rect(i);
+        }
+        Self::rect_at(i)
+    }
+
+    /// The setup's keys on its table's squares (squares.rs, at its one
+    /// zoom): a key two squares across, its middle on a corner, three
+    /// squares from the next; the middle column on the panel's middle.
+    fn grid_rect(i: usize) -> Rectangle<f64, smithay::utils::Logical> {
+        let p = layout::panels()[1];
+        let sq = crate::squares::square();
+        let (col, row) = ((i % 3) as f64, (i / 3) as f64);
+        let x = p.loc.x as f64 + (GRID_MIDDLE_COL + 3.0 * (col - 1.0)) * sq;
+        let y = p.loc.y as f64 + (GRID_FIRST_ROW + 3.0 * row) * sq;
+        Rectangle::new((x - KEY / 2.0, y - KEY / 2.0).into(), (KEY, KEY).into())
+    }
+
+    fn rect_at(i: usize) -> Rectangle<f64, smithay::utils::Logical> {
         let p = layout::panels()[1];
         let w = 3.0 * KEY + 2.0 * KEY_GAP;
         let x0 = p.loc.x as f64 + (p.size.w as f64 - w) / 2.0;
@@ -325,14 +360,14 @@ impl PinPad {
     }
 
     /// The keys' middle: where the setup's drop comes to be them.
-    pub fn middle() -> (f64, f64) {
-        let (a, b) = (Self::key_rect(1), Self::key_rect(10));
+    pub fn middle(&self) -> (f64, f64) {
+        let (a, b) = (self.key_rect(1), self.key_rect(10));
         (a.loc.x + KEY / 2.0, (a.loc.y + b.loc.y + KEY) / 2.0)
     }
 
     /// The OK key's middle: an unlock's wave starts there.
     pub fn ok_centre() -> (f64, f64) {
-        let r = Self::key_rect(KEYS.len() - 1);
+        let r = Self::rect_at(KEYS.len() - 1);
         (r.loc.x + KEY / 2.0, r.loc.y + KEY / 2.0)
     }
 
@@ -342,7 +377,7 @@ impl PinPad {
         if !self.standing(now) {
             return;
         }
-        self.pressed = (0..KEYS.len()).filter(|&i| self.has_key(i)).find(|&i| Self::key_rect(i).contains((x, y)));
+        self.pressed = (0..KEYS.len()).filter(|&i| self.has_key(i)).find(|&i| self.key_rect(i).contains((x, y)));
         if let Some(i) = self.pressed {
             self.poked[i] = now;
         }
@@ -433,7 +468,7 @@ impl PinPad {
             self.split_at.map(|s| ease((frame_ns as f64 - s as f64 - SPLIT_NS as f64) / LABELS_NS)).unwrap_or(0.0)
         };
         for (i, l) in self.keys.iter().enumerate() {
-            let r = Self::key_rect(i);
+            let r = self.key_rect(i);
             let a = alpha * labels as f32;
             if a <= 0.001 || !self.has_key(i) {
                 continue;
