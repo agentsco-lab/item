@@ -26,9 +26,8 @@ uniform float tint;
 
 // The first setup's table (setup.rs), as item/grid draws its own and the
 // recovery its screen: dark paper, a grid of squares over both panels as
-// one (the lines go on across the hinge), and a lamp under it whose light
-// comes through the slits between the squares in the accent - wider and
-// stronger near it - and softly through the paper.
+// one (the lines go on across the hinge). Drawn once while it is still (the
+// lamp's light over it is light.frag's, each frame, round the lamp alone).
 //
 // Drawn over the wallpaper's texture (`tex`, `texl` logical px; its part
 // from `src0` is the screen), which only the end uses: the squares take the
@@ -48,10 +47,6 @@ uniform vec2 gap;
 uniform float sq;
 uniform float zoom;
 uniform vec2 anchor;
-uniform vec2 lamp;
-uniform float reach;
-uniform float glow;
-uniform vec3 accent;
 uniform float mosaic;
 // The lines: how strong over the paper, how wide (physical px).
 uniform float ink;
@@ -95,17 +90,5 @@ void main() {
     float small = smoothstep(3.0, 14.0, s * SCALE);
     c = mix(c, vec3(1.0), on * ink * small);
 
-    // The lamp's light, round it as far as `reach`: over the paper, softly;
-    // the lines near it lit, wider and stronger the nearer.
-    vec2 e = (t - lamp) * vec2(1.0, 1.25);
-    float q = dot(e, e) / max(reach * reach, 1.0);
-    if (q < 1.0 && glow > 0.0) {
-        float r = sqrt(q);
-        float k = pow(1.0 - r, 1.6) * glow;
-        float kp = pow(1.0 - r, 1.3) * glow;
-        c = mix(c, accent, 0.10 * kp);
-        float lit = clamp(half_w + 1.1 * k * SCALE - d + 0.5, 0.0, 1.0);
-        c = mix(c, mix(vec3(1.0), accent, k), 0.55 * k * lit * small);
-    }
     gl_FragColor = vec4(dither(c), 1.0) * alpha;
 }

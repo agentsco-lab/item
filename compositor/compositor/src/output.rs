@@ -250,6 +250,12 @@ pub struct Screen {
     /// frame it is up: shown, and what its drops bend.
     table_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     table_tex: Option<smithay::backend::renderer::gles::GlesTexture>,
+    table_stand_in: Option<smithay::backend::renderer::gles::GlesTexture>,
+    /// What the table was last drawn for (zoom, mosaic, width, the
+    /// wallpaper there), its id; the light's shader (light.frag).
+    table_key: Option<(u64, u64, i32, bool)>,
+    table_id: smithay::backend::renderer::element::Id,
+    light_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
     /// The panels' soft edges (edge.frag), made once: over the setup, and
     /// over the wallpaper.
     edges: Option<[Vec<smithay::backend::renderer::gles::element::PixelShaderElement>; 2]>,
@@ -360,7 +366,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, more_frames: false, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, turn: 0, turning: None, turn_glass: None, fills_shown: [true, true], turn_done_ns: None, stage: None, turn_program: None, covers: Default::default(), card_id: smithay::backend::renderer::element::Id::new(), cover_program: None, turn_ns: std::env::var("TURN_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300) * 1_000_000, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, table_program: None, table_tex: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), scene_damage: smithay::backend::renderer::utils::DamageBag::new(8), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), deck_dark_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_first: None, setup_dark_id: smithay::backend::renderer::element::Id::new(), wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, previews: Default::default(), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, more_frames: false, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, turn: 0, turning: None, turn_glass: None, fills_shown: [true, true], turn_done_ns: None, stage: None, turn_program: None, covers: Default::default(), card_id: smithay::backend::renderer::element::Id::new(), cover_program: None, turn_ns: std::env::var("TURN_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300) * 1_000_000, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, table_program: None, table_tex: None, table_stand_in: None, table_key: None, table_id: smithay::backend::renderer::element::Id::new(), light_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), scene_damage: smithay::backend::renderer::utils::DamageBag::new(8), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), deck_dark_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_first: None, setup_dark_id: smithay::backend::renderer::element::Id::new(), wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, previews: Default::default(), _hwc: hwc }
     }
 
     /// Whether the content is on the move on the glass (following the hand,
@@ -543,7 +549,8 @@ impl Screen {
         if dialog_over_setup {
             elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         }
-        let table = state.setup.table(frame_ns).and_then(|t| self.setup_table(&t).map(|tex| (tex, t.alpha)));
+        let table = state.setup.table(frame_ns).and_then(|t| self.setup_table(&t).map(|tex| (tex, t)));
+        state.dock.clear.set(state.setup.active);
         let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns, table.as_ref().map(|t| &t.0))).unwrap_or_default();
         // Under the dialog the setup's words and rows are not drawn (they
         // showed through it): its dark and wallpaper only.
@@ -556,7 +563,7 @@ impl Screen {
                 elements.extend(setup_drop);
             }
             match table {
-                Some((tex, alpha)) => elements.extend(self.setup_table_element(tex, alpha as f32)),
+                Some((tex, t)) => elements.extend(self.setup_table_element(tex, &t)),
                 None => elements.extend(self.setup_wall(state.setup.shown(frame_ns) as f32)),
             }
         }
@@ -1806,12 +1813,23 @@ impl Screen {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         use smithay::backend::renderer::gles::element::TextureShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
-        let wall = self.wall.clone()?;
+        // The wallpaper's texture, which only the end's squares take their
+        // colour from: before it is made (a second after item starts), a
+        // stand-in, so the table is there from the first frame (it came a
+        // second late, over the old dark - a jump).
+        let wall = match self.wall.clone() {
+            Some(w) => w,
+            None => {
+                if self.table_stand_in.is_none() {
+                    self.table_stand_in = self.renderer.create_buffer(Fourcc::Abgr8888, (wall_width() * SCALE, crate::layout::LANDSCAPE.1 * SCALE).into()).ok();
+                }
+                self.table_stand_in.clone()?
+            }
+        };
         if self.table_program.is_none() {
-            let mut names: Vec<UniformName> = ["texl", "src0", "gap", "anchor", "lamp"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
+            let mut names: Vec<UniformName> = ["texl", "src0", "gap", "anchor"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
             names.extend(["pa", "pb"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)));
-            names.push(UniformName::new("accent", UniformType::_3f));
-            names.extend(["sq", "zoom", "reach", "glow", "mosaic", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["sq", "zoom", "mosaic", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             match self.renderer.compile_custom_texture_shader(&crate::glass::dithered(include_str!("table.frag")), &names) {
                 Ok(p) => self.table_program = Some(p),
                 Err(e) => {
@@ -1823,29 +1841,33 @@ impl Screen {
         let program = self.table_program.clone()?;
         let (w, h) = crate::layout::size();
         let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from((w * SCALE, h * SCALE));
+        // Drawn again only as it changes (a zoom, the end): still, the frame
+        // takes only what moves over it (the light, the words, the drop) -
+        // drawn whole each frame it missed frames.
+        let key = (t.zoom.to_bits(), t.mosaic.to_bits(), size.w, self.wall.is_some());
+        if self.table_key == Some(key) && self.table_tex.as_ref().is_some_and(|t| smithay::backend::renderer::Texture::size(t) == size) {
+            return self.table_tex.clone();
+        }
         if self.table_tex.as_ref().is_none_or(|t| smithay::backend::renderer::Texture::size(t) != size) {
             self.table_tex = self.renderer.create_buffer(Fourcc::Abgr8888, size).ok();
         }
+        self.table_key = Some(key);
+        self.table_id = smithay::backend::renderer::element::Id::new();
         let mut texture = self.table_tex.clone()?;
         let panels = crate::layout::panels();
         let r = |p: smithay::utils::Rectangle<i32, smithay::utils::Logical>| (p.loc.x as f32, p.loc.y as f32, p.size.w as f32, p.size.h as f32);
         // The table's point of the second panel's: the hinge taken out.
         let gap = if crate::layout::turned() { (0.0, (panels[1].loc.y - panels[0].size.h) as f32) } else { ((panels[1].loc.x - panels[0].size.w) as f32, 0.0) };
         let texl = (wall_width() as f32, crate::layout::LANDSCAPE.1 as f32);
-        let a = crate::accent::get_f();
         let uniforms = vec![
             Uniform::new("texl", texl),
             Uniform::new("src0", (crate::state::WALL_LEFT as f32, 0.0f32)),
             Uniform::new("gap", gap),
             Uniform::new("anchor", (t.anchor.0 as f32, t.anchor.1 as f32)),
-            Uniform::new("lamp", (t.lamp.0 as f32, t.lamp.1 as f32)),
             Uniform::new("pa", r(panels[0])),
             Uniform::new("pb", r(panels[1])),
-            Uniform::new("accent", (a[0], a[1], a[2])),
             Uniform::new("sq", t.square as f32),
             Uniform::new("zoom", t.zoom as f32),
-            Uniform::new("reach", t.reach as f32),
-            Uniform::new("glow", t.glow as f32),
             Uniform::new("mosaic", t.mosaic as f32),
             Uniform::new("ink", 0.16f32),
             Uniform::new("thick", 2.0f32),
@@ -1862,17 +1884,76 @@ impl Screen {
         Some(texture)
     }
 
-    /// The setup's table as drawn this frame, over the whole screen.
-    fn setup_table_element(&mut self, texture: smithay::backend::renderer::gles::GlesTexture, alpha: f32) -> Option<FrameElement> {
+    /// The setup's table over the whole screen (a new id only as it is
+    /// drawn again, or fades), the lamp's light over it.
+    fn setup_table_element(&mut self, texture: smithay::backend::renderer::gles::GlesTexture, t: &crate::setup::Table) -> Vec<FrameElement> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
+        let alpha = t.alpha as f32;
         if alpha <= 0.001 {
-            return None;
+            return Vec::new();
         }
         let (w, h) = crate::layout::size();
-        // Drawn anew each frame: a new id, so the frame takes it all.
-        self.setup_wall_id = smithay::backend::renderer::element::Id::new();
+        if alpha < 0.999 {
+            self.table_id = smithay::backend::renderer::element::Id::new();
+        }
         let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((w * SCALE, h * SCALE).into());
-        Some(FrameElement::Snapshot(TextureRenderElement::from_static_texture(self.setup_wall_id.clone(), self.renderer.context_id(), (0.0, 0.0), texture, SCALE, Transform::Normal, (alpha < 0.999).then_some(alpha), None, Some((w, h).into()), (alpha >= 0.999).then(|| vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified)))
+        let table = FrameElement::Snapshot(TextureRenderElement::from_static_texture(self.table_id.clone(), self.renderer.context_id(), (0.0, 0.0), texture, SCALE, Transform::Normal, (alpha < 0.999).then_some(alpha), None, Some((w, h).into()), (alpha >= 0.999).then(|| vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified));
+        self.setup_light(t, alpha).into_iter().chain(std::iter::once(table)).collect()
+    }
+
+    /// The lamp's light (light.frag), over the area it reaches alone.
+    fn setup_light(&mut self, t: &crate::setup::Table, alpha: f32) -> Option<FrameElement> {
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        if t.glow <= 0.001 {
+            return None;
+        }
+        if self.light_program.is_none() {
+            let mut names: Vec<UniformName> = ["origin", "gap", "anchor", "lamp"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
+            names.extend(["pa", "pb"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)));
+            names.push(UniformName::new("accent", UniformType::_3f));
+            names.extend(["sq", "zoom", "reach", "glow", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            match self.renderer.compile_custom_pixel_shader(&crate::glass::dithered(include_str!("light.frag")), &names) {
+                Ok(p) => self.light_program = Some(p),
+                Err(e) => {
+                    tracing::warn!("setup: the light's shader: {e}");
+                    return None;
+                }
+            }
+        }
+        let program = self.light_program.clone()?;
+        let panels = crate::layout::panels();
+        let (sw, sh) = crate::layout::size();
+        let gap = if crate::layout::turned() { (0.0, (panels[1].loc.y - panels[0].size.h) as f64) } else { ((panels[1].loc.x - panels[0].size.w) as f64, 0.0) };
+        // The light's box in the table, then on the screen (the hinge put
+        // back where it reaches past the first panel).
+        let (x0, x1) = (t.lamp.0 - t.reach, t.lamp.0 + t.reach);
+        let (y0, y1) = (t.lamp.1 - t.reach / 1.25, t.lamp.1 + t.reach / 1.25);
+        let edge = panels[0].size.w as f64;
+        let sx0 = if x0 >= edge { x0 + gap.0 } else { x0 };
+        let sx1 = if x1 >= edge { x1 + gap.0 } else { x1 };
+        let (ax0, ay0) = ((sx0.floor() as i32).max(0), ((y0 + if x0 >= edge { gap.1 } else { 0.0 }).floor() as i32).max(0));
+        let (ax1, ay1) = ((sx1.ceil() as i32).min(sw), ((y1 + gap.1).ceil() as i32).min(sh));
+        if ax1 <= ax0 || ay1 <= ay0 {
+            return None;
+        }
+        let area = smithay::utils::Rectangle::<i32, smithay::utils::Logical>::new((ax0, ay0).into(), (ax1 - ax0, ay1 - ay0).into());
+        let r = |p: smithay::utils::Rectangle<i32, smithay::utils::Logical>| (p.loc.x as f32, p.loc.y as f32, p.size.w as f32, p.size.h as f32);
+        let a = crate::accent::get_f();
+        let uniforms = vec![
+            Uniform::new("origin", (ax0 as f32, ay0 as f32)),
+            Uniform::new("gap", (gap.0 as f32, gap.1 as f32)),
+            Uniform::new("anchor", (t.anchor.0 as f32, t.anchor.1 as f32)),
+            Uniform::new("lamp", (t.lamp.0 as f32, t.lamp.1 as f32)),
+            Uniform::new("pa", r(panels[0])),
+            Uniform::new("pb", r(panels[1])),
+            Uniform::new("accent", (a[0], a[1], a[2])),
+            Uniform::new("sq", t.square as f32),
+            Uniform::new("zoom", t.zoom as f32),
+            Uniform::new("reach", t.reach as f32),
+            Uniform::new("glow", t.glow as f32),
+            Uniform::new("thick", 2.0f32),
+        ];
+        Some(FrameElement::Pixel(smithay::backend::renderer::gles::element::PixelShaderElement::new(program, area, None, alpha, uniforms, smithay::backend::renderer::element::Kind::Unspecified)))
     }
 
     fn setup_wall(&mut self, alpha: f32) -> Vec<FrameElement> {

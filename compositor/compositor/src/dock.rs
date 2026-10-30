@@ -347,6 +347,9 @@ pub struct Dock {
     /// flows.
     lone: std::cell::RefCell<Option<(smithay::backend::renderer::element::Id, Vec<f32>)>>,
     lone_flow: std::cell::Cell<Flow>,
+    /// The water clear, not tinted in the accent: the first setup's drops
+    /// (the owner's, 2026-10-30: clear, no colour).
+    pub clear: std::cell::Cell<bool>,
     /// Running apps' dock items by app id, found once (None: no desktop
     /// file for it).
     found: std::collections::HashMap<String, Option<App>>,
@@ -436,7 +439,7 @@ impl Dock {
         if turn_icon.is_none() || turn_on_icon.is_none() {
             tracing::warn!("dock: no turn icon at {TURN_ICON} / {TURN_ON_ICON}");
         }
-        Dock { rise: None, on_deck: Default::default(), birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, paced: None, behind: false, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default(), turn_icon, turn_on_icon, auto: crate::prefs::turn_by_sensors(), toggle: false }
+        Dock { rise: None, on_deck: Default::default(), birth: None, halves, dot: crate::grid::running_dot(), mode: Mode::Both, shown: Mode::Both, moving: None, book: Default::default(), pick_up: false, scrub: None, paced: None, behind: false, landed: None, last_x: Default::default(), stretch: Default::default(), flow: Default::default(), flowing: Default::default(), streak: Default::default(), streaks: Default::default(), dir: Default::default(), clinging: Default::default(), snap: Default::default(), popped: Default::default(), meeting: Default::default(), at_hinge: Default::default(), trail: Default::default(), touched: Default::default(), program: Default::default(), drops: Default::default(), lone: Default::default(), lone_flow: Default::default(), clear: Default::default(), found: Default::default(), carry: None, drying: None, pressed_at: 0, groups: Default::default(), turn_icon, turn_on_icon, auto: crate::prefs::turn_by_sensors(), toggle: false }
     }
 
     /// Whether the sensors have the turn: the button green.
@@ -1900,6 +1903,7 @@ impl Dock {
         // The water's tint, the accent (a new picture when it changes).
         let a = crate::accent::get_f();
         v.extend([a[0], a[1], a[2]]);
+        let body = if self.clear.get() { 0.0 } else { BODY_ACCENT };
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),
@@ -1925,7 +1929,7 @@ impl Dock {
                 Uniform::new("dim", v[54]),
                 Uniform::new("trail2", (v[55], v[56], v[57], v[58])),
                 Uniform::new("wet2", v[59]),
-                Uniform::new("body", (v[60] * BODY_ACCENT, v[61] * BODY_ACCENT, v[62] * BODY_ACCENT, BODY_ACCENT)),
+                Uniform::new("body", (v[60] * body, v[61] * body, v[62] * body, body)),
                 Uniform::new("shine", 1.0f32),
                 Uniform::new("metal", if std::env::var_os("DOCK_SILVER").is_some() { 1.0f32 } else { 0.0 }),
             ]

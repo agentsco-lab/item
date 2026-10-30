@@ -572,7 +572,9 @@ impl Setup {
         match self.step {
             Step::Welcome => StepWords(vec!["hello"], vec![s("a minute, and this duo is yours")], Vec::new(), Some(s("› begin")), None),
             Step::Wifi => StepWords(vec!["wi-fi"], vec![s("pick a network")], vec![s("the clock is set from it")], Some(s(if self.joined().is_some() { "› next" } else { "› skip" })), None),
-            Step::Checking => StepWords(vec!["pin"], vec![s("a moment")], Vec::new(), None, None),
+            // The PIN found out in a moment: its title only (words typed
+            // then erased at once flickered).
+            Step::Checking => StepWords(vec!["pin"], Vec::new(), Vec::new(), None, None),
             _ if pin_new => StepWords(vec!["pin"], vec![s("four new digits")], cvid(vec![s("it opens the phone after a restart")]), None, None),
             Step::PinCurrent | Step::Saving => StepWords(vec!["pin"], vec![s("the one you use now")], cvid(vec![s("it opens the phone after a restart")]), None, None),
             Step::Finger => StepWords(vec!["finger"], vec![s("touch the power key, lift, touch again")], Vec::new(), Some(s("› later")), None),
@@ -821,9 +823,11 @@ impl Setup {
         let way = self.lamp_now(frame_ns);
         let lamp = ((LAMP_IN + way * (2.0 - 2.0 * LAMP_IN)) * w, LAMP_Y * h);
         let t = frame_ns.saturating_sub(self.started) as f64 / 1e9;
-        let done = self.step == Step::Done;
-        let mut glow = if done { 1.0 } else { 0.85 + 0.15 * (t * 2.4).sin() };
-        let reach = square * if done { 13.0 } else { 4.5 };
+        // All set: the light grows over the whole table and stills, along
+        // with the lamp's last move (it jumped).
+        let done = if self.step == Step::Done { ease(frame_ns.saturating_sub(self.lamp.2) as f64 / LAMP_NS as f64) } else { 0.0 };
+        let mut glow = 1.0 + (0.85 + 0.15 * (t * 2.4).sin() - 1.0) * (1.0 - done);
+        let reach = square * (4.5 + (13.0 - 4.5) * done);
         let mut zoom = self.zoom_now(frame_ns);
         let mut mosaic = 0.0;
         // In from black at the start.
