@@ -23,9 +23,8 @@ uniform vec2 origin;
 uniform vec4 pa;
 uniform vec4 pb;
 uniform vec2 gap;
-uniform float sq;
-uniform float zoom;
-uniform vec2 anchor;
+uniform float s;
+uniform vec2 o;
 uniform vec2 lamp;
 uniform float reach;
 uniform float glow;
@@ -57,8 +56,6 @@ void main() {
         gl_FragColor = vec4(0.0);
         return;
     }
-    float s = sq * zoom;
-    vec2 o = anchor * (1.0 - zoom);
     float d = min(to_line(t.x, o.x, s), to_line(t.y, o.y, s)) * SCALE;
     float small = smoothstep(3.0, 14.0, s * SCALE);
     float r = sqrt(q);

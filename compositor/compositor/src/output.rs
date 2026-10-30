@@ -253,7 +253,7 @@ pub struct Screen {
     table_stand_in: Option<smithay::backend::renderer::gles::GlesTexture>,
     /// What the table was last drawn for (zoom, mosaic, width, the
     /// wallpaper there), its id; the light's shader (light.frag).
-    table_key: Option<(u64, u64, i32, bool)>,
+    table_key: Option<(u64, u64, u64, i32, bool)>,
     table_id: smithay::backend::renderer::element::Id,
     light_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
     /// The panels' soft edges (edge.frag), made once: over the setup, and
@@ -890,7 +890,11 @@ impl Screen {
         // itself, dock.rs). The clock is its desk's: carried with it.
         let shift_now = crate::state::wallpaper_shift(state.ribbon.position(frame_ns));
         let wall_for_drops = self.wall.as_ref().map(|t| (t, (wall_width() as f64, crate::layout::LANDSCAPE.1 as f64), crate::state::WALL_LEFT + shift_now));
-        elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running, wall_for_drops).into_iter().map(FrameElement::from));
+        // Not while the first setup is up: under its table as it went at the
+        // end, the dock showed, then went for the drop it is born of.
+        if !state.setup.active {
+            elements.extend(state.dock.elements(&mut self.renderer, frame_ns, &running, wall_for_drops).into_iter().map(FrameElement::from));
+        }
         let clock_panel = state.ribbon.clock_panel().or(state.dock.home_panel());
         // The frame turned (layout.rs, draft 41): the desk - wallpaper, clock,
         // dock - is below a window, with the eyes when there is none.
@@ -1827,9 +1831,9 @@ impl Screen {
             }
         };
         if self.table_program.is_none() {
-            let mut names: Vec<UniformName> = ["texl", "src0", "gap", "anchor"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
+            let mut names: Vec<UniformName> = ["texl", "src0", "gap", "o", "centre"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
             names.extend(["pa", "pb"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)));
-            names.extend(["sq", "zoom", "mosaic", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["s", "wave", "soft", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             match self.renderer.compile_custom_texture_shader(&crate::glass::dithered(include_str!("table.frag")), &names) {
                 Ok(p) => self.table_program = Some(p),
                 Err(e) => {
@@ -1844,7 +1848,7 @@ impl Screen {
         // Drawn again only as it changes (a zoom, the end): still, the frame
         // takes only what moves over it (the light, the words, the drop) -
         // drawn whole each frame it missed frames.
-        let key = (t.zoom.to_bits(), t.mosaic.to_bits(), size.w, self.wall.is_some());
+        let key = (t.s.to_bits(), t.o.0.to_bits() ^ t.o.1.to_bits().rotate_left(17), t.wave.to_bits(), size.w, self.wall.is_some());
         if self.table_key == Some(key) && self.table_tex.as_ref().is_some_and(|t| smithay::backend::renderer::Texture::size(t) == size) {
             return self.table_tex.clone();
         }
@@ -1863,12 +1867,13 @@ impl Screen {
             Uniform::new("texl", texl),
             Uniform::new("src0", (crate::state::WALL_LEFT as f32, 0.0f32)),
             Uniform::new("gap", gap),
-            Uniform::new("anchor", (t.anchor.0 as f32, t.anchor.1 as f32)),
+            Uniform::new("o", (t.o.0 as f32, t.o.1 as f32)),
+            Uniform::new("centre", (t.centre.0 as f32, t.centre.1 as f32)),
             Uniform::new("pa", r(panels[0])),
             Uniform::new("pb", r(panels[1])),
-            Uniform::new("sq", t.square as f32),
-            Uniform::new("zoom", t.zoom as f32),
-            Uniform::new("mosaic", t.mosaic as f32),
+            Uniform::new("s", t.s as f32),
+            Uniform::new("wave", t.wave as f32),
+            Uniform::new("soft", t.soft as f32),
             Uniform::new("ink", 0.16f32),
             Uniform::new("thick", 2.0f32),
         ];
@@ -1908,10 +1913,10 @@ impl Screen {
             return None;
         }
         if self.light_program.is_none() {
-            let mut names: Vec<UniformName> = ["origin", "gap", "anchor", "lamp"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
+            let mut names: Vec<UniformName> = ["origin", "gap", "o", "lamp"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
             names.extend(["pa", "pb"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)));
             names.push(UniformName::new("accent", UniformType::_3f));
-            names.extend(["sq", "zoom", "reach", "glow", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["s", "reach", "glow", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             match self.renderer.compile_custom_pixel_shader(&crate::glass::dithered(include_str!("light.frag")), &names) {
                 Ok(p) => self.light_program = Some(p),
                 Err(e) => {
@@ -1942,13 +1947,12 @@ impl Screen {
         let uniforms = vec![
             Uniform::new("origin", (ax0 as f32, ay0 as f32)),
             Uniform::new("gap", (gap.0 as f32, gap.1 as f32)),
-            Uniform::new("anchor", (t.anchor.0 as f32, t.anchor.1 as f32)),
+            Uniform::new("o", (t.o.0 as f32, t.o.1 as f32)),
             Uniform::new("lamp", (t.lamp.0 as f32, t.lamp.1 as f32)),
             Uniform::new("pa", r(panels[0])),
             Uniform::new("pb", r(panels[1])),
             Uniform::new("accent", (a[0], a[1], a[2])),
-            Uniform::new("sq", t.square as f32),
-            Uniform::new("zoom", t.zoom as f32),
+            Uniform::new("s", t.s as f32),
             Uniform::new("reach", t.reach as f32),
             Uniform::new("glow", t.glow as f32),
             Uniform::new("thick", 2.0f32),

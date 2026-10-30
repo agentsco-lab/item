@@ -51,6 +51,19 @@ fn gap() -> (f64, f64) {
     }
 }
 
+/// A screen point in the table: the hinge taken out.
+pub fn to_table(x: f64, y: f64) -> (f64, f64) {
+    let p = layout::panels();
+    let g = gap();
+    if layout::turned() {
+        if y >= p[1].loc.y as f64 { (x - g.0, y - g.1) } else { (x, y) }
+    } else if x >= p[1].loc.x as f64 {
+        (x - g.0, y - g.1)
+    } else {
+        (x, y)
+    }
+}
+
 /// The squares at a zoom: their side and where the table's square (0, 0)
 /// begins, in the table's px.
 #[derive(Clone, Copy, Debug, PartialEq)]

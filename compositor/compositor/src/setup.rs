@@ -103,8 +103,13 @@ const DRY_TOUCHES: i32 = 8;
 /// The setup going at the end (the table's squares becoming the
 /// wallpaper's pixels, Setup::table), its drop handed to the dock after;
 /// its words gone first.
-const PULL_NS: u64 = 2_200_000_000;
+const PULL_NS: u64 = 2_250_000_000;
 const WORDS_GO_NS: f64 = 250_000_000.0;
+/// Its parts, ms from "› start": from when, how long - the wallpaper's
+/// colour coming into the squares, the pull back, the table going.
+const PULL_WAVE: (f64, f64) = (120.0, 900.0);
+const PULL_ZOOM: (f64, f64) = (550.0, 1550.0);
+const PULL_FADE: (f64, f64) = (2050.0, 200.0);
 /// The table in from black at the start; the lamp from one place on the
 /// way to the next; where its way begins and ends (of a panel's width, in
 /// from the outer edges) and its height (of the panels').
@@ -337,20 +342,22 @@ fn way(step: Step) -> f64 {
     }
 }
 
-/// The table as a frame has it (output.rs, table.frag): its squares' side
-/// at zoom 1 and their zoom about `anchor`; the lamp under it, how far its
-/// light reaches, how bright; how much the squares are the wallpaper's
-/// colour; how much of it is shown. Logical px, the table's (the hinge
-/// taken out).
+/// The table as a frame has it (output.rs, table.frag, light.frag): its
+/// squares' side and where its square (0, 0) is; the lamp under it, how far
+/// its light reaches, how bright; the wallpaper's colour coming into the
+/// squares in a wave out from `centre` (the drop), as far as `wave`, `soft`
+/// wide at its front; how much of it is shown. Logical px, the table's (the
+/// hinge taken out).
 #[derive(Clone, Copy, Debug)]
 pub struct Table {
-    pub square: f64,
-    pub zoom: f64,
-    pub anchor: (f64, f64),
+    pub s: f64,
+    pub o: (f64, f64),
     pub lamp: (f64, f64),
     pub reach: f64,
     pub glow: f64,
-    pub mosaic: f64,
+    pub centre: (f64, f64),
+    pub wave: f64,
+    pub soft: f64,
     pub alpha: f64,
 }
 
@@ -830,21 +837,30 @@ impl Setup {
         let done = if self.step == Step::Done { ease(frame_ns.saturating_sub(self.lamp.2) as f64 / LAMP_NS as f64) } else { 0.0 };
         let mut glow = 1.0 + (0.85 + 0.15 * (t * 2.4).sin() - 1.0) * (1.0 - done);
         let reach = square * (4.5 + (13.0 - 4.5) * done);
-        let mut zoom = self.zoom_now(frame_ns);
-        let mut mosaic = 0.0;
+        let g = Grid::at(self.zoom_now(frame_ns));
+        let (mut s, mut o) = (g.s, g.o);
+        // The drop, in the table: the end's wave and pull start from it.
+        let centre = squares::to_table(self.orb.x, self.orb.y);
+        let (mut wave, soft) = (0.0, 2.5 * square);
         // In from black at the start.
         let mut alpha = ease(frame_ns.saturating_sub(self.started) as f64 / TABLE_IN_NS as f64);
         if let Some(at) = self.leaving {
             let ms = frame_ns.saturating_sub(at) as f64 / 1e6;
-            mosaic = ease((ms - 100.0) / 500.0);
             glow *= 1.0 - ease(ms / 600.0);
-            // To a physical pixel a square, evenly to the eye (by its log).
-            let small = 1.0 / (square * SCALE as f64);
-            let k = ease((ms - 450.0) / 1500.0);
-            zoom = (zoom.ln() + (small.ln() - zoom.ln()) * k).exp();
-            alpha = 1.0 - ease((ms - 1950.0) / 250.0);
+            // The wallpaper's colour into the squares, out from the drop
+            // across the whole table.
+            let far = [(0.0, 0.0), (2.0 * w, 0.0), (0.0, h), (2.0 * w, h)].iter().map(|c: &(f64, f64)| (c.0 - centre.0).hypot(c.1 - centre.1)).fold(0.0, f64::max) + soft;
+            wave = far * ease((ms - PULL_WAVE.0) / PULL_WAVE.1);
+            // Then the view pulls back from the drop, the squares smaller
+            // and smaller - evenly to the eye (by the log) - until one is a
+            // physical pixel: the wallpaper itself.
+            let small = 1.0 / (s * SCALE as f64);
+            let f = (small.ln() * ease((ms - PULL_ZOOM.0) / PULL_ZOOM.1)).exp();
+            s *= f;
+            o = (centre.0 + (o.0 - centre.0) * f, centre.1 + (o.1 - centre.1) * f);
+            alpha = 1.0 - ease((ms - PULL_FADE.0) / PULL_FADE.1);
         }
-        Some(Table { square, zoom, anchor: squares::anchor(), lamp, reach, glow, mosaic, alpha })
+        Some(Table { s, o, lamp, reach, glow, centre, wave, soft, alpha })
     }
 
     /// Where the circle goes for the step, and how it looks.
@@ -1316,9 +1332,11 @@ impl Setup {
         }
         // The warm-ups item-session held back while the setup was up.
         let _ = std::process::Command::new("systemctl").args(["--user", "start", "--no-block", "item-warm.service", "item-chromium.service"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-        // The squares become the wallpaper's pixels (table()); the drop
-        // goes on to the dock after.
-        self.leaving = Some(hybris_hwc::now_ns());
+        // The words erased, the squares become the wallpaper's pixels
+        // (table()); the drop goes on to the dock after.
+        let now = hybris_hwc::now_ns();
+        self.going.extend(std::mem::take(&mut self.lines).into_iter().map(|l| (l, now)));
+        self.leaving = Some(now);
     }
 
     /// The drop the setup went with, once: the dock is born of it.
@@ -1329,6 +1347,7 @@ impl Setup {
     /// How much of the setup is still there: 1, fading to 0 as it goes.
     pub fn shown(&self, frame_ns: u64) -> f64 {
         match self.leaving {
+            // (The words are erased: what else the setup shows fades.)
             Some(t) => 1.0 - ease(frame_ns.saturating_sub(t) as f64 / WORDS_GO_NS),
             None if self.active => 1.0,
             None => 0.0,
@@ -1394,8 +1413,8 @@ impl Setup {
         let fade = self.shown(frame_ns);
         let right = layout::panels()[1];
         let mut out = if self.has_pad() { self.pad.elements(renderer, frame_ns, 0.0) } else { Vec::new() };
+        // (The words are erased at the end, not faded: only the arrow fades.)
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, alpha: f64, src: Option<Rectangle<f64, smithay::utils::Logical>>| {
-            let alpha = alpha * fade;
             if alpha <= 0.001 {
                 return;
             }
@@ -1427,7 +1446,7 @@ impl Setup {
         if let (Some(arrow), true, Step::Finger) = (&self.arrow, self.enrolling, self.step) {
             let a = ease(frame_ns.saturating_sub(self.right_at()) as f64 / WORDS_IN_NS as f64);
             let bob = 8.0 * (frame_ns as f64 / 1e9 * std::f64::consts::TAU / 1.2).sin().abs();
-            put(&mut out, arrow, (right.loc.x + right.size.w) as f64 - 60.0 + bob, READER_Y - 16.0, a, None);
+            put(&mut out, arrow, (right.loc.x + right.size.w) as f64 - 60.0 + bob, READER_Y - 16.0, a * fade, None);
         }
         out
     }

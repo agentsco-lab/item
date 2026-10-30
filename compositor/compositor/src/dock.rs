@@ -1911,7 +1911,13 @@ impl Dock {
         // The water's tint, the accent (a new picture when it changes).
         let a = crate::accent::get_f();
         v.extend([a[0], a[1], a[2]]);
-        let body = if self.clear.get() { 0.0 } else { BODY_ACCENT };
+        // Clear in the setup; born of its clear drop, the tint coming in as
+        // it falls and spreads (it came at once).
+        let born = self.birth.map_or(1.0, |(at, ..)| {
+            let k = (frame_ns.saturating_sub(at) as f64 / (BIRTH_FALL_NS + BIRTH_SPREAD_NS) as f64).clamp(0.0, 1.0);
+            (k * k * (3.0 - 2.0 * k)) as f32
+        });
+        let body = if self.clear.get() { 0.0 } else { BODY_ACCENT * born };
         let uniforms = |v: &[f32]| {
             vec![
                 Uniform::new("b0", (v[0], v[1], v[2], v[3])),

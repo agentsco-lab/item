@@ -31,23 +31,24 @@ uniform float tint;
 //
 // Drawn over the wallpaper's texture (`tex`, `texl` logical px; its part
 // from `src0` is the screen), which only the end uses: the squares take the
-// wallpaper's colour under their middles (`mosaic`), then grow small
-// (`zoom` down to a physical pixel a square), the lines going as they do,
-// until the squares are the wallpaper's pixels.
+// wallpaper's colour under their middles, in a wave out from `centre` (the
+// drop) as far as `wave`, `soft` wide at its front; then grow small (down
+// to a physical pixel a square), the lines going as they do, until the
+// squares are the wallpaper's pixels.
 //
 // All in the screen's logical px: the panels `pa` and `pb` (x, y, w, h);
 // the table's point of a screen point on `pb` is `gap` back (the hinge
-// taken out). A square `sq` wide at zoom 1; `zoom` about `anchor` (the
-// table's point that stays).
+// taken out). The squares `s` wide, the table's square (0, 0) at `o`.
 uniform vec2 texl;
 uniform vec2 src0;
 uniform vec4 pa;
 uniform vec4 pb;
 uniform vec2 gap;
-uniform float sq;
-uniform float zoom;
-uniform vec2 anchor;
-uniform float mosaic;
+uniform float s;
+uniform vec2 o;
+uniform vec2 centre;
+uniform float wave;
+uniform float soft;
 // The lines: how strong over the paper, how wide (physical px).
 uniform float ink;
 uniform float thick;
@@ -74,14 +75,13 @@ void main() {
         return;
     }
     vec2 t = b ? p - gap : p;
-    float s = sq * zoom;
-    vec2 o = anchor * (1.0 - zoom);
     // The square this point is in, its middle on the screen.
     vec2 cell = floor((t - o) / s);
     vec2 mid = o + (cell + 0.5) * s;
     vec2 mid_screen = mid + (b ? gap : vec2(0.0));
     vec3 under = texture2D(tex, (mid_screen + src0) / texl).rgb;
-    vec3 c = mix(PAPER, under, mosaic);
+    float k = clamp((wave - length(mid - centre)) / max(soft, 1.0), 0.0, 1.0);
+    vec3 c = mix(PAPER, under, k * k * (3.0 - 2.0 * k));
 
     // The lines, fading as the squares grow small (gone at 3 px a square).
     float d = min(to_line(t.x, o.x, s), to_line(t.y, o.y, s)) * SCALE;
