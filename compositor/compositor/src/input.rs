@@ -335,6 +335,9 @@ impl State {
             match contact {
                 Contact::Down(slot, pos, _) if self.setup_touch.is_none() => {
                     self.setup.down(pos.x, pos.y);
+                    if let Some(at) = self.setup.take_poke() {
+                        self.dock.poke_lone(at);
+                    }
                     self.setup_touch = Some((slot, pos.x, pos.y, pos.x, pos.y));
                 }
                 Contact::Motion(slot, pos, _) => {

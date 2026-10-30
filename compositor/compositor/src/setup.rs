@@ -92,7 +92,6 @@ const MOVE_MIN_NS: f64 = 400_000_000.0;
 const MOVE_PER_PX_NS: f64 = 450_000.0;
 const MOVE_MAX_NS: f64 = 800_000_000.0;
 const ARC: f64 = 0.12;
-const BREATH_NS: f64 = 3_200_000_000.0;
 /// The print: its ridges coming (after the circle is nearly there), its
 /// light following the reader, a touch's flash, the pause after the last.
 const PRINT_IN_NS: f64 = 700_000_000.0;
@@ -419,6 +418,8 @@ pub struct Setup {
     pad_split: bool,
     /// When a digit was last pressed: the drop comes alive.
     poked: u64,
+    /// The drop itself touched, not yet told to the water.
+    drop_poked: Option<u64>,
     move_ns: f64,
     orb_ns: u64,
     started: u64,
@@ -489,6 +490,7 @@ impl Setup {
             moved_at: 0,
             pad_split: false,
             poked: 0,
+            drop_poked: None,
             move_ns: MOVE_MAX_NS,
             orb_ns: 0,
             started: 0,
@@ -852,11 +854,9 @@ impl Setup {
         let dim = |a: f32| [a, a, a, a];
         let orb = Orb { x: middle(1), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: accent(), print: 0.0, lit: self.lit, flash: 0.0, fill: 0.0 };
         match self.step {
-            Step::Welcome => {
-                let t = frame_ns.saturating_sub(self.started) as f64;
-                let breath = 1.0 + 0.025 * (t / BREATH_NS * std::f64::consts::TAU).sin();
-                Orb { r: 52.0 * breath, ..orb }
-            }
+            // Still, waiting to be touched (it breathed in a loop, its seam
+            // seen).
+            Step::Welcome => orb,
             // A small drop over the networks, empty.
             Step::Wifi => Orb { x: middle(1), y: PIN_MARK_Y - 10.0, r: PIN_DROP_R, ..orb },
             // A drop over the pad, clear (no colour in the water: the
@@ -888,10 +888,10 @@ impl Setup {
         self.pad.drops(frame_ns, (self.orb.x, self.orb.y), self.orb.r)
     }
 
-    /// How alive the drop is: breathing on the welcome, a little at rest,
-    /// more for a while after a digit or a move.
+    /// How alive the drop is: a little at rest,
+    /// more for a while after a touch, a digit or a move.
     pub fn life(&self, frame_ns: u64) -> f64 {
-        let base: f64 = if self.step == Step::Welcome { 0.6 } else { 0.25 };
+        let base: f64 = 0.15;
         let since = |t: u64| if t == 0 { f64::MAX } else { frame_ns.saturating_sub(t) as f64 };
         let poke = (-since(self.poked) / (POKE_NS / 3.0)).exp();
         let moved = (-since(self.moved_at) / (POKE_NS / 2.0)).exp() * 0.7;
@@ -1181,7 +1181,23 @@ impl Setup {
         if self.has_pad() && self.step != Step::Saving {
             self.pad.down(x, y);
             self.poked = hybris_hwc::now_ns();
+            return;
         }
+        // The drop touched where it stands still (the welcome, all set):
+        // it plays the touch - gives, wobbles back, comes alive a moment -
+        // and stays where it is (the owner, 2026-10-30).
+        let still = matches!(self.step, Step::Welcome | Step::Done) && self.leaving.is_none();
+        if still && (x - self.orb.x).hypot(y - self.orb.y) < self.orb.r * 1.4 {
+            let now = hybris_hwc::now_ns();
+            self.poked = now;
+            self.drop_poked = Some(now);
+            crate::fingerprint::buzz("button-pressed");
+        }
+    }
+
+    /// The drop touched, for the dock's water to play it (once).
+    pub fn take_poke(&mut self) -> Option<u64> {
+        self.drop_poked.take()
     }
 
     pub fn motion(&mut self) {

@@ -1813,6 +1813,14 @@ impl Dock {
 
     /// Whether the lone drop still flows on its own (stretch, the hinge's
     /// tail, its wobble, the wet spot drying).
+    /// The lone drop touched: it gives, and wobbles back where it is (the
+    /// first setup's, touched on its welcome).
+    pub fn poke_lone(&self, now: u64) {
+        let mut f = self.lone_flow.get();
+        f.popped = now;
+        self.lone_flow.set(f);
+    }
+
     pub fn lone_moving(&self, frame_ns: u64) -> bool {
         let f = self.lone_flow.get();
         f.stretch > 0.003 || f.clinging || f.snap.is_some() || f.trail.is_some_and(|(_, t)| frame_ns < t + WET_NS) || (f.popped != 0 && frame_ns < f.popped + WOBBLE_NS)
