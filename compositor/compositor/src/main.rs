@@ -701,14 +701,14 @@ impl Data {
         for event in self.state.fingerprint.take_events() {
             // The first setup's, while it is on.
             if self.state.setup.active {
-                self.state.setup.reader(event);
+                self.state.setup.reader(event, &self.state.fingerprint);
                 self.state.needs_redraw = true;
                 continue;
             }
             match event {
                 fingerprint::Event::Identified => self.state.lock.unlock(),
                 fingerprint::Event::NotRecognized => self.state.lock.fingerprint_failed(),
-                other => self.state.setup.reader(other),
+                other => self.state.setup.reader(other, &self.state.fingerprint),
             }
             self.state.needs_redraw = true;
         }
