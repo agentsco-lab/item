@@ -109,6 +109,9 @@ pub struct State {
     /// main.rs; with the turn by the sensors (prefs.rs) unused.
     pub turn_asked: u8,
     pub turn_by_sensors: bool,
+    /// Whether gravity and the gyroscope stream now: the turn the
+    /// sensors', or the first setup up (its drop leans with gravity).
+    pub sensors_streaming: bool,
     pub boost: GpuBoost,
     pub curtain: Curtain,
     pub gestures: Gestures,
@@ -334,6 +337,7 @@ impl State {
             dock: Dock::new(),
             turn_asked: 0,
             turn_by_sensors: crate::prefs::turn_by_sensors(),
+            sensors_streaming: crate::prefs::turn_by_sensors(),
             boost: GpuBoost::new(),
             curtain: Curtain::new(),
             gestures: Gestures::default(),
@@ -1142,7 +1146,10 @@ impl State {
         self.turn_by_sensors = on;
         self.turn_asked = crate::layout::turn();
         self.dock.set_auto(on);
-        self.posture.by_sensors(on);
+        if on != self.sensors_streaming && !self.setup.active {
+            self.posture.by_sensors(on);
+            self.sensors_streaming = on;
+        }
         crate::prefs::write("turn", if on { "sensors" } else { "button" });
         tracing::info!("turn: {} (the dock's button held)", if on { "by the sensors" } else { "by the button" });
         self.needs_redraw = true;

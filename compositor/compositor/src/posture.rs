@@ -262,6 +262,15 @@ impl Decider {
     }
 }
 
+/// Gravity as last read (x, y, z in g), while the sensors stream it.
+static GRAVITY: std::sync::Mutex<Option<[f64; 3]>> = std::sync::Mutex::new(None);
+
+/// Gravity as last read, if it is read (the first setup's drop leans with
+/// it).
+pub fn gravity() -> Option<[f64; 3]> {
+    *GRAVITY.lock().unwrap()
+}
+
 pub struct Posture {
     angle: Arc<AtomicU64>,
     changed: Arc<AtomicBool>,
@@ -314,6 +323,7 @@ impl Posture {
                         // as the display lit) but nothing is decided from it.
                         if !dark {
                             told = Some(t);
+                            *GRAVITY.lock().unwrap() = Some(t.gravity);
                         }
                     }
                     Some(Said::Dark(d)) => {

@@ -117,6 +117,13 @@ const TABLE_IN_NS: u64 = 600_000_000;
 const LAMP_NS: u64 = 1_200_000_000;
 const LAMP_IN: f64 = 0.15;
 const LAMP_Y: f64 = 0.62;
+/// The lamp's light: green, whatever the accent (the owner's, 2026-10-30).
+const LAMP_GREEN: [f32; 3] = [0.180, 0.761, 0.494];
+/// The drop leans with the phone: at most this far (logical px) toward
+/// where gravity pulls in the screen's plane, on a soft spring.
+const TILT_PX: f64 = 6.0;
+const TILT_HZ: f64 = 1.6;
+const TILT_DAMP: f64 = 0.35;
 /// The end's drop: the dock's height.
 const LAST_DROP_R: f64 = 36.0;
 /// The words a tap takes, on the right: the row nearest this.
@@ -359,6 +366,8 @@ pub struct Table {
     pub wave: f64,
     pub soft: f64,
     pub alpha: f64,
+    /// The lamp's colour.
+    pub light: [f32; 3],
 }
 
 pub struct Setup {
@@ -411,8 +420,9 @@ pub struct Setup {
     /// The squares' zoom: from, to, since when (it moves once the words
     /// before it are erased).
     zoom: (f64, f64, u64),
-    /// The lamp under the table: from, to (of the whole way), since when.
-    lamp: (f64, f64, u64),
+    /// The lamp under the table: from where (NaN: nowhere yet), to which
+    /// share of the way, since when.
+    lamp: ((f64, f64), f64, u64),
     /// Words were laid once (the first come at their zoom, not zoomed to).
     shown_once: bool,
     /// What next, on the left while a finger is taken, and its colour.
@@ -429,6 +439,9 @@ pub struct Setup {
     drop_poked: Option<u64>,
     move_ns: f64,
     orb_ns: u64,
+    /// The drop's lean with the phone (logical px) and how fast it moves.
+    tilt: (f64, f64),
+    tilt_v: (f64, f64),
     started: u64,
     arrow: Option<MemoryRenderBuffer>,
     /// Wi-Fi: the last scan's answer (from a thread), when it was asked,
@@ -489,7 +502,7 @@ impl Setup {
             lines: Vec::new(),
             going: Vec::new(),
             zoom: (1.0, 1.0, 0),
-            lamp: (0.0, 0.0, 0),
+            lamp: ((f64::NAN, 0.0), 0.0, 0),
             shown_once: false,
             note: (String::new(), LIT),
             orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: [1.0; 4], print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
@@ -500,6 +513,8 @@ impl Setup {
             drop_poked: None,
             move_ns: MOVE_MAX_NS,
             orb_ns: 0,
+            tilt: (0.0, 0.0),
+            tilt_v: (0.0, 0.0),
             started: 0,
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
             scanned: Default::default(),
@@ -772,7 +787,8 @@ impl Setup {
         }
         // The lamp on along the way; the words laid for the step (before
         // the pad: its keys come after the words).
-        let from = self.lamp_now(now);
+        let panel = layout::panels()[0];
+        let from = self.lamp_at(now, panel.size.w as f64, panel.size.h as f64);
         self.lamp = (from, way(step), now);
         if step == Step::Finger {
             self.note = (String::new(), LIT);
@@ -809,11 +825,18 @@ impl Setup {
         }
     }
 
-    /// Where the lamp is along the way at a frame (0 to 1).
-    fn lamp_now(&self, frame_ns: u64) -> f64 {
-        let (from, to, at) = self.lamp;
+    /// Where the lamp is at a frame, in the table: under the drop at the
+    /// welcome and at the end, along the way between (the panels `w` by
+    /// `h`), going from where it was to the step's place.
+    fn lamp_at(&self, frame_ns: u64, w: f64, h: f64) -> (f64, f64) {
+        let (a, to, at) = self.lamp;
+        let b = if to <= 0.0 || to >= 1.0 { (1.5 * w, WELCOME_Y) } else { ((LAMP_IN + to * (2.0 - 2.0 * LAMP_IN)) * w, LAMP_Y * h) };
+        // (Not yet anywhere: at its place at once.)
+        if a.0.is_nan() {
+            return b;
+        }
         let k = ease(frame_ns.saturating_sub(at) as f64 / LAMP_NS as f64);
-        from + (to - from) * k
+        (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k)
     }
 
     /// The table this frame: the lamp along the way, breathing (lit
@@ -829,8 +852,7 @@ impl Setup {
         let panel = layout::panels()[0];
         let (w, h) = (panel.size.w as f64, panel.size.h as f64);
         let square = squares::square();
-        let way = self.lamp_now(frame_ns);
-        let lamp = ((LAMP_IN + way * (2.0 - 2.0 * LAMP_IN)) * w, LAMP_Y * h);
+        let lamp = self.lamp_at(frame_ns, w, h);
         let t = frame_ns.saturating_sub(self.started) as f64 / 1e9;
         // All set: the light grows over the whole table and stills, along
         // with the lamp's last move (it jumped).
@@ -860,7 +882,7 @@ impl Setup {
             o = (centre.0 + (o.0 - centre.0) * f, centre.1 + (o.1 - centre.1) * f);
             alpha = 1.0 - ease((ms - PULL_FADE.0) / PULL_FADE.1);
         }
-        Some(Table { s, o, lamp, reach, glow, centre, wave, soft, alpha })
+        Some(Table { s, o, lamp, reach, glow, centre, wave, soft, alpha, light: LAMP_GREEN })
     }
 
     /// Where the circle goes for the step, and how it looks.
@@ -911,7 +933,8 @@ impl Setup {
         let since = |t: u64| if t == 0 { f64::MAX } else { frame_ns.saturating_sub(t) as f64 };
         let poke = (-since(self.poked) / (POKE_NS / 3.0)).exp();
         let moved = (-since(self.moved_at) / (POKE_NS / 2.0)).exp() * 0.7;
-        base.max(poke).max(moved).max(self.flash(frame_ns))
+        let leaning = (self.tilt_v.0.hypot(self.tilt_v.1) / 80.0).min(0.4);
+        base.max(poke).max(moved).max(self.flash(frame_ns)).max(leaning)
     }
 
     /// A touch's flash, 1 fading to 0.
@@ -921,11 +944,31 @@ impl Setup {
         (1.0 - k) * (1.0 - k)
     }
 
+    /// The drop leans toward where gravity pulls in the screen's plane, a
+    /// little, on a soft spring (posture.rs's reading: x across the right
+    /// panel, y up it, as Android has them).
+    fn lean(&mut self, dt: f64) {
+        let dt = dt.clamp(0.0, 0.05);
+        let to = match crate::posture::gravity() {
+            Some([x, y, _]) => {
+                let (gx, gy) = (-x, y);
+                let m = gx.hypot(gy).max(1.0);
+                (TILT_PX * gx / m, TILT_PX * gy / m)
+            }
+            None => (0.0, 0.0),
+        };
+        let k = (std::f64::consts::TAU * TILT_HZ).powi(2);
+        let c = 2.0 * TILT_DAMP * k.sqrt();
+        let a = (k * (to.0 - self.tilt.0) - c * self.tilt_v.0, k * (to.1 - self.tilt.1) - c * self.tilt_v.1);
+        self.tilt_v = (self.tilt_v.0 + a.0 * dt, self.tilt_v.1 + a.1 * dt);
+        self.tilt = (self.tilt.0 + self.tilt_v.0 * dt, self.tilt.1 + self.tilt_v.1 * dt);
+    }
+
     /// The circle now, for the output to draw (orb.frag), with the setup's
     /// alpha.
     pub fn orb(&self) -> Option<Orb> {
         // Gone at the start: the dock is born of it then.
-        (self.active && self.leaving.is_none() && self.orb.r > 0.3).then_some(self.orb)
+        (self.active && self.leaving.is_none() && self.orb.r > 0.3).then_some(Orb { x: self.orb.x + self.tilt.0, y: self.orb.y + self.tilt.1, ..self.orb })
     }
 
     /// Whether it is going (start pressed): the dock, born, over its table.
@@ -1343,7 +1386,7 @@ impl Setup {
         let now = hybris_hwc::now_ns();
         self.going.extend(std::mem::take(&mut self.lines).into_iter().map(|l| (l, now)));
         self.leaving = Some(now);
-        self.handed = Some((now, (self.orb.x, self.orb.y), self.orb.r));
+        self.handed = Some((now, (self.orb.x + self.tilt.0, self.orb.y + self.tilt.1), self.orb.r));
     }
 
     /// The drop the setup went with, once: the dock is born of it.
@@ -1388,6 +1431,7 @@ impl Setup {
         let e = ease(k);
         self.orb = self.from.lerp(&target, e);
         self.orb.y -= ARC * (target.x - self.from.x).abs() * (std::f64::consts::PI * e).sin();
+        self.lean(dt / 1e9);
         // The print's ridges come once the circle is nearly there; a touch
         // not taken shakes it.
         if matches!(self.step, Step::Finger | Step::FingerKnown) {

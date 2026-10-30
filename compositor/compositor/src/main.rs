@@ -722,6 +722,13 @@ impl Data {
             self.state.dock.born(at, centre, r);
             self.state.needs_redraw = true;
         }
+        // Gravity streams while the setup is up (its drop leans), else as
+        // the turn wants.
+        let streams = self.state.setup.active || self.state.turn_by_sensors;
+        if streams != self.state.sensors_streaming {
+            self.state.posture.by_sensors(streams);
+            self.state.sensors_streaming = streams;
+        }
         if let Some(pin) = self.state.setup.take_pin() {
             self.state.keyring.unlocked_with(pin);
         }

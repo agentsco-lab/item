@@ -1952,7 +1952,7 @@ impl Screen {
         }
         let area = smithay::utils::Rectangle::<i32, smithay::utils::Logical>::new((ax0, ay0).into(), (ax1 - ax0, ay1 - ay0).into());
         let r = |p: smithay::utils::Rectangle<i32, smithay::utils::Logical>| (p.loc.x as f32, p.loc.y as f32, p.size.w as f32, p.size.h as f32);
-        let a = crate::accent::get_f();
+        let a = t.light;
         let uniforms = vec![
             Uniform::new("origin", (ax0 as f32, ay0 as f32)),
             Uniform::new("gap", (gap.0 as f32, gap.1 as f32)),
