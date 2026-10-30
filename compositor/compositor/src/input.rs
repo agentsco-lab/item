@@ -901,8 +901,10 @@ impl State {
                     self.bottom_start = None;
                 }
                 if self.system.holds(slot) {
-                    if let Some(cmd) = self.system.touch_up(slot) {
-                        self.open_agent(&cmd);
+                    match self.system.touch_up(slot) {
+                        Some(cmd) if cmd == crate::sysfacts::TAP_ONLINE => self.system.allow_online(),
+                        Some(cmd) => self.open_agent(&cmd),
+                        None => {}
                     }
                     self.needs_redraw = true;
                     return;

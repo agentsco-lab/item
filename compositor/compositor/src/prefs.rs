@@ -70,6 +70,13 @@ pub fn online() -> bool {
     read("online").is_some_and(|v| v == "on")
 }
 
+/// Whether the owner has been asked yet (the file there, on or off): not
+/// at the setup, but where it is wanted - the system screen's weather
+/// asks, once, until it is answered (the owner, 2026-10-30).
+pub fn online_asked() -> bool {
+    read("online").is_some()
+}
+
 /// Whether the frame turns as the sensors say the phone is held
 /// (`turn` = "sensors"), or by the dock's turn button alone (the default:
 /// the accelerometer and the gyroscope are then not read at all).

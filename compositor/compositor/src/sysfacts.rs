@@ -62,6 +62,8 @@ pub enum Job {
     Display(bool),
     /// Details opened or shut: read and drawn so.
     Details(bool),
+    /// Online just allowed: the weather asked for at once.
+    Online,
 }
 
 /// A drawn page: premultiplied RGBA, its size in physical px, where
@@ -812,8 +814,17 @@ fn sky(symbol: &str) -> (&'static str, String) {
     (text, icon.to_owned())
 }
 
+/// The weather's note while the owner has not said whether item may go
+/// online: the row asks, a tap allows (`TAP_ONLINE`).
+const ASK_ONLINE: &str = "ask";
+/// A tap's command handled by item itself, not run: online allowed.
+pub const TAP_ONLINE: &str = "item:online";
+
 /// The weather for GNOME Weather's first city, from met.no.
 fn weather() -> Result<Weather, String> {
+    if !crate::prefs::online_asked() {
+        return Err(ASK_ONLINE.into());
+    }
     if !crate::prefs::online() {
         return Err("Online is off in item Settings".into());
     }
@@ -884,10 +895,14 @@ pub fn worker(rx: Receiver<Job>, page: Arc<Mutex<Option<Page>>>, now: Now, wake:
                 details = open;
                 Ok(Job::Read)
             }
+            Ok(Job::Online) => {
+                weather_cache = None;
+                Ok(Job::Read)
+            }
             other => other,
         };
         match job {
-            Ok(Job::Details(_)) => {}
+            Ok(Job::Details(_) | Job::Online) => {}
             Ok(Job::Display(on)) => {
                 if on && !lit {
                     // A span of darkness is not one long sample.
@@ -1147,6 +1162,17 @@ fn draw(fonts: &(Font, Font), f: &Facts, twelve: bool, details: bool) -> Option<
                 text(&mut c, regular, &tt, 15.0, INK, mid - tw / 2.0, y + 20.0, -1, col);
             }
             y += 56.0;
+        }
+        // Not asked yet: whether item may go online, here where it is
+        // wanted (the setup no longer asks). A tap allows; Settings has
+        // the switch both ways.
+        None if f.weather_note == ASK_ONLINE => {
+            let top = y;
+            text(&mut c, regular, "Weather and updates need the network", 16.0, DIM, cx, y, -1, inner);
+            y += 26.0;
+            text(&mut c, regular, "met.no and GitHub · tap to allow", 16.0, INK, cx, y, -1, inner);
+            y += 34.0;
+            taps.push((top - 8.0, y - 8.0, TAP_ONLINE.to_owned()));
         }
         None => {
             text(&mut c, regular, if f.weather_note.is_empty() { "Asking met.no…" } else { &f.weather_note }, 16.0, DIM, cx, y, -1, inner);

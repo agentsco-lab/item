@@ -216,6 +216,14 @@ impl SystemScreen {
 
     /// Let go: a scroll runs on; a tap on Details opens or shuts it; a tap
     /// on an agent's session asks for its command (state.rs opens it).
+    /// Online allowed from the page's weather row: said so, and the
+    /// weather asked for at once.
+    pub fn allow_online(&mut self) {
+        tracing::info!("system: item may go online (the weather's row)");
+        crate::prefs::write("online", "on");
+        let _ = self.jobs.send(Job::Online);
+    }
+
     pub fn touch_up(&mut self, slot: TouchSlot) -> Option<String> {
         let Some(t) = self.touch.take_if(|t| t.slot == slot) else { return None };
         if !t.scrolling {

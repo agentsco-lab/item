@@ -83,8 +83,8 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
   `/var/lib/item-face`, root's alone; the camera is open only while the lock
   screen is lit.
 - **The first setup** after a clean install: a welcome, Wi-Fi (the networks
-  in reach, a tap joins one; installed with item/grid the phone is already
-  on the computer's network), whether item may go online by itself, a new
+  in reach, a tap joins one; left out when installed with item/grid: the
+  phone is already on the computer's network), a new
   PIN (the face taken as it is typed, for CV ID), a finger, then a tour.
 - **The phone's sleep** is item's: the lid darkens and lights the screen,
   asleep again 3 s after a wake that lit nothing, woken for alarms, an alarm
@@ -172,7 +172,8 @@ next boot.
 **Nothing leaves the phone by itself.** item has no telemetry and no
 account. The one network use of its own, the system screen's weather
 (met.no, the city chosen in GNOME Weather) and the port's latest release
-(GitHub), is behind item Settings' Online switch, off by default. The
+(GitHub), is behind item Settings' Online switch, off by default (the system screen's
+weather asks, once, with a tap to allow). The
 keyboard's voice goes to OpenRouter only with a key the owner put in the
 phone's keyring (`item-secret set openrouter`); keys live in gnome-keyring
 by name and are never written to a file or a log. The screen's mirror for

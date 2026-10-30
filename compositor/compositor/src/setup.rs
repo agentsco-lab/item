@@ -1,16 +1,16 @@
-//! The first setup, once: welcome, Wi-Fi (and whether item may go online),
-//! the PIN (the face taken as it is typed), a finger, all set. The left
+//! The first setup, once: welcome, Wi-Fi, the PIN (the face taken as it is typed), a finger, all set. The left
 //! panel says what and why, the right one is where you act.
 //!
 //! - **Wi-Fi**, as Android's setup asks first: the networks NetworkManager
 //!   sees on the right, the strongest first, the one joined marked; a tap
 //!   joins it (`nmcli device wifi connect`), NetworkManager asking for its
 //!   password through item's own agent (nm.rs) in the system's dialog, over
-//!   the setup. Skippable. Joined, the clock is set from the network
-//!   (systemd-timesyncd, by itself) while the rest of the setup goes on.
-//! - **Online**: joined, the setup asks whether item may reach the network
-//!   by itself - the weather from met.no, the port's updates from GitHub
-//!   (prefs::online, off unless said; item sends nothing anywhere else).
+//!   the setup. Skippable; not shown at all when a Wi-Fi network is known
+//!   already (item/grid gives the phone the computer's at an install).
+//!   Joined, the clock is set from the network (systemd-timesyncd, by
+//!   itself) while the rest of the setup goes on. Whether item may go online
+//!   by itself is not asked here: the system screen's weather asks, where
+//!   it is wanted (the owner, 2026-10-30).
 //! - **The PIN.** Droidian's images come with 1234, found by trying it with
 //!   PAM at the start: then a new PIN of four digits is asked for twice and
 //!   set, else the one there is asked for once. There is no OK: a PIN is
@@ -134,8 +134,6 @@ enum Step {
     Welcome,
     /// The networks: one joined, or skipped.
     Wifi,
-    /// Joined: may item go online by itself.
-    Online,
     /// Finding out whether the PIN is Droidian's.
     Checking,
     PinNew,
@@ -339,6 +337,8 @@ pub struct Setup {
     /// Answers from threads: whether the PIN is Droidian's; whether the PIN
     /// was set (or checked).
     is_default: Arc<Mutex<Option<bool>>>,
+    /// Whether NetworkManager knows a Wi-Fi network already.
+    wifi_known: Arc<Mutex<Option<bool>>>,
     saved: Arc<Mutex<Option<Result<String, String>>>>,
     wake: smithay::reexports::calloop::ping::Ping,
     /// A PIN that is the user's now, for the keyring's prompts (keyring.rs).
@@ -429,6 +429,7 @@ impl Setup {
             },
             first: String::new(),
             is_default: Default::default(),
+            wifi_known: Default::default(),
             saved: Default::default(),
             wake,
             pin_for_keyring: None,
@@ -495,6 +496,11 @@ impl Setup {
             let default = crate::pam::check(DEFAULT_PIN);
             *slot.lock().unwrap() = Some(default);
             wake.ping();
+        });
+        let known = self.wifi_known.clone();
+        std::thread::spawn(move || {
+            let out = std::process::Command::new("nmcli").args(["-t", "-f", "TYPE", "connection", "show"]).output();
+            *known.lock().unwrap() = Some(out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l == "802-11-wireless")));
         });
         self.go(Step::Welcome);
     }
@@ -603,14 +609,6 @@ impl Setup {
                 self.text("Wi-Fi", &["Choose a network.", "The clock is set from it,", "while you finish the setup."], button, 150.0);
                 self.scan_now();
             }
-            Step::Online => {
-                let name = self.joined().unwrap_or_default();
-                let first = format!("Connected to “{name}”.");
-                self.text("Online", &[&first, "item can also get the weather (met.no)", "and look for updates (GitHub).", "Nothing else is sent anywhere."], "Allow", WELCOME_Y + 90.0);
-                if let Some((_, regular)) = &self.fonts {
-                    self.button2.set(regular, "Not now");
-                }
-            }
             Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
             Step::PinNew => {
                 if was != Step::PinAgain && was != Step::Saving {
@@ -676,10 +674,8 @@ impl Setup {
                 let breath = 1.0 + 0.025 * (t / BREATH_NS * std::f64::consts::TAU).sin();
                 Orb { r: 52.0 * breath, ..orb }
             }
-            // A small drop over the networks, empty; on the left while
-            // asked whether to go online.
+            // A small drop over the networks, empty.
             Step::Wifi => Orb { x: middle(1), y: PIN_MARK_Y - 10.0, r: PIN_DROP_R, ..orb },
-            Step::Online => Orb { r: 40.0, ..orb },
             Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
                 // A small drop over the pad, filling with coral: a third
                 // for the new PIN, two for it again, full as it is saved;
@@ -1059,11 +1055,6 @@ impl Setup {
                 return;
             }
         }
-        if self.step == Step::Online && Self::button2_rect().contains((x, y)) {
-            tracing::info!("setup: item stays offline");
-            self.go(Step::Checking);
-            return;
-        }
         if self.step == Step::FingerKnown && Self::button2_rect().contains((x, y)) {
             tracing::info!("setup: another finger");
             self.go(Step::Finger);
@@ -1077,17 +1068,15 @@ impl Setup {
         }
         match self.step {
             Step::FingerKnown => self.go(Step::Done),
+            // A Wi-Fi network known already (item/grid's, at the install):
+            // no networks to pick.
+            Step::Welcome if *self.wifi_known.lock().unwrap() == Some(true) => {
+                tracing::info!("setup: a Wi-Fi network is known; its step left out");
+                self.go(Step::Checking);
+            }
             Step::Welcome => self.go(Step::Wifi),
             Step::Wifi => {
-                let next = if self.joined().is_some() { Step::Online } else { Step::Checking };
-                tracing::info!("setup: Wi-Fi {}", if next == Step::Online { "joined" } else { "skipped" });
-                self.go(next);
-            }
-            Step::Online => {
-                tracing::info!("setup: item may go online");
-                if !self.dry {
-                    crate::prefs::write("online", "on");
-                }
+                tracing::info!("setup: Wi-Fi {}", if self.joined().is_some() { "joined" } else { "skipped" });
                 self.go(Step::Checking);
             }
             Step::Finger => {
@@ -1333,7 +1322,7 @@ impl Setup {
                 put(&mut out, bg, r.loc.x, r.loc.y + dy, a, None);
             }
         }
-        if self.step == Step::FingerKnown || self.step == Step::Online {
+        if self.step == Step::FingerKnown {
             let (a, dy) = coming(self.right_at() + WORDS_GAP_NS);
             let b = Self::button2_rect();
             put(&mut out, &self.button2.buffer, b.loc.x + (BUTTON_W - self.button2.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - self.button2.extent.h as f64) / 2.0 + dy, a, None);
