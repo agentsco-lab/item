@@ -132,6 +132,12 @@ const BUTTON_Y: f64 = 640.0;
 /// PIN's step mark and the finger's ring on the right too, the ring level
 /// with the reader.
 const WELCOME_Y: f64 = 400.0;
+/// The welcome's drop: big (the owner's, 2026-10-30).
+const WELCOME_R: f64 = 74.0;
+/// How alive the water is at rest: on the welcome its ripple and breath
+/// plain to see (dock.frag's, never looping), elsewhere faint.
+const LIFE_WELCOME: f64 = 0.5;
+const LIFE_REST: f64 = 0.15;
 /// The drop over the PIN pad.
 const PIN_DROP_R: f64 = 26.0;
 /// A digit pressed: the drop alive, calming over this.
@@ -890,7 +896,7 @@ impl Setup {
         let panels = layout::panels();
         let middle = |i: usize| panels[i].loc.x as f64 + panels[i].size.w as f64 / 2.0;
         let dim = |a: f32| [a, a, a, a];
-        let orb = Orb { x: middle(1), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: accent(), print: 0.0, lit: self.lit, flash: 0.0, fill: 0.0 };
+        let orb = Orb { x: middle(1), y: WELCOME_Y, r: WELCOME_R, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: accent(), print: 0.0, lit: self.lit, flash: 0.0, fill: 0.0 };
         match self.step {
             // Still, waiting to be touched (it breathed in a loop, its seam
             // seen).
@@ -929,7 +935,7 @@ impl Setup {
     /// How alive the drop is: a little at rest,
     /// more for a while after a touch, a digit or a move.
     pub fn life(&self, frame_ns: u64) -> f64 {
-        let base: f64 = 0.15;
+        let base = if self.step == Step::Welcome { LIFE_WELCOME } else { LIFE_REST };
         let since = |t: u64| if t == 0 { f64::MAX } else { frame_ns.saturating_sub(t) as f64 };
         let poke = (-since(self.poked) / (POKE_NS / 3.0)).exp();
         let moved = (-since(self.moved_at) / (POKE_NS / 2.0)).exp() * 0.7;
