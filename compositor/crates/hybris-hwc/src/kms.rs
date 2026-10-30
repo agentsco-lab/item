@@ -52,6 +52,9 @@ struct Stats {
     passed: u32,
     commits: u32,
     commit_ns: u64,
+    /// The GPU's fences as presented: none at all, not yet signalled.
+    no_fence: u32,
+    gpu_busy: u32,
 }
 
 struct Kms {
@@ -86,10 +89,15 @@ static LAST_FLIP_NS: AtomicU64 = AtomicU64::new(0);
 /// When the panels were asked on, until the mode set that lights them.
 static POWERED_ON_AT: AtomicU64 = AtomicU64::new(0);
 
-/// KMS_SYNC=1: each frame committed in the present callback itself.
+/// KMS_SYNC=1: each frame committed in the present callback itself; 2:
+/// and the GPU's fence waited for there first.
+fn sync_level() -> u32 {
+    static SYNC: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *SYNC.get_or_init(|| std::env::var("KMS_SYNC").ok().and_then(|v| v.parse().ok()).unwrap_or(0))
+}
+
 fn sync() -> bool {
-    static SYNC: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *SYNC.get_or_init(|| std::env::var_os("KMS_SYNC").is_some_and(|v| v == "1"))
+    sync_level() >= 1
 }
 
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
@@ -544,6 +552,15 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
     // from its commit (or none, passed over).
     (k.win.set_fence)(buffer, -1);
     let mut detail = PresentDetail { gpu_pending: crate::fence_pending(acquire), ..Default::default() };
+    if acquire < 0 {
+        k.stats.no_fence += 1;
+    } else if detail.gpu_pending {
+        k.stats.gpu_busy += 1;
+    }
+    // KMS_SYNC=2: the GPU waited for here, whatever its fence says.
+    if sync_level() >= 2 && acquire >= 0 {
+        wait_fence(acquire);
+    }
 
     let t = now_ns();
     let fb = if POWER_ON.load(Ordering::Relaxed) { framebuffer(k, buffer) } else { Err(String::new()) };
@@ -660,7 +677,7 @@ pub(crate) fn take_stats() -> crate::FrameStats {
     let st = std::mem::take(&mut guard.as_mut().expect("kms output").stats);
     let f = st.frames.max(1) as f64;
     if std::env::var_os("KMS_STATS").is_some() && st.commits > 0 {
-        println!("hybris-hwc: kms: {} commits ({:.2} ms each), {} frames passed over", st.commits, st.commit_ns as f64 / 1e6 / st.commits as f64, st.passed);
+        println!("hybris-hwc: kms: {} commits ({:.2} ms each), {} frames passed over, {} with no GPU fence, {} with the GPU busy", st.commits, st.commit_ns as f64 / 1e6 / st.commits as f64, st.passed, st.no_fence, st.gpu_busy);
     }
     crate::FrameStats { fast: 0, skipped: 0, frames: st.frames, over_20ms: st.long, mean_ms: st.sum_ms / f, max_ms: st.max_ms, errors: st.errors }
 }
