@@ -1,5 +1,7 @@
-//! The first setup, once: welcome, Wi-Fi, the PIN (the face taken as it is typed), a finger, all set. The left
-//! panel says what and why, the right one is where you act.
+//! The first setup, once: welcome, Wi-Fi, the PIN (the face taken as it is
+//! typed), a finger, all set - the first thing the owner of a fresh phone
+//! sees, drawn as item/grid draws its table (the owner's, 2026-10-29/30):
+//! the left panel says what and why, the right one is where you act.
 //!
 //! - **Wi-Fi**, as Android's setup asks first: the networks NetworkManager
 //!   sees on the right, the strongest first, the one joined marked; a tap
@@ -22,29 +24,41 @@
 //!   gnome-keyring's ChangeWithMasterPassword, so that after the next boot
 //!   the PIN still opens it. The PIN is never logged.
 //! - **A finger**, through Droidian's reader daemon (fingerprint.rs).
-//! - **Done**: `~/.config/item/setup-done` is written, and the setup goes
-//!   in a wave from its circle.
+//! - **Done**: `~/.config/item/setup-done` is written, and the view pulls
+//!   back: the table's squares become the wallpaper's pixels.
 //!
-//! **Motion.** One circle carries the setup through (orb.frag), and goes
-//! where the user is to act: on the welcome it grows out of a point on the
-//! left and breathes; at "Get started" it rolls over the hinge to the right,
-//! shrinking to the PIN's step mark above the pad; for the finger it grows
-//! into a ring by the reader with a fingerprint inside, whose ridges come
-//! from the middle out and light up, one touch after another; at the end it
-//! rolls back to the left, closing green, and the wave that opens the
-//! desktop starts from it. A move takes 0.4-0.8 s by how far it goes, along
-//! a slight arc. Words leave quickly (180 ms, drifting up), and the next
-//! come in after them, one after another (280 ms each, rising 12 px, 60 ms
-//! apart); the right panel follows the left by 80 ms.
+//! **The table** (table.frag, drawn by the output): dark paper, a grid of
+//! squares over both panels as one, a lamp under it whose light comes
+//! through the slits between the squares in item's accent, going along
+//! the setup's way left to right across both panels (way()). The words are
+//! a letter a square, lowercase, as few as will do (squares.rs): a title a
+//! letter on 2x2 squares, typed a square at a time and erased the same
+//! way; a tap takes words on the right ("› begin"), the networks are rows
+//! of them. A moment worth it (the welcome, all set) is zoomed on: the
+//! words erased, the squares grown, the words typed in them again.
+//!
+//! **The drop.** item's water drop, clear, carries the setup through and
+//! goes where the user is to act, bending the table under it: it grows out
+//! of a point on the right and breathes; stands small over the networks
+//! and over the PIN pad, whose keys are drops born of it; for the finger it
+//! grows into a ring by the reader with a fingerprint inside, whose ridges
+//! come from the middle out and light up, one touch after another; at the
+//! end it is the dock's size. A move takes 0.4-0.8 s by how far it goes,
+//! along a slight arc.
+//!
+//! **The end.** At "› start" the words go, the squares take the wallpaper's
+//! colour under their middles and grow small until a square is a pixel
+//! (the lines going as they do, the light out): the table is the desktop's
+//! picture, and goes; the dock is born of the drop.
 //!
 //! **A finger, touch by touch.** Each touch the reader takes lights the
 //! print further, flashes it and the ring, buzzes, and says what next on
 //! the left; one it could not take shakes the print and says why, in amber.
 //! The last lights the print whole, and a moment after the setup moves on.
 //!
-//! Colours only where they mean something: coral for progress and the
-//! buttons, green for done, amber for a touch to do again, red for a wrong
-//! PIN.
+//! Colour only as light, and where it means something: the accent in the
+//! lamp and the print, green for a finger taken whole, amber for a touch
+//! to do again, red for a wrong PIN (the pad's).
 //!
 //! `SETUP=1` shows it though it was done; `SETUP_DRY=1` changes nothing (no
 //! PIN set, no finger enrolled, nothing written), to try the screens: there
@@ -56,28 +70,22 @@
 use std::sync::{Arc, Mutex};
 
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
-use smithay::backend::renderer::element::solid::SolidColorRenderElement;
-use smithay::backend::renderer::element::{Id, Kind};
+use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::utils::CommitCounter;
-use smithay::utils::{Physical, Rectangle};
+use smithay::utils::Rectangle;
 
 use crate::layout::{self, SCALE};
 use crate::pinpad::{ease, PinPad, Press};
 use crate::shade::ShellElement;
-use crate::text::{Font, Label};
+use crate::squares::{self, Grid, Line, DIM, LIT};
+use crate::text::Font;
 
 const DEFAULT_PIN: &str = "1234";
 const MIN_PIN: usize = 4;
 /// A new PIN's length: typed to it, it is taken (no OK key).
 const NEW_PIN_LEN: usize = 4;
-/// Words: the old ones going, the new ones coming one after another, the
-/// right panel after the left.
-const WORDS_OUT_NS: u64 = 180_000_000;
+/// The reader's arrow coming in after the words.
 const WORDS_IN_NS: u64 = 280_000_000;
-const WORDS_GAP_NS: u64 = 60_000_000;
-const RIGHT_AFTER_NS: u64 = 80_000_000;
-const RISE: f64 = 12.0;
 /// The circle's moves, by how far: from 0.4 s, 0.45 ms more a px, up to
 /// 0.8 s; its arc, of the way across; its breath on the welcome.
 const MOVE_MIN_NS: f64 = 400_000_000.0;
@@ -93,41 +101,48 @@ const FLASH_NS: f64 = 700_000_000.0;
 const LAST_PAUSE_NS: u64 = 900_000_000;
 /// SETUP_DRY's touches for a whole finger.
 const DRY_TOUCHES: i32 = 8;
-/// The setup going at the end, its drop handed to the dock.
-const LEAVE_NS: u64 = 600_000_000;
+/// The setup going at the end (the table's squares becoming the
+/// wallpaper's pixels, Setup::table), its drop handed to the dock after;
+/// its words gone first.
+const PULL_NS: u64 = 2_200_000_000;
+const WORDS_GO_NS: f64 = 250_000_000.0;
+/// The table in from black at the start; the lamp from one place on the
+/// way to the next; where its way begins and ends (of a panel's width, in
+/// from the outer edges) and its height (of the panels').
+const TABLE_IN_NS: u64 = 600_000_000;
+const LAMP_NS: u64 = 1_200_000_000;
+const LAMP_IN: f64 = 0.15;
+const LAMP_Y: f64 = 0.62;
 /// The end's drop: the dock's height.
 const LAST_DROP_R: f64 = 36.0;
-const BUTTON_W: f64 = 240.0;
-const BUTTON_H: f64 = 56.0;
-/// The welcome's circle (and the end's) on the left; the PIN's step mark
-/// and the finger's ring on the right, the ring level with the reader.
-const WELCOME_Y: f64 = 250.0;
+/// The words a tap takes, on the right: the row nearest this.
+const BUTTON_Y: f64 = 640.0;
+/// The welcome's drop (and the end's) on the right, over its words; the
+/// PIN's step mark and the finger's ring on the right too, the ring level
+/// with the reader.
+const WELCOME_Y: f64 = 400.0;
 /// The drop over the PIN pad.
-const PIN_DROP_R: f64 = 20.0;
+const PIN_DROP_R: f64 = 26.0;
 /// A digit pressed: the drop alive, calming over this.
 const POKE_NS: f64 = 1.4e9;
-/// How dark the wallpaper is under the setup.
-const SHADE: f32 = 0.5;
 const PIN_MARK_Y: f64 = 120.0;
 const PRINT_R: f64 = 92.0;
 /// The reader, under the power key (lock.rs's POWER_Y).
 const READER_Y: f64 = 455.0;
-/// The networks' rows on the right: from here down, this tall, this many
-/// at most; scanned again this often while shown.
+/// The networks' rows on the right: from the row nearest here down, a
+/// row between, this many at most; scanned again this often while shown.
 const NETS_Y: f64 = 170.0;
-const NET_H: f64 = 56.0;
-const NET_GAP: f64 = 10.0;
-const NET_W: f64 = 420.0;
 const NETS_MAX: usize = 7;
 const RESCAN_NS: u64 = 8_000_000_000;
 const ARROW_ICON: &str = "/usr/share/icons/Adwaita/symbolic/actions/go-next-symbolic.svg";
 
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
-/// Progress, as the buttons: coral.
-const ACCENT: [f32; 4] = [0.941, 0.541, 0.482, 1.0];
+/// The print's light: item's accent (accent.rs).
+fn accent() -> [f32; 4] {
+    crate::accent::get_f()
+}
 const GREEN: [f32; 4] = [0.180, 0.761, 0.494, 1.0];
 const AMBER: [f32; 4] = [0.965, 0.729, 0.290, 1.0];
-const NOTE: [f32; 4] = [1.0, 1.0, 1.0, 0.85];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Step {
@@ -302,22 +317,42 @@ fn scan() -> Vec<Net> {
     nets
 }
 
-/// A network's row: its name, and what it is (secured, joining, joined).
+/// A network's row (its words are a line of the table's).
 struct NetRow {
     net: Net,
-    name: Label,
-    state: Label,
 }
 
-/// A step's words, and when they come in.
-#[derive(Clone)]
-struct Words {
-    title: Label,
-    lines: Vec<Label>,
-    button: Label,
-    at: u64,
-    /// Where the title stands.
-    top: f64,
+/// A step's words: its title (a word a row), what it is about, the lines
+/// at the bottom, the words a tap takes on the right (and a second).
+struct StepWords(Vec<&'static str>, Vec<String>, Vec<String>, Option<String>, Option<String>);
+
+/// The way the setup has come, 0 to 1 (the lamp under the table goes
+/// along it, left to right across both panels).
+fn way(step: Step) -> f64 {
+    match step {
+        Step::Welcome => 0.0,
+        Step::Wifi => 0.25,
+        Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => 0.5,
+        Step::Finger | Step::FingerKnown => 0.75,
+        Step::Done => 1.0,
+    }
+}
+
+/// The table as a frame has it (output.rs, table.frag): its squares' side
+/// at zoom 1 and their zoom about `anchor`; the lamp under it, how far its
+/// light reaches, how bright; how much the squares are the wallpaper's
+/// colour; how much of it is shown. Logical px, the table's (the hinge
+/// taken out).
+#[derive(Clone, Copy, Debug)]
+pub struct Table {
+    pub square: f64,
+    pub zoom: f64,
+    pub anchor: (f64, f64),
+    pub lamp: (f64, f64),
+    pub reach: f64,
+    pub glow: f64,
+    pub mosaic: f64,
+    pub alpha: f64,
 }
 
 pub struct Setup {
@@ -363,14 +398,19 @@ pub struct Setup {
     /// The fingers enrolled, for the lock's mark.
     pub fingers: usize,
     fonts: Option<(Font, Font)>,
-    words: Words,
-    /// The step before's words going, since when.
-    old: Option<(Words, u64)>,
-    /// What next, on the left while a finger is taken; the one before
-    /// going, since when.
-    note: Label,
-    note_at: u64,
-    old_note: Option<(Label, u64)>,
+    /// The words on the table (squares.rs), each typed from its time; those
+    /// going, erased since when.
+    lines: Vec<Line>,
+    going: Vec<(Line, u64)>,
+    /// The squares' zoom: from, to, since when (it moves once the words
+    /// before it are erased).
+    zoom: (f64, f64, u64),
+    /// The lamp under the table: from, to (of the whole way), since when.
+    lamp: (f64, f64, u64),
+    /// Words were laid once (the first come at their zoom, not zoomed to).
+    shown_once: bool,
+    /// What next, on the left while a finger is taken, and its colour.
+    note: (String, [f32; 4]),
     orb: Orb,
     /// The circle's move: from where, since when, how long.
     from: Orb,
@@ -382,19 +422,12 @@ pub struct Setup {
     move_ns: f64,
     orb_ns: u64,
     started: u64,
-    button_bg: crate::accent::Rounded,
-    /// A second, quieter button under the first (Add another), and its word.
-    button2_bg: MemoryRenderBuffer,
-    button2: Label,
     arrow: Option<MemoryRenderBuffer>,
-    id: Id,
     /// Wi-Fi: the last scan's answer (from a thread), when it was asked,
     /// the rows shown; the network being joined, and the answer.
     scanned: Arc<Mutex<Option<Vec<Net>>>>,
     scan_at: u64,
     nets: Vec<NetRow>,
-    net_bg: MemoryRenderBuffer,
-    net_bg_on: MemoryRenderBuffer,
     joining: Option<String>,
     join_failed: Option<String>,
     joined_answer: Arc<Mutex<Option<(String, Result<(), String>)>>>,
@@ -414,7 +447,6 @@ impl Setup {
             let n = pixmap.width() as i32;
             Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (n, n), SCALE, smithay::utils::Transform::Normal, None))
         };
-        let blank = Words { title: Label::new(44.0, WHITE), lines: Vec::new(), button: Label::new(19.0, WHITE), at: 0, top: 0.0 };
         Setup {
             active: false,
             dry: std::env::var_os("SETUP_DRY").is_some(),
@@ -446,29 +478,24 @@ impl Setup {
             enrolling: false,
             fingers: 0,
             fonts: thin.zip(regular),
-            words: blank,
-            old: None,
-            note: Label::new(19.0, NOTE),
-            note_at: 0,
-            old_note: None,
-            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
-            from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: ACCENT, print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
+            lines: Vec::new(),
+            going: Vec::new(),
+            zoom: (1.0, 1.0, 0),
+            lamp: (0.0, 0.0, 0),
+            shown_once: false,
+            note: (String::new(), LIT),
+            orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: [1.0; 4], print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
+            from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: [1.0; 4], print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
             moved_at: 0,
             pad_split: false,
             poked: 0,
             move_ns: MOVE_MAX_NS,
             orb_ns: 0,
             started: 0,
-            button_bg: crate::accent::Rounded::new(BUTTON_W, BUTTON_H, BUTTON_H / 2.0),
-            button2_bg: crate::grid::rounded(BUTTON_W, BUTTON_H, BUTTON_H / 2.0, [46, 46, 46, 46]),
-            button2: Label::new(19.0, WHITE),
             arrow: tint([240, 240, 240], ARROW_ICON, 32.0),
-            id: Id::new(),
             scanned: Default::default(),
             scan_at: 0,
             nets: Vec::new(),
-            net_bg: crate::grid::rounded(NET_W, NET_H, 16.0, [36, 36, 36, 36]),
-            net_bg_on: crate::grid::rounded(NET_W, NET_H, 16.0, [64, 64, 64, 64]),
             joining: None,
             join_failed: None,
             joined_answer: Default::default(),
@@ -481,9 +508,10 @@ impl Setup {
         self.active = true;
         self.fingers = fingers;
         self.started = hybris_hwc::now_ns();
-        let left = layout::panels()[0];
-        // The circle grows out of a point in the left panel's middle.
-        self.orb.x = left.loc.x as f64 + left.size.w as f64 / 2.0;
+        let right = layout::panels()[1];
+        // The drop grows out of a point in the right panel's middle, where
+        // you act (the left one says).
+        self.orb.x = right.loc.x as f64 + right.size.w as f64 / 2.0;
         self.orb.r = 0.0;
         self.from = self.orb;
         self.moved_at = self.started;
@@ -527,46 +555,175 @@ impl Setup {
         self.active && self.leaving.is_none()
     }
 
-    /// A step's words: the old ones go, these come after them.
-    fn text(&mut self, title: &str, lines: &[&str], button: &str, top: f64) {
-        let Some((thin, regular)) = &self.fonts else { return };
-        let now = hybris_hwc::now_ns();
-        let changed = self.words.title.extent.w > 0 && (title != "" || !self.words.lines.is_empty());
-        if changed {
-            self.old = Some((self.words.clone(), now));
+    /// The step's words, lowercase, as few as will do: its title (a word a
+    /// row, a letter on 2x2 squares), what it is about, a line at the
+    /// bottom, and the words a tap takes on the right (the second under
+    /// the first).
+    fn words(&self) -> StepWords {
+        let s = |v: &str| v.to_owned();
+        let cvid = |mut foot: Vec<String>| {
+            if self.cvid {
+                foot.push(s("your face, as you type, is kept for cv id"));
+            }
+            foot
+        };
+        // Saving: the words of the PIN being saved.
+        let pin_new = self.step == Step::PinNew || self.step == Step::PinAgain || (self.step == Step::Saving && !self.first.is_empty());
+        match self.step {
+            Step::Welcome => StepWords(vec!["hello"], vec![s("a minute, and this duo is yours")], Vec::new(), Some(s("› begin")), None),
+            Step::Wifi => StepWords(vec!["wi-fi"], vec![s("pick a network")], vec![s("the clock is set from it")], Some(s(if self.joined().is_some() { "› next" } else { "› skip" })), None),
+            Step::Checking => StepWords(vec!["pin"], vec![s("a moment")], Vec::new(), None, None),
+            _ if pin_new => StepWords(vec!["pin"], vec![s("four new digits")], cvid(vec![s("it opens the phone after a restart")]), None, None),
+            Step::PinCurrent | Step::Saving => StepWords(vec!["pin"], vec![s("the one you use now")], cvid(vec![s("it opens the phone after a restart")]), None, None),
+            Step::Finger => StepWords(vec!["finger"], vec![s("touch the power key, lift, touch again")], Vec::new(), Some(s("› later")), None),
+            Step::FingerKnown => {
+                let known = if self.fingers == 1 { s("one is added: it opens the phone") } else { format!("{} are added: they open the phone", self.fingers) };
+                StepWords(vec!["finger"], vec![known], Vec::new(), Some(s("› go on")), Some(s("› add another")))
+            }
+            Step::Done => StepWords(vec!["all", "set"], Vec::new(), Vec::new(), Some(s("› start")), None),
+            _ => StepWords(Vec::new(), Vec::new(), Vec::new(), None, None),
         }
-        let mut words = Words { title: Label::new(44.0, [1.0, 1.0, 1.0, 0.95]), lines: Vec::new(), button: Label::new(19.0, WHITE), at: now + if changed { WORDS_OUT_NS - 20_000_000 } else { 0 }, top };
-        words.title.set(thin, title);
-        words.lines = lines
-            .iter()
-            .map(|l| {
-                let mut label = Label::new(19.0, [1.0, 1.0, 1.0, 0.7]);
-                label.set(regular, l);
-                label
-            })
-            .collect();
-        words.button.set(regular, button);
-        self.words = words;
-        self.note.set(regular, "");
-        self.old_note = None;
     }
 
-    /// What next, said on the left: the one before goes, this comes.
+    /// The table's words laid out for the step as it stands: the left
+    /// panel says, the right is where you act. A moment worth it (the
+    /// welcome, all set) is zoomed on.
+    fn lay(&mut self) {
+        let Some((thin, _)) = &self.fonts else { return };
+        let StepWords(title, detail, foot, go, two) = self.words();
+        let zoom = if matches!(self.step, Step::Welcome | Step::Done) { squares::zoom_for(&title) } else { 1.0 };
+        let g = Grid::at(zoom);
+        let panel = layout::panels()[0];
+        let (w, h) = (panel.size.w as f64, panel.size.h as f64);
+        let mut out = Vec::new();
+        // The left panel: from the title's square, a square spare at the right.
+        let wide = (((w - g.o.0) / g.s).floor() as usize).saturating_sub(2).max(4);
+        let mut row = squares::TITLE_ROW;
+        for t in &title {
+            out.push(Line::new(thin, t, 1.0, row, 2.0, zoom, LIT, None));
+            row += 2.0;
+        }
+        row += 1.0;
+        for l in detail.iter().flat_map(|d| squares::wrap(d, wide)) {
+            out.push(Line::new(thin, &l, 1.0, row, 1.0, zoom, DIM, None));
+            row += 1.0;
+        }
+        if self.step == Step::Finger && !self.note.0.is_empty() {
+            row += 1.0;
+            for l in squares::wrap(&self.note.0, wide) {
+                out.push(Line::new(thin, &l, 1.0, row, 1.0, zoom, self.note.1, None));
+                row += 1.0;
+            }
+        }
+        let foot: Vec<String> = foot.iter().flat_map(|f| squares::wrap(f, wide)).collect();
+        let mut r = ((h - g.o.1) / g.s).floor() - 2.0 - foot.len() as f64;
+        for l in &foot {
+            out.push(Line::new(thin, l, 1.0, r, 1.0, zoom, DIM, None));
+            r += 1.0;
+        }
+        // The right panel: the networks, then the words a tap takes, from
+        // its first whole square (and one in, if there is room).
+        let cols = g.cols(1);
+        let first = g.first_col(1);
+        if self.step == Step::Wifi {
+            let room = cols.saturating_sub(3).max(4);
+            let top = g.row_at(NETS_Y);
+            for (i, n) in self.nets.iter().enumerate() {
+                let joining = self.joining.as_deref() == Some(n.net.ssid.as_str());
+                let failed = self.join_failed.as_deref() == Some(n.net.ssid.as_str());
+                let mut name: String = n.net.ssid.to_lowercase().chars().take(room).collect();
+                if joining {
+                    name.push_str(" …");
+                }
+                let color = if n.net.joined || joining { LIT } else if failed { AMBER } else { DIM };
+                out.push(Line::new(thin, &name, first + 1.0, top + 2.0 * i as f64, 1.0, zoom, color, Some(format!("net:{i}"))));
+            }
+        }
+        let button_row = g.row_at(BUTTON_Y);
+        for (i, (word, tag)) in [(go, "go"), (two, "two")].into_iter().enumerate() {
+            if let Some(word) = word {
+                let n = word.chars().count();
+                let col = first + if n + 2 <= cols { 1.0 } else { 0.0 };
+                out.push(Line::new(thin, &word, col, button_row + 2.0 * i as f64, 1.0, zoom, LIT, Some(tag.to_owned())));
+            }
+        }
+        self.reconcile(out, zoom);
+    }
+
+    /// The new words in: the same words in the same place stay as they
+    /// are; the others are erased, letter by letter from their end, and the
+    /// new typed after them, one line after another. A new zoom erases
+    /// all, zooms, then types.
+    fn reconcile(&mut self, mut new: Vec<Line>, zoom: f64) {
+        let now = hybris_hwc::now_ns();
+        let erase = |l: &Line| l.letters() as u64 * squares::ERASE_NS;
+        let old = std::mem::take(&mut self.lines);
+        let mut start = now;
+        if (zoom - self.zoom.1).abs() > 1e-6 {
+            let erased = old.iter().map(erase).max().unwrap_or(0);
+            self.going.extend(old.into_iter().map(|l| (l, now)));
+            let from = self.zoom_now(now);
+            self.zoom = (from, zoom, now + erased);
+            start = now + erased + if self.lines_shown_once() { squares::ZOOM_NS } else { 0 };
+            if !self.lines_shown_once() {
+                // The first words: no zoom to see, at the zoom at once.
+                self.zoom = (zoom, zoom, now);
+            }
+        } else {
+            let mut kept = vec![false; new.len()];
+            for l in old {
+                match new.iter().position(|n| n.same(&l)) {
+                    Some(i) if !kept[i] => {
+                        kept[i] = true;
+                        new[i].at = l.at;
+                    }
+                    _ => {
+                        start = start.max(now + erase(&l));
+                        self.going.push((l, now));
+                    }
+                }
+            }
+            for (i, l) in new.iter_mut().enumerate() {
+                if !kept[i] {
+                    l.at = u64::MAX;
+                }
+            }
+        }
+        for l in new.iter_mut().filter(|l| l.at == 0 || l.at == u64::MAX) {
+            l.at = start;
+            start = l.done_at() + squares::TYPE_NS;
+        }
+        self.lines = new;
+        self.shown_once = true;
+    }
+
+    fn lines_shown_once(&self) -> bool {
+        self.shown_once
+    }
+
+    /// The squares' zoom at a frame.
+    fn zoom_now(&self, frame_ns: u64) -> f64 {
+        let (from, to, at) = self.zoom;
+        if frame_ns <= at {
+            return from;
+        }
+        if frame_ns >= at + squares::ZOOM_NS {
+            return to;
+        }
+        let k = ease((frame_ns - at) as f64 / squares::ZOOM_NS as f64);
+        from + (to - from) * k
+    }
+
+    /// What next, said on the left while a finger is taken.
     fn note(&mut self, text: &str, color: [f32; 4]) {
-        let Some((_, regular)) = &self.fonts else { return };
-        let now = hybris_hwc::now_ns();
-        let mut label = Label::new(19.0, color);
-        label.set(regular, text);
-        let old = std::mem::replace(&mut self.note, label);
-        if old.extent.w > 0 {
-            self.old_note = Some((old, now));
-        }
-        self.note_at = now + if self.old_note.is_some() { WORDS_OUT_NS / 2 } else { 0 };
+        self.note = (text.to_lowercase(), color);
+        self.lay();
     }
 
-    /// When the right panel's things come in: after the left's.
+    /// When the right panel's things come in: after the left's words.
     fn right_at(&self) -> u64 {
-        self.words.at + RIGHT_AFTER_NS + WORDS_GAP_NS * (1 + self.words.lines.len() as u64)
+        let now = hybris_hwc::now_ns();
+        self.lines.iter().filter(|l| l.tag.is_none()).map(Line::done_at).max().unwrap_or(now).min(now + 1_500_000_000)
     }
 
     fn go(&mut self, step: Step) {
@@ -602,22 +759,17 @@ impl Setup {
             self.pad.gather(now);
             self.moved_at = now + crate::pinpad::SPLIT_NS;
         }
+        // The lamp on along the way; the words laid for the step (before
+        // the pad: its keys come after the words).
+        let from = self.lamp_now(now);
+        self.lamp = (from, way(step), now);
+        if step == Step::Finger {
+            self.note = (String::new(), LIT);
+        }
+        self.lay();
         match step {
-            Step::Welcome => self.text("Hello", &["Let's make this Duo yours:", "Wi-Fi, a PIN, a fingerprint, and you're in."], "Get started", WELCOME_Y + 90.0),
-            Step::Wifi => {
-                let button = if self.joined().is_some() { "Next" } else { "Skip" };
-                self.text("Wi-Fi", &["Choose a network.", "The clock is set from it,", "while you finish the setup."], button, 150.0);
-                self.scan_now();
-            }
-            Step::Checking => self.text("Your PIN", &["One moment…"], "", 150.0),
+            Step::Wifi => self.scan_now(),
             Step::PinNew => {
-                if was != Step::PinAgain && was != Step::Saving {
-                    if self.cvid {
-                        self.text("Create a PIN", &["Your PIN unlocks the phone after a restart,", "and whenever your finger isn't recognized.", "Your face, as you type it, is kept for CV ID."], "", 150.0);
-                    } else {
-                        self.text("Create a PIN", &["Your PIN unlocks the phone after a restart,", "and whenever your finger isn't recognized."], "", 150.0);
-                    }
-                }
                 let at = self.right_at();
                 self.pad.show_at(at);
                 self.pad.say("Enter a new 4-digit PIN");
@@ -627,20 +779,12 @@ impl Setup {
                 self.pad.say("Enter it again");
             }
             Step::PinCurrent => {
-                if was != Step::Saving {
-                    if self.cvid {
-                        self.text("Your PIN", &["Enter the PIN you use now.", "It unlocks the phone after a restart.", "Your face, as you type it, is kept for CV ID."], "", 150.0);
-                    } else {
-                        self.text("Your PIN", &["Enter the PIN you use now.", "It unlocks the phone after a restart."], "", 150.0);
-                    }
-                }
                 let at = self.right_at();
                 self.pad.show_at(at);
                 self.pad.say("Enter PIN");
             }
             Step::Saving => self.pad.say("Saving…"),
             Step::Finger => {
-                self.text("Add a fingerprint", &["Touch the sensor under the power key.", "Lift your finger after each touch,", "and move it a little each time."], "Later", 150.0);
                 self.progress = 0;
                 self.lit = 0.0;
                 (self.touched_at, self.poor_at, self.last_at) = (None, None, None);
@@ -649,17 +793,52 @@ impl Setup {
                 }
                 self.enrolling = true;
             }
-            Step::FingerKnown => {
-                let n = self.fingers;
-                let known = if n == 1 { "A fingerprint is already added:".to_owned() } else { format!("{n} fingerprints are already added:") };
-                self.text("Your fingerprint", &[&known, "touch the sensor to unlock.", "Add another, or carry on."], "Continue", 150.0);
-                if let Some((_, regular)) = &self.fonts {
-                    self.button2.set(regular, "Add another");
-                }
-                self.lit = 1.0;
-            }
-            Step::Done => self.text("All set", &["Touch the sensor to unlock,", "or swipe up for your PIN."], "Start", WELCOME_Y + 90.0),
+            Step::FingerKnown => self.lit = 1.0,
+            _ => {}
         }
+    }
+
+    /// Where the lamp is along the way at a frame (0 to 1).
+    fn lamp_now(&self, frame_ns: u64) -> f64 {
+        let (from, to, at) = self.lamp;
+        let k = ease(frame_ns.saturating_sub(at) as f64 / LAMP_NS as f64);
+        from + (to - from) * k
+    }
+
+    /// The table this frame: the lamp along the way, breathing (lit
+    /// whole, still, when all is set); the squares' zoom; at the end the
+    /// squares taking the wallpaper's colour and growing small until they
+    /// are its pixels, the light going out, then the table gone - the
+    /// desktop under it the same picture (the owner's, 2026-10-29: "as if
+    /// our squares were these pixels").
+    pub fn table(&self, frame_ns: u64) -> Option<Table> {
+        if !self.active {
+            return None;
+        }
+        let panel = layout::panels()[0];
+        let (w, h) = (panel.size.w as f64, panel.size.h as f64);
+        let square = squares::square();
+        let way = self.lamp_now(frame_ns);
+        let lamp = ((LAMP_IN + way * (2.0 - 2.0 * LAMP_IN)) * w, LAMP_Y * h);
+        let t = frame_ns.saturating_sub(self.started) as f64 / 1e9;
+        let done = self.step == Step::Done;
+        let mut glow = if done { 1.0 } else { 0.85 + 0.15 * (t * 2.4).sin() };
+        let reach = square * if done { 13.0 } else { 4.5 };
+        let mut zoom = self.zoom_now(frame_ns);
+        let mut mosaic = 0.0;
+        // In from black at the start.
+        let mut alpha = ease(frame_ns.saturating_sub(self.started) as f64 / TABLE_IN_NS as f64);
+        if let Some(at) = self.leaving {
+            let ms = frame_ns.saturating_sub(at) as f64 / 1e6;
+            mosaic = ease((ms - 100.0) / 500.0);
+            glow *= 1.0 - ease(ms / 600.0);
+            // To a physical pixel a square, evenly to the eye (by its log).
+            let small = 1.0 / (square * SCALE as f64);
+            let k = ease((ms - 450.0) / 1500.0);
+            zoom = (zoom.ln() + (small.ln() - zoom.ln()) * k).exp();
+            alpha = 1.0 - ease((ms - 1950.0) / 250.0);
+        }
+        Some(Table { square, zoom, anchor: squares::anchor(), lamp, reach, glow, mosaic, alpha })
     }
 
     /// Where the circle goes for the step, and how it looks.
@@ -667,7 +846,7 @@ impl Setup {
         let panels = layout::panels();
         let middle = |i: usize| panels[i].loc.x as f64 + panels[i].size.w as f64 / 2.0;
         let dim = |a: f32| [a, a, a, a];
-        let orb = Orb { x: middle(0), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: ACCENT, print: 0.0, lit: self.lit, flash: 0.0, fill: 0.0 };
+        let orb = Orb { x: middle(1), y: WELCOME_Y, r: 52.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: dim(0.92), accent: accent(), print: 0.0, lit: self.lit, flash: 0.0, fill: 0.0 };
         match self.step {
             Step::Welcome => {
                 let t = frame_ns.saturating_sub(self.started) as f64;
@@ -676,26 +855,17 @@ impl Setup {
             }
             // A small drop over the networks, empty.
             Step::Wifi => Orb { x: middle(1), y: PIN_MARK_Y - 10.0, r: PIN_DROP_R, ..orb },
-            Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => {
-                // A small drop over the pad, filling with coral: a third
-                // for the new PIN, two for it again, full as it is saved;
-                // half for the PIN there is.
-                let fill = match self.step {
-                    Step::PinNew => 1.0 / 3.0,
-                    Step::PinAgain => 2.0 / 3.0,
-                    Step::PinCurrent => 0.5,
-                    Step::Saving => 1.0,
-                    _ => 0.0,
-                };
-                Orb { x: middle(1), y: PIN_MARK_Y, r: PIN_DROP_R, fill, ..orb }
-            }
+            // A drop over the pad, clear (no colour in the water: the
+            // owner's, 2026-10-29).
+            Step::Checking | Step::PinNew | Step::PinAgain | Step::PinCurrent | Step::Saving => Orb { x: middle(1), y: PIN_MARK_Y, r: PIN_DROP_R, ..orb },
             Step::Finger => {
                 // A drop by the reader with the print inside; a touch
                 // swells it a little, and it lets go.
                 let flash = self.flash(frame_ns);
                 // The whole finger taken: the print turns green.
                 let green = self.last_at.map(|t| ease(frame_ns.saturating_sub(t) as f64 / 300_000_000.0) as f32).unwrap_or(0.0);
-                let accent = std::array::from_fn(|i| ACCENT[i] + (GREEN[i] - ACCENT[i]) * green);
+                let a = accent();
+                let accent = std::array::from_fn(|i| a[i] + (GREEN[i] - a[i]) * green);
                 Orb { x: middle(1), y: READER_Y, r: PRINT_R + 6.0 * flash, base: dim(0.2), accent, print: 1.0, flash, ..orb }
             }
             // The known finger: the print whole in the drop, lit.
@@ -734,7 +904,8 @@ impl Setup {
     /// The circle now, for the output to draw (orb.frag), with the setup's
     /// alpha.
     pub fn orb(&self) -> Option<Orb> {
-        (self.active && self.leaving.is_none() && self.orb.r > 0.3).then_some(self.orb)
+        // Kept while the table goes at the end: the dock is born of it after.
+        (self.active && self.orb.r > 0.3).then_some(self.orb)
     }
 
     /// Answers from the threads, and the made-up reader; whether anything
@@ -828,7 +999,7 @@ impl Setup {
             60..=84 => "Now the edges of your finger",
             _ => "Almost there",
         };
-        self.note(next, NOTE);
+        self.note(next, LIT);
     }
 
     /// What the reader says while a finger is enrolled.
@@ -936,7 +1107,7 @@ impl Setup {
         if let Some(nets) = scanned {
             let was = self.joined();
             let keep: Vec<Net> = nets;
-            self.nets = keep.into_iter().map(|net| NetRow { net, name: Label::new(19.0, WHITE), state: Label::new(16.0, NOTE) }).collect();
+            self.nets = keep.into_iter().map(|net| NetRow { net }).collect();
             self.refresh_rows();
             if was.is_none() && self.joined().is_some() && self.joining.is_none() {
                 self.relabel_button();
@@ -970,39 +1141,14 @@ impl Setup {
         changed
     }
 
-    /// The button's word as the network stands: Next once joined.
+    /// The button's word as the network stands (next once joined), the
+    /// rows' words: the table's words laid again.
     fn relabel_button(&mut self) {
-        let word = if self.joined().is_some() { "Next" } else { "Skip" };
-        if let Some((_, regular)) = &self.fonts {
-            self.words.button.set(regular, word);
-        }
+        self.lay();
     }
 
-    /// The rows' words.
     fn refresh_rows(&mut self) {
-        let Some((_, regular)) = &self.fonts else { return };
-        for r in &mut self.nets {
-            let (state, colour) = if self.joining.as_deref() == Some(r.net.ssid.as_str()) {
-                ("Connecting…", ACCENT)
-            } else if r.net.joined {
-                ("Connected", GREEN)
-            } else if self.join_failed.as_deref() == Some(r.net.ssid.as_str()) {
-                ("Didn't connect", AMBER)
-            } else if r.net.secure {
-                ("Secured", [1.0, 1.0, 1.0, 0.5])
-            } else {
-                ("Open", [1.0, 1.0, 1.0, 0.5])
-            };
-            r.name.set(regular, &r.net.ssid);
-            r.state = Label::new(16.0, colour);
-            r.state.set(regular, state);
-        }
-    }
-
-    /// A network's row on the right panel.
-    fn net_rect(i: usize) -> Rectangle<f64, smithay::utils::Logical> {
-        let right = layout::panels()[1];
-        Rectangle::new(((right.loc.x as f64 + (right.size.w as f64 - NET_W) / 2.0), NETS_Y + i as f64 * (NET_H + NET_GAP)).into(), (NET_W, NET_H).into())
+        self.lay();
     }
 
     /// Whether the system's dialog may come over the setup: a Wi-Fi
@@ -1011,15 +1157,16 @@ impl Setup {
         self.holds_screen() && self.step == Step::Wifi
     }
 
-    fn button_rect() -> Rectangle<f64, smithay::utils::Logical> {
-        let right = layout::panels()[1];
-        Rectangle::new(((right.loc.x as f64 + (right.size.w as f64 - BUTTON_W) / 2.0), 640.0).into(), (BUTTON_W, BUTTON_H).into())
-    }
-
-    /// The second button, under the first.
-    fn button2_rect() -> Rectangle<f64, smithay::utils::Logical> {
-        let b = Self::button_rect();
-        Rectangle::new((b.loc.x, b.loc.y + BUTTON_H + 16.0).into(), b.size)
+    /// The words a tap at (`x`, `y`) takes, typed: their tag (a button, a
+    /// network) - a square round them taking it too.
+    fn tapped(&self, x: f64, y: f64) -> Option<String> {
+        let now = hybris_hwc::now_ns();
+        self.lines.iter().filter(|l| l.tag.is_some() && l.typed(now) > 0).find_map(|l| {
+            let r = l.rect();
+            let pad = Grid::at(l.zoom).s / 2.0;
+            let hit = x >= r.loc.x - pad && x < r.loc.x + r.size.w + pad && y >= r.loc.y - pad && y < r.loc.y + r.size.h + pad;
+            hit.then(|| l.tag.clone().unwrap_or_default())
+        })
     }
 
     fn has_pad(&self) -> bool {
@@ -1046,16 +1193,19 @@ impl Setup {
             }
             return;
         }
-        if self.step == Step::Wifi {
-            if let Some(i) = (0..self.nets.len()).find(|&i| Self::net_rect(i).contains((x, y))) {
-                let net = self.nets[i].net.clone();
+        if self.leaving.is_some() {
+            return;
+        }
+        let tag = self.tapped(x, y);
+        if let Some(i) = tag.as_deref().and_then(|t| t.strip_prefix("net:")).and_then(|i| i.parse::<usize>().ok()).filter(|_| self.step == Step::Wifi) {
+            if let Some(net) = self.nets.get(i).map(|r| r.net.clone()) {
                 if !net.joined && self.joining.is_none() {
                     self.join(&net.ssid);
                 }
-                return;
             }
+            return;
         }
-        if self.step == Step::FingerKnown && Self::button2_rect().contains((x, y)) {
+        if self.step == Step::FingerKnown && tag.as_deref() == Some("two") {
             tracing::info!("setup: another finger");
             self.go(Step::Finger);
             if !self.dry_finger {
@@ -1063,7 +1213,7 @@ impl Setup {
             }
             return;
         }
-        if !Self::button_rect().contains((x, y)) {
+        if tag.as_deref() != Some("go") {
             return;
         }
         match self.step {
@@ -1146,9 +1296,9 @@ impl Setup {
         }
         // The warm-ups item-session held back while the setup was up.
         let _ = std::process::Command::new("systemctl").args(["--user", "start", "--no-block", "item-warm.service", "item-chromium.service"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
-        let now = hybris_hwc::now_ns();
-        self.leaving = Some(now);
-        self.handed = Some((now, (self.orb.x, self.orb.y), self.orb.r));
+        // The squares become the wallpaper's pixels (table()); the drop
+        // goes on to the dock after.
+        self.leaving = Some(hybris_hwc::now_ns());
     }
 
     /// The drop the setup went with, once: the dock is born of it.
@@ -1159,7 +1309,7 @@ impl Setup {
     /// How much of the setup is still there: 1, fading to 0 as it goes.
     pub fn shown(&self, frame_ns: u64) -> f64 {
         match self.leaving {
-            Some(t) => 1.0 - ease(frame_ns.saturating_sub(t) as f64 / LEAVE_NS as f64),
+            Some(t) => 1.0 - ease(frame_ns.saturating_sub(t) as f64 / WORDS_GO_NS),
             None if self.active => 1.0,
             None => 0.0,
         }
@@ -1171,9 +1321,10 @@ impl Setup {
             return false;
         }
         if let Some(t) = self.leaving {
-            if frame_ns >= t + LEAVE_NS {
+            if frame_ns >= t + PULL_NS {
                 self.active = false;
                 self.leaving = None;
+                self.handed = Some((frame_ns, (self.orb.x, self.orb.y), self.orb.r));
             }
             return true;
         }
@@ -1201,45 +1352,27 @@ impl Setup {
                 self.orb.x += crate::pinpad::shake(frame_ns.saturating_sub(t));
             }
         }
-        let notes_moving = frame_ns < self.note_at + WORDS_IN_NS || self.old_note.as_ref().is_some_and(|(_, t)| frame_ns < t + WORDS_OUT_NS);
-        if self.old_note.as_ref().is_some_and(|(_, t)| frame_ns >= t + WORDS_OUT_NS) {
-            self.old_note = None;
-        }
-        let words_moving = notes_moving || frame_ns < self.right_at() + WORDS_IN_NS + 200_000_000 || self.old.as_ref().is_some_and(|(_, t)| frame_ns < t + WORDS_OUT_NS);
-        if self.old.as_ref().is_some_and(|(_, t)| frame_ns >= t + WORDS_OUT_NS) {
-            self.old = None;
-        }
-        words_moving
-            || k < 1.0
-            || self.lit != lit_to
-            || self.flash(frame_ns) > 0.0
-            || self.poor_at.is_some_and(|t| frame_ns < t + crate::pinpad::SHAKE_NS)
-            || self.step == Step::Welcome
-            || (self.poked != 0 && (frame_ns.saturating_sub(self.poked) as f64) < POKE_NS * 2.0)
-            || (self.has_pad() && self.pad.moving(frame_ns))
-            // The arrow to the reader bobs while a finger is awaited.
-            || self.step == Step::Finger
+        // The words erased go; the table's lamp breathes all along.
+        self.going.retain(|(l, t)| frame_ns < t + l.letters() as u64 * squares::ERASE_NS);
+        true
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        let bg = self.button_bg.get();
-        [&bg]
-            .into_iter()
-            .chain(self.arrow.iter())
+        self.arrow
+            .iter()
             .chain(self.pad.buffers())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
 
-    /// The setup as it stands, fading as it goes; the circle is the
-    /// output's to draw (orb.frag, the dock's water).
+    /// The setup's words on its table (the output draws the table and the
+    /// drop: table.frag, the dock's water), going first at the end.
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
         if !self.active {
             return Vec::new();
         }
         let fade = self.shown(frame_ns);
-        let panels = layout::panels();
-        let (left, right) = (panels[0], panels[1]);
+        let right = layout::panels()[1];
         let mut out = if self.has_pad() { self.pad.elements(renderer, frame_ns, 0.0) } else { Vec::new() };
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, alpha: f64, src: Option<Rectangle<f64, smithay::utils::Logical>>| {
             let alpha = alpha * fade;
@@ -1251,89 +1384,31 @@ impl Setup {
                 out.push(ShellElement::Text(e));
             }
         };
-        let cx = |w: i32, p: Rectangle<i32, smithay::utils::Logical>| (p.loc.x + (p.size.w - w) / 2) as f64;
-        // A thing coming in at `at`: its alpha and how far below it still is.
-        let coming = |at: u64| {
-            let k = ease(frame_ns.saturating_sub(at) as f64 / WORDS_IN_NS as f64);
-            let k = if frame_ns < at { 0.0 } else { k };
-            (k, RISE * (1.0 - k))
+        // A line as far as `n` of its letters, at the zoom it is laid for
+        // (none while the squares move).
+        let zoom = self.zoom_now(frame_ns);
+        let mut line = |out: &mut Vec<ShellElement>, l: &Line, n: usize| {
+            if n == 0 || (l.zoom - zoom).abs() > 1e-6 {
+                return;
+            }
+            let r = l.rect();
+            let side = r.size.h;
+            let src = Rectangle::<f64, smithay::utils::Logical>::from_size((side * n as f64, side).into());
+            put(out, &l.buffer, r.loc.x, r.loc.y, 1.0, Some(src));
         };
-
-        // The words going: quickly, drifting up.
-        if let Some((old, t)) = &self.old {
-            let k = ease(frame_ns.saturating_sub(*t) as f64 / WORDS_OUT_NS as f64);
-            let (alpha, dy) = (1.0 - k, -8.0 * k);
-            put(&mut out, &old.title.buffer, cx(old.title.extent.w, left), old.top + dy, alpha, None);
-            let mut y = old.top + old.title.extent.h as f64 + 22.0;
-            for l in &old.lines {
-                put(&mut out, &l.buffer, cx(l.extent.w, left), y + dy, alpha, None);
-                y += l.extent.h as f64 + 6.0;
-            }
-            if old.button.extent.w > 0 {
-                let b = Self::button_rect();
-                put(&mut out, &old.button.buffer, b.loc.x + (BUTTON_W - old.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - old.button.extent.h as f64) / 2.0 + dy, alpha, None);
-                put(&mut out, &self.button_bg.get(), b.loc.x, b.loc.y + dy, alpha, None);
-            }
+        for (l, t) in &self.going {
+            let gone = (frame_ns.saturating_sub(*t) / squares::ERASE_NS) as usize;
+            line(&mut out, l, l.letters().saturating_sub(gone));
         }
-
-        // The words coming: the title, then each line, 60 ms apart.
-        let w = &self.words;
-        let (a, dy) = coming(w.at);
-        put(&mut out, &w.title.buffer, cx(w.title.extent.w, left), w.top + dy, a, None);
-        let mut y = w.top + w.title.extent.h as f64 + 22.0;
-        for (i, l) in w.lines.iter().enumerate() {
-            let (a, dy) = coming(w.at + WORDS_GAP_NS * (i as u64 + 1));
-            put(&mut out, &l.buffer, cx(l.extent.w, left), y + dy, a, None);
-            y += l.extent.h as f64 + 6.0;
+        for l in &self.lines {
+            line(&mut out, l, l.typed(frame_ns));
         }
-
-        // A finger: what next under the words, the one before going; the
-        // print is the circle's (orb.frag). On the right, an arrow bobbing
-        // at the reader.
-        if self.step == Step::Finger {
-            let note_y = y + 34.0;
-            if let Some((old, t)) = &self.old_note {
-                let k = ease(frame_ns.saturating_sub(*t) as f64 / WORDS_OUT_NS as f64);
-                put(&mut out, &old.buffer, cx(old.extent.w, left), note_y - 8.0 * k, 1.0 - k, None);
-            }
-            let (a, dy) = coming(self.note_at);
-            put(&mut out, &self.note.buffer, cx(self.note.extent.w, left), note_y + dy, a, None);
-            if let (Some(arrow), true) = (&self.arrow, self.enrolling) {
-                let (a, _) = coming(self.right_at());
-                let bob = 8.0 * (frame_ns as f64 / 1e9 * std::f64::consts::TAU / 1.2).sin().abs();
-                put(&mut out, arrow, (right.loc.x + right.size.w) as f64 - 60.0 + bob, READER_Y - 16.0, a, None);
-            }
+        // A finger: an arrow bobbing at the reader.
+        if let (Some(arrow), true, Step::Finger) = (&self.arrow, self.enrolling, self.step) {
+            let a = ease(frame_ns.saturating_sub(self.right_at()) as f64 / WORDS_IN_NS as f64);
+            let bob = 8.0 * (frame_ns as f64 / 1e9 * std::f64::consts::TAU / 1.2).sin().abs();
+            put(&mut out, arrow, (right.loc.x + right.size.w) as f64 - 60.0 + bob, READER_Y - 16.0, a, None);
         }
-
-        // The right panel's button, after the left's words.
-        if w.button.extent.w > 0 {
-            let (a, dy) = coming(self.right_at());
-            let b = Self::button_rect();
-            put(&mut out, &w.button.buffer, b.loc.x + (BUTTON_W - w.button.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - w.button.extent.h as f64) / 2.0 + dy, a, None);
-            put(&mut out, &self.button_bg.get(), b.loc.x, b.loc.y + dy, a, None);
-        }
-        if self.step == Step::Wifi {
-            for (i, row) in self.nets.iter().enumerate() {
-                let (a, dy) = coming(self.right_at() + WORDS_GAP_NS * i as u64);
-                let r = Self::net_rect(i);
-                let bg = if row.net.joined || self.joining.as_deref() == Some(row.net.ssid.as_str()) { &self.net_bg_on } else { &self.net_bg };
-                put(&mut out, &row.name.buffer, r.loc.x + 22.0, r.loc.y + (NET_H - row.name.extent.h as f64) / 2.0 + dy, a, None);
-                put(&mut out, &row.state.buffer, r.loc.x + NET_W - 22.0 - row.state.extent.w as f64, r.loc.y + (NET_H - row.state.extent.h as f64) / 2.0 + dy, a, None);
-                put(&mut out, bg, r.loc.x, r.loc.y + dy, a, None);
-            }
-        }
-        if self.step == Step::FingerKnown {
-            let (a, dy) = coming(self.right_at() + WORDS_GAP_NS);
-            let b = Self::button2_rect();
-            put(&mut out, &self.button2.buffer, b.loc.x + (BUTTON_W - self.button2.extent.w as f64) / 2.0, b.loc.y + (BUTTON_H - self.button2.extent.h as f64) / 2.0 + dy, a, None);
-            put(&mut out, &self.button2_bg, b.loc.x, b.loc.y + dy, a, None);
-        }
-
-        // The wallpaper through, darkened, over everything else (the output
-        // puts the wallpaper under it).
-        let (lw, lh) = layout::size();
-        let rect = Rectangle::<i32, Physical>::from_size((lw * SCALE, lh * SCALE).into());
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), rect, CommitCounter::from((fade * 1000.0) as usize), [0.0, 0.0, 0.0, SHADE * fade as f32], Kind::Unspecified)));
         out
     }
 }

@@ -85,6 +85,43 @@ impl Font {
         }
         (rgba, w, h)
     }
+
+    /// `text` a letter a square (item/grid's table: the setup's words),
+    /// squares `square` logical px wide; each letter centred in its square
+    /// on a baseline a little under the square's middle, `size` px high.
+    /// Premultiplied RGBA, its size in physical px: as wide as the squares,
+    /// one square high.
+    pub fn squared(&self, text: &str, square: f32, size: f32, color: [f32; 4]) -> (Vec<u8>, i32, i32) {
+        let px = size * SCALE as f32;
+        let sq = square * SCALE as f32;
+        let n = text.chars().count().max(1);
+        let (w, h) = ((sq * n as f32).ceil() as i32, sq.ceil() as i32);
+        let mut rgba = vec![0u8; (w * h * 4) as usize];
+        let base = sq / 2.0 + px * 0.36;
+        for (i, c) in text.chars().enumerate() {
+            if c == ' ' {
+                continue;
+            }
+            let (m, coverage) = self.0.rasterize(c, px);
+            let x0 = (sq * i as f32 + (sq - m.width as f32) / 2.0).round() as i32;
+            let y0 = base.round() as i32 - m.height as i32 - m.ymin;
+            for gy in 0..m.height as i32 {
+                for gx in 0..m.width as i32 {
+                    let (x, y) = (x0 + gx, y0 + gy);
+                    if x < 0 || y < 0 || x >= w || y >= h {
+                        continue;
+                    }
+                    let a = coverage[(gy * m.width as i32 + gx) as usize] as f32 / 255.0 * color[3];
+                    let i = ((y * w + x) * 4) as usize;
+                    for (k, c) in color[..3].iter().enumerate() {
+                        rgba[i + k] = rgba[i + k].max((c * a * 255.0).round() as u8);
+                    }
+                    rgba[i + 3] = rgba[i + 3].max((a * 255.0).round() as u8);
+                }
+            }
+        }
+        (rgba, w, h)
+    }
 }
 
 /// A line of text as a texture, remade only when the text changes.

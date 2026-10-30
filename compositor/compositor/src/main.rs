@@ -44,6 +44,7 @@ mod follow;
 mod status;
 mod keyring;
 mod setup;
+mod squares;
 mod layout;
 mod notify;
 mod output;

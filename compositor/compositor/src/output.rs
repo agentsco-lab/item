@@ -246,6 +246,10 @@ pub struct Screen {
     door_ids: Vec<smithay::backend::renderer::element::Id>,
     wave_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
     orb_program: Option<smithay::backend::renderer::gles::GlesPixelProgram>,
+    /// The first setup's table (table.frag), drawn into `table_tex` each
+    /// frame it is up: shown, and what its drops bend.
+    table_program: Option<smithay::backend::renderer::gles::GlesTexProgram>,
+    table_tex: Option<smithay::backend::renderer::gles::GlesTexture>,
     /// The panels' soft edges (edge.frag), made once: over the setup, and
     /// over the wallpaper.
     edges: Option<[Vec<smithay::backend::renderer::gles::element::PixelShaderElement>; 2]>,
@@ -356,7 +360,7 @@ impl Screen {
         };
         tracing::info!("frames: {}", if canvas.is_some() { "drawn where changed into a buffer of our own, copied whole" } else { "drawn whole (CANVAS=0)" });
         let vsync_period_ns = hwc.vsync_period_ns as u64;
-        Screen { output, frames_drawn: 0, reprime: 0, more_frames: false, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, turn: 0, turning: None, turn_glass: None, fills_shown: [true, true], turn_done_ns: None, stage: None, turn_program: None, covers: Default::default(), card_id: smithay::backend::renderer::element::Id::new(), cover_program: None, turn_ns: std::env::var("TURN_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300) * 1_000_000, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), scene_damage: smithay::backend::renderer::utils::DamageBag::new(8), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), deck_dark_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_first: None, setup_dark_id: smithay::backend::renderer::element::Id::new(), wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, previews: Default::default(), _hwc: hwc }
+        Screen { output, frames_drawn: 0, reprime: 0, more_frames: false, snapshots: Default::default(), shot: None, mirror: crate::mirror::Mirror::new(), mirror_tex: None, mirror_now: false, frames_left: 0, vsync_period_ns, pixels: width as i64 * height as i64, clock_origin_ns: hybris_hwc::now_ns(), surface, renderer, damage_tracker, canvas, canvas_ready: false, turn: 0, turning: None, turn_glass: None, fills_shown: [true, true], turn_done_ns: None, stage: None, turn_program: None, covers: Default::default(), card_id: smithay::backend::renderer::element::Id::new(), cover_program: None, turn_ns: std::env::var("TURN_MS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(300) * 1_000_000, door: None, fold_pic: None, fold_program: None, fold_dev: (0.0, 0), fold_k: 0.0, fold_was: false, door_ids: Vec::new(), wave_program: None, orb_program: None, table_program: None, table_tex: None, edges: None, wave_id: smithay::backend::renderer::element::Id::new(), glass: None, scene: None, scene_ready: false, scene_id: smithay::backend::renderer::element::Id::new(), scene_damage: smithay::backend::renderer::utils::DamageBag::new(8), night_program: None, night_was: None, dim_id: smithay::backend::renderer::element::Id::new(), deck_dark_id: smithay::backend::renderer::element::Id::new(), setup_wall_id: smithay::backend::renderer::element::Id::new(), carry_id: smithay::backend::renderer::element::Id::new(), lock_wall_ids: Vec::new(), dot: None, wall: None, wall_old: None, wall_first: None, setup_dark_id: smithay::backend::renderer::element::Id::new(), wall_at: (smithay::backend::renderer::element::Id::new(), 0.0), vignette_program: None, vignette_at: None, previews: Default::default(), _hwc: hwc }
     }
 
     /// Whether the content is on the move on the glass (following the hand,
@@ -539,7 +543,8 @@ impl Screen {
         if dialog_over_setup {
             elements.extend(state.dialog.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
         }
-        let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns)).unwrap_or_default();
+        let table = state.setup.table(frame_ns).and_then(|t| self.setup_table(&t).map(|tex| (tex, t.alpha)));
+        let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns, table.as_ref().map(|t| &t.0))).unwrap_or_default();
         // Under the dialog the setup's words and rows are not drawn (they
         // showed through it): its dark and wallpaper only.
         if !dialog_over_setup {
@@ -550,7 +555,10 @@ impl Screen {
             if !dialog_over_setup {
                 elements.extend(setup_drop);
             }
-            elements.extend(self.setup_wall(state.setup.shown(frame_ns) as f32));
+            match table {
+                Some((tex, alpha)) => elements.extend(self.setup_table_element(tex, alpha as f32)),
+                None => elements.extend(self.setup_wall(state.setup.shown(frame_ns) as f32)),
+            }
         }
         // A call, over the lock screen (calls.rs).
         elements.extend(state.calls.elements(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
@@ -1792,6 +1800,81 @@ impl Screen {
 
     /// The wallpaper whole and still, under the first setup; fading as the
     /// setup goes (a new id each frame of it).
+    /// The setup's table drawn into its texture (table.frag over the
+    /// wallpaper's, which its end turns the squares into).
+    fn setup_table(&mut self, t: &crate::setup::Table) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        use smithay::backend::renderer::gles::element::TextureShaderElement;
+        use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
+        let wall = self.wall.clone()?;
+        if self.table_program.is_none() {
+            let mut names: Vec<UniformName> = ["texl", "src0", "gap", "anchor", "lamp"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
+            names.extend(["pa", "pb"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)));
+            names.push(UniformName::new("accent", UniformType::_3f));
+            names.extend(["sq", "zoom", "reach", "glow", "mosaic", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            match self.renderer.compile_custom_texture_shader(&crate::glass::dithered(include_str!("table.frag")), &names) {
+                Ok(p) => self.table_program = Some(p),
+                Err(e) => {
+                    tracing::warn!("setup: the table's shader: {e}");
+                    return None;
+                }
+            }
+        }
+        let program = self.table_program.clone()?;
+        let (w, h) = crate::layout::size();
+        let size = smithay::utils::Size::<i32, smithay::utils::Buffer>::from((w * SCALE, h * SCALE));
+        if self.table_tex.as_ref().is_none_or(|t| smithay::backend::renderer::Texture::size(t) != size) {
+            self.table_tex = self.renderer.create_buffer(Fourcc::Abgr8888, size).ok();
+        }
+        let mut texture = self.table_tex.clone()?;
+        let panels = crate::layout::panels();
+        let r = |p: smithay::utils::Rectangle<i32, smithay::utils::Logical>| (p.loc.x as f32, p.loc.y as f32, p.size.w as f32, p.size.h as f32);
+        // The table's point of the second panel's: the hinge taken out.
+        let gap = if crate::layout::turned() { (0.0, (panels[1].loc.y - panels[0].size.h) as f32) } else { ((panels[1].loc.x - panels[0].size.w) as f32, 0.0) };
+        let texl = (wall_width() as f32, crate::layout::LANDSCAPE.1 as f32);
+        let a = crate::accent::get_f();
+        let uniforms = vec![
+            Uniform::new("texl", texl),
+            Uniform::new("src0", (crate::state::WALL_LEFT as f32, 0.0f32)),
+            Uniform::new("gap", gap),
+            Uniform::new("anchor", (t.anchor.0 as f32, t.anchor.1 as f32)),
+            Uniform::new("lamp", (t.lamp.0 as f32, t.lamp.1 as f32)),
+            Uniform::new("pa", r(panels[0])),
+            Uniform::new("pb", r(panels[1])),
+            Uniform::new("accent", (a[0], a[1], a[2])),
+            Uniform::new("sq", t.square as f32),
+            Uniform::new("zoom", t.zoom as f32),
+            Uniform::new("reach", t.reach as f32),
+            Uniform::new("glow", t.glow as f32),
+            Uniform::new("mosaic", t.mosaic as f32),
+            Uniform::new("ink", 0.16f32),
+            Uniform::new("thick", 2.0f32),
+        ];
+        let area = smithay::utils::Rectangle::<i32, smithay::utils::Logical>::from_size((w, h).into());
+        let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((crate::state::WALL_LEFT as f64, 0.0).into(), (w as f64, h as f64).into());
+        let inner = TextureRenderElement::from_static_texture(smithay::backend::renderer::element::Id::new(), self.renderer.context_id(), (0.0, 0.0), wall, SCALE, Transform::Normal, None, Some(src), Some(area.size), None, smithay::backend::renderer::element::Kind::Unspecified);
+        let e = FrameElement::Shaded(TextureShaderElement::new(inner, program, uniforms));
+        let mut tracker = OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Normal);
+        {
+            let mut target = self.renderer.bind(&mut texture).ok()?;
+            tracker.render_output(&mut self.renderer, &mut target, 0, &[e], [0.0, 0.0, 0.0, 1.0]).ok()?;
+        }
+        Some(texture)
+    }
+
+    /// The setup's table as drawn this frame, over the whole screen.
+    fn setup_table_element(&mut self, texture: smithay::backend::renderer::gles::GlesTexture, alpha: f32) -> Option<FrameElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        if alpha <= 0.001 {
+            return None;
+        }
+        let (w, h) = crate::layout::size();
+        // Drawn anew each frame: a new id, so the frame takes it all.
+        self.setup_wall_id = smithay::backend::renderer::element::Id::new();
+        let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size((w * SCALE, h * SCALE).into());
+        Some(FrameElement::Snapshot(TextureRenderElement::from_static_texture(self.setup_wall_id.clone(), self.renderer.context_id(), (0.0, 0.0), texture, SCALE, Transform::Normal, (alpha < 0.999).then_some(alpha), None, Some((w, h).into()), (alpha >= 0.999).then(|| vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified)))
+    }
+
     fn setup_wall(&mut self, alpha: f32) -> Vec<FrameElement> {
         use smithay::backend::renderer::element::solid::SolidColorRenderElement;
         let (w, h) = crate::layout::size();
@@ -1824,14 +1907,21 @@ impl Screen {
     /// The first setup's circle (its drop, its rings): a drop of water while it is whole (the
     /// dock's water, bending the wallpaper), the rings of orb.frag as it
     /// opens into one, the two crossing over between.
-    fn setup_orb(&mut self, state: &State, orb: &crate::setup::Orb, frame_ns: u64) -> (Vec<FrameElement>, Vec<FrameElement>) {
+    fn setup_orb(&mut self, state: &State, orb: &crate::setup::Orb, frame_ns: u64, table: Option<&smithay::backend::renderer::gles::GlesTexture>) -> (Vec<FrameElement>, Vec<FrameElement>) {
+        // What the water bends: the setup's table (the screen's size, from
+        // its left edge), else the wallpaper.
+        let (sw, sh) = crate::layout::size();
+        let bent = match table {
+            Some(t) => Some((t.clone(), (sw as f64, sh as f64), 0.0)),
+            None => self.wall.clone().map(|t| (t, (wall_width() as f64, crate::layout::LANDSCAPE.1 as f64), crate::state::WALL_LEFT as f64)),
+        };
         let (mut drop, mut out) = (Vec::new(), Vec::new());
         let k = ((orb.thickness - 0.34) / 0.66).clamp(0.0, 1.0);
         let water = (k * k * (3.0 - 2.0 * k)) as f32;
         // The PIN pad's keys, drops born of this one.
         let pad = state.setup.pad_drops(frame_ns);
-        if let (Some((groups, _)), Some(texture)) = (&pad, self.wall.clone()) {
-            let wall = (&texture, (wall_width() as f64, crate::layout::LANDSCAPE.1 as f64), crate::state::WALL_LEFT as f64);
+        if let (Some((groups, _)), Some((texture, texl, woff))) = (&pad, bent.clone()) {
+            let wall = (&texture, texl, woff);
             for (slot, g) in groups.iter().enumerate() {
                 if let Some(e) = state.dock.group(&mut self.renderer, slot, &g.drops, g.melt, frame_ns, g.life, 1.0, 1.0, wall) {
                     drop.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
@@ -1840,8 +1930,8 @@ impl Screen {
         }
         let with_keys = pad.is_some_and(|(_, with)| with);
         if water > 0.001 && !with_keys {
-            if let Some(texture) = self.wall.clone() {
-                let wall = (&texture, (wall_width() as f64, crate::layout::LANDSCAPE.1 as f64), crate::state::WALL_LEFT as f64);
+            if let Some((texture, texl, woff)) = bent.clone() {
+                let wall = (&texture, texl, woff);
                 let coral = [1.0f32, 0.6, 0.53];
                 if let Some(e) = state.dock.lone(&mut self.renderer, (orb.x, orb.y), orb.r, frame_ns, state.setup.life(frame_ns), water, (orb.fill, coral), wall) {
                     drop.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
@@ -1850,7 +1940,7 @@ impl Screen {
         }
         // Over a drop, only the print in it (no ring), bright over the
         // setup's dark; the rings where the drop is not.
-        if self.wall.is_none() {
+        if bent.is_none() {
             out.extend(self.orb_element(orb, 1.0));
         } else if water < 0.999 {
             out.extend(self.orb_element(orb, 1.0 - water));
