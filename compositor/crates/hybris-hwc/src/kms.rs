@@ -100,6 +100,31 @@ fn sync() -> bool {
     sync_level() >= 1
 }
 
+/// KMS_STEADY=1: the panels sent a frame every period, the last one again
+/// when nothing new came.
+fn steady() -> bool {
+    static STEADY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *STEADY.get_or_init(|| std::env::var_os("KMS_STEADY").is_some_and(|v| v == "1"))
+}
+
+/// The frame shown, committed again (its release fence not wanted).
+fn again() {
+    if FLIPS_LEFT.load(Ordering::Acquire) > 0 || !POWER_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let guard = KMS.lock().unwrap();
+    let Some(k) = guard.as_ref() else { return };
+    if !k.started || k.shown_fb == 0 {
+        return;
+    }
+    if let Ok(release) = commit(k, k.shown_fb, -1) {
+        if release >= 0 {
+            // SAFETY: the merged release fence, ours.
+            unsafe { libc::close(release) };
+        }
+    }
+}
+
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
 const PRIV_FLAGS_UBWC_ALIGNED: i32 = 0x0800_0000;
 
@@ -488,7 +513,18 @@ fn committer() {
             let (lock, cv) = &MAILBOX;
             let mut g = lock.lock().unwrap();
             while g.is_none() {
-                g = cv.wait(g).unwrap();
+                if !steady() {
+                    g = cv.wait(g).unwrap();
+                    continue;
+                }
+                // KMS_STEADY=1: no new frame a period on, the one shown again.
+                let (g2, timeout) = cv.wait_timeout(g, std::time::Duration::from_micros(17_000)).unwrap();
+                g = g2;
+                if timeout.timed_out() && g.is_none() {
+                    drop(g);
+                    again();
+                    g = lock.lock().unwrap();
+                }
             }
         }
         wait_idle(100);
