@@ -83,8 +83,8 @@ static FLIPS_LEFT: AtomicU64 = AtomicU64::new(0);
 static POWER_ON: AtomicBool = AtomicBool::new(true);
 /// The last flip's time: the synthesised vsync's phase.
 static LAST_FLIP_NS: AtomicU64 = AtomicU64::new(0);
-/// When the panels came on, until the first flip after (for the log).
-static FIRST_FLIP_AFTER_ON: AtomicU64 = AtomicU64::new(0);
+/// When the panels were asked on, until the mode set that lights them.
+static POWERED_ON_AT: AtomicU64 = AtomicU64::new(0);
 
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
 const PRIV_FLAGS_UBWC_ALIGNED: i32 = 0x0800_0000;
@@ -260,10 +260,6 @@ fn events(card: Arc<Card>, crtc_index: u32, period: u64) {
                 }
                 2 => {
                     LAST_FLIP_NS.store(e.time_ns, Ordering::Relaxed);
-                    let on_at = FIRST_FLIP_AFTER_ON.swap(0, Ordering::Relaxed);
-                    if on_at != 0 {
-                        println!("hybris-hwc: kms: the first flip after the panels came on, {:.1} ms after", (now_ns() - on_at) as f64 / 1e6);
-                    }
                     if FLIPS_LEFT.fetch_sub(1, Ordering::AcqRel) <= 1 {
                         FLIPS_LEFT.store(0, Ordering::Release);
                         set_pending(false);
@@ -321,6 +317,10 @@ fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<(), String> {
         p.plane = k.card.plane_on(p.crtc)?;
     }
     k.started = true;
+    let asked = POWERED_ON_AT.swap(0, Ordering::Relaxed);
+    if asked != 0 {
+        println!("hybris-hwc: kms: the panels on in {:.1} ms", (now_ns() - asked) as f64 / 1e6);
+    }
     Ok(())
 }
 
@@ -462,7 +462,8 @@ fn committer() {
         let mut guard = KMS.lock().unwrap();
         let k = guard.as_mut().expect("kms output");
         let Some(job) = MAILBOX.0.lock().unwrap().take() else { continue };
-        if !POWER_ON.load(Ordering::Relaxed) {
+        // Off, or off and on again with the modes not yet set: not for now.
+        if !POWER_ON.load(Ordering::Relaxed) || !k.started {
             drop_job(job);
             continue;
         }
@@ -579,35 +580,41 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
     k.last_ns = now;
 }
 
-/// The panels on or off (each CRTC's ACTIVE: off, the panel and its light
-/// go dark); frames are not shown while they are off.
+/// The panels on or off; frames are not shown while they are off. Off,
+/// each CRTC is let go whole (its mode, connector and plane); on, the next
+/// frame sets the modes as the first one does. ACTIVE alone (2026-10-30)
+/// left the panels black on again, every frame flipping: SDE assigns its
+/// blocks in the mode set, which ACTIVE alone does not run.
 pub(crate) fn set_power(on: bool) -> bool {
     let mut guard = KMS.lock().unwrap();
     let Some(k) = guard.as_mut() else { return false };
     wait_idle(100);
     POWER_ON.store(on, Ordering::Relaxed);
-    if k.shown_fb == 0 {
+    if on {
+        if !k.started && k.shown_fb != 0 {
+            POWERED_ON_AT.store(now_ns(), Ordering::Relaxed);
+        }
         return true;
     }
-    let changes: Vec<(u32, u32, &str, u64)> = k.panels.iter().map(|p| (p.crtc, OBJ_CRTC, "ACTIVE", on as u64)).collect();
+    if !k.started {
+        return true;
+    }
     let t = now_ns();
-    match k.card.commit(&changes, drm::ATOMIC_ALLOW_MODESET) {
-        Ok(()) => {
-            println!("hybris-hwc: kms: the panels {} in {:.1} ms", if on { "on" } else { "off" }, (now_ns() - t) as f64 / 1e6);
-            if on {
-                FIRST_FLIP_AFTER_ON.store(now_ns(), Ordering::Relaxed);
-                // The panels on again by ACTIVE alone flipped every frame and
-                // stayed black (2026-10-30): the next frame sets the modes
-                // and the planes afresh, as the first one does.
-                k.started = false;
-            }
-            true
-        }
-        Err(e) => {
-            eprintln!("hybris-hwc: kms: the panels {}: {e}", if on { "on" } else { "off" });
-            false
+    let mut ok = true;
+    for p in &k.panels {
+        if let Err(e) = k.card.crtc_off(p.crtc) {
+            eprintln!("hybris-hwc: kms: the panels off: {e}");
+            ok = false;
         }
     }
+    // The buffer shown is the GPU's again: the panels show nothing now.
+    if !k.last.is_null() {
+        let_go(k.last);
+        k.last = null_mut();
+    }
+    k.started = false;
+    println!("hybris-hwc: kms: the panels off in {:.1} ms", (now_ns() - t) as f64 / 1e6);
+    ok
 }
 
 pub(crate) fn take_stats() -> crate::FrameStats {

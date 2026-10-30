@@ -34,7 +34,7 @@ struct CardRes {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct ModeInfo {
     pub clock: u32,
     pub hdisplay: u16,
@@ -413,6 +413,13 @@ impl Card {
         let mut conn = connector;
         let mut set = Crtc { set_connectors_ptr: &mut conn as *mut u32 as u64, count_connectors: 1, crtc_id: crtc, fb_id: fb, x, y: 0, gamma_size: 0, mode_valid: 1, mode };
         ioctl(self.fd(), SETCRTC, &mut set).map_err(|e| format!("setting crtc {crtc}: {e}"))
+    }
+
+    /// `crtc` off the legacy way: no mode, no connector, no framebuffer -
+    /// the next set_crtc sets the mode afresh.
+    pub fn crtc_off(&self, crtc: u32) -> Result<(), String> {
+        let mut set = Crtc { set_connectors_ptr: 0, count_connectors: 0, crtc_id: crtc, fb_id: 0, x: 0, y: 0, gamma_size: 0, mode_valid: 0, mode: ModeInfo::default() };
+        ioctl(self.fd(), SETCRTC, &mut set).map_err(|e| format!("crtc {crtc} off: {e}"))
     }
 
     /// A property's id on an object, by its name (looked up once).
