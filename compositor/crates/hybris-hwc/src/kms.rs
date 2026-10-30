@@ -527,6 +527,9 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
             } else {
                 k.refused = 0;
                 hold(buffer);
+                if !k.last.is_null() {
+                    let_go(k.last);
+                }
                 k.last = buffer;
                 k.shown_fb = fb;
             }
@@ -579,11 +582,11 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
 /// The panels on or off (each CRTC's ACTIVE: off, the panel and its light
 /// go dark); frames are not shown while they are off.
 pub(crate) fn set_power(on: bool) -> bool {
-    let guard = KMS.lock().unwrap();
-    let Some(k) = guard.as_ref() else { return false };
+    let mut guard = KMS.lock().unwrap();
+    let Some(k) = guard.as_mut() else { return false };
     wait_idle(100);
     POWER_ON.store(on, Ordering::Relaxed);
-    if !k.started {
+    if k.shown_fb == 0 {
         return true;
     }
     let changes: Vec<(u32, u32, &str, u64)> = k.panels.iter().map(|p| (p.crtc, OBJ_CRTC, "ACTIVE", on as u64)).collect();
@@ -593,6 +596,10 @@ pub(crate) fn set_power(on: bool) -> bool {
             println!("hybris-hwc: kms: the panels {} in {:.1} ms", if on { "on" } else { "off" }, (now_ns() - t) as f64 / 1e6);
             if on {
                 FIRST_FLIP_AFTER_ON.store(now_ns(), Ordering::Relaxed);
+                // The panels on again by ACTIVE alone flipped every frame and
+                // stayed black (2026-10-30): the next frame sets the modes
+                // and the planes afresh, as the first one does.
+                k.started = false;
             }
             true
         }
