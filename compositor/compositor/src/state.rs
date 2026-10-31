@@ -178,6 +178,9 @@ pub struct State {
     /// and when its first window came (its others for a while after are
     /// warm too: a first-run dialog, a second toplevel).
     warming: HashMap<String, Warming>,
+    /// Windows warmed and put away that were never opened: not rows of the
+    /// shade (the owner did not open them); one brought back is the shade's.
+    warm_unopened: Vec<Window>,
     /// Every app id warmed this boot: a late window of one of them (its
     /// launch forgotten, a dialog after its first window) is still put away.
     warm_known: std::collections::HashSet<String>,
@@ -370,6 +373,7 @@ impl State {
             paces: Default::default(),
             put_away: Vec::new(),
             warming: HashMap::new(),
+            warm_unopened: Vec::new(),
             warm_known: Default::default(),
             spawn_later: Default::default(),
             wake: wake.clone(),
@@ -669,10 +673,11 @@ impl State {
         notes.chain(self.window_rows().into_iter().map(|(_, r)| r)).collect()
     }
 
-    /// The open windows, shown and put away, topmost first, as rows.
+    /// The open windows, shown and put away, topmost first, as rows; not
+    /// those warmed and never opened.
     pub fn window_rows(&self) -> Vec<(Window, crate::quick::Row)> {
         let entries = &self.entries;
-        let windows = self.windows();
+        let windows: Vec<Window> = self.windows().into_iter().filter(|w| !self.warm_unopened.contains(w)).collect();
         let running: Vec<String> = windows.iter().map(app_id).collect();
         windows
             .iter()
@@ -1018,6 +1023,7 @@ impl State {
                     v.arrived.get_or_insert(now);
                 }
             }
+            self.warm_unopened.push(window.clone());
             self.put_away.push((window, pi));
             return;
         }
@@ -1522,6 +1528,7 @@ impl State {
             return false;
         };
         let (window, _) = self.put_away.remove(i);
+        self.warm_unopened.retain(|w| w != &window);
         let rect = layout::panels()[panel];
         let band = self.dock_band(panel);
         window.toplevel().unwrap().with_pending_state(|s| s.size = Some((rect.size.w, rect.size.h - band).into()));
@@ -1833,6 +1840,7 @@ impl XdgShellHandler for State {
             self.keyboard_gone_with(&w);
         }
         self.put_away.retain(|(w, _)| w.toplevel().unwrap().wl_surface() != surface.wl_surface());
+        self.warm_unopened.retain(|w| w.toplevel().unwrap().wl_surface() != surface.wl_surface());
         self.warm_pending.retain(|(w, _)| w.toplevel().unwrap().wl_surface() != surface.wl_surface());
         self.needs_redraw = true;
     }
