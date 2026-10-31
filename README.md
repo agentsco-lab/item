@@ -2,10 +2,11 @@
 
 **item** is a shell for a phone with two screens and a hinge between them,
 made on the Microsoft Surface Duo 1 running Droidian. It is a Wayland
-compositor of its own, `item-compositor`, that draws straight into the
-phone's hwcomposer with the whole shell - the dock, the shades, the lock
-screen, the screens at the edges - drawn inside it, in the same GPU pass as
-the windows. It goes on top of the port,
+compositor of its own, `item-compositor`, with the whole shell - the dock,
+the shades, the lock screen, the screens at the edges - drawn inside it, in
+the same GPU pass as the windows, and its frames put on the panels by itself
+through the kernel's DRM, in the colour the panels were calibrated to in the
+factory (Android's hwcomposer is kept as the way back). It goes on top of the port,
 [agentsco-lab/surfaceduo-droidian](https://github.com/agentsco-lab/surfaceduo-droidian),
 and takes phosh's place; phosh stays installed as the way back.
 
@@ -14,7 +15,7 @@ nothing here is promised to work on yours: a release can break the lock
 screen, the modem's sleep or the way back to phosh. Keep the port's backups,
 install with a computer by the phone on the USB cable, and know
 `sudo item-switch phosh`. What is done so far is the groundwork - the
-compositor, its frame path, the gestures and the phone's sleep. Every app
+compositor, its own display output, the gestures and the phone's sleep. Every app
 and every menu you see will be reworked; they are there to make the phone
 usable while that groundwork settles.
 
@@ -48,8 +49,9 @@ black). The wallpaper is the default, Olia Bondarenko's (Unsplash).
   cross the hinge to the free panel and join. An app launched from it opens
   on the panel it was launched from; in the book a window is put away with a
   swipe up from the panel's bottom edge and called back with a tap. The
-  dock's apps are kept warm: launched after boot and put away before a frame
-  shows them, so a tap brings a window that exists.
+  dock's apps are kept warm: launched after boot - on a new phone already
+  during the first setup - and put away before a frame shows them, so a tap
+  brings a window that exists. They are not in the shade until opened.
 - **Windows by panel.** In the book a window takes its whole panel, or both
   when carried across the hinge; turned, a window takes the screen's panel
   and is put away with a swipe up on its cover. There is no status bar.
@@ -78,35 +80,63 @@ black). The wallpaper is the default, Olia Bondarenko's (Unsplash).
   and **the pen's sheet** right of the right one, brought in from the outer
   edge; the pen draws with its pressure, the other end erases.
 - **The lock screen**, in the first setup's style: the wallpaper as
-  squares, the words a letter a square, a drop at the reader under the
-  power key that becomes the PIN pad. **CV ID**: a known face unlocks the phone
+  squares, dimmed; the time, the date, the battery, what is playing and the
+  last notifications as words a letter a square (the network's name is not
+  shown); a drop at the reader under the power key that becomes the PIN pad.
+  Unlocked, the view pulls back from where it was touched until each square
+  is a pixel of the wallpaper, and the dock comes in. **CV ID**: a known face unlocks the phone
   as it is opened - the camera is started at the lid itself, ahead of the
   panels lighting. The faces enrolled stay on the phone, in
   `/var/lib/item-face`, root's alone; the camera is open only while the lock
   screen is lit.
-- **The first setup** after a clean install: a welcome, Wi-Fi (the networks
-  in reach, a tap joins one; left out when installed with item/grid: the
-  phone is already on the computer's network), a new
-  PIN (the face taken as it is typed, for CV ID), a finger; no tour after it.
-- **The phone's sleep** is item's: the lid darkens and lights the screen,
-  asleep again 3 s after a wake that lit nothing, woken for alarms, an alarm
-  or a call keeps the screen lit.
+- **The first setup** after a clean install, on item/grid's table: a grid
+  of squares over both panels, a green lamp under a drop of water, the
+  words few and lowercase. A welcome; Wi-Fi (left out when the phone knows
+  a network - installed with item/grid it is on the computer's); a new PIN,
+  the drop itself becoming the pad (the face taken as it is typed, for
+  CV ID); a finger. At the end the squares take the wallpaper's colour and
+  grow small until they are its pixels, and the dock is born of the drop.
+  It asks nothing about going online, and there is no tour after it.
+- **The phone's sleep** is item's: the lid darkens and lights the screen -
+  from sleep as soon as the kernel is back, both panels together - asleep
+  again 3 s after a wake that lit nothing, woken for alarms, an alarm or a
+  call keeps the screen lit.
+- **Its own display output**: the frames go to both panels in one atomic
+  commit, without waiting on hwcomposer, the newest frame winning when one
+  is late, each panel in its factory colour (`sfpd`: Vivid; sRGB by a
+  switch), the two matching. If it cannot start, item starts again through
+  hwcomposer by itself ([docs/OUTPUT.md](docs/OUTPUT.md)).
+- **Wallpapers**: nineteen photographs from Unsplash with their credits,
+  one's own pictures beside them, a picker opened by a finger held on the
+  desk; with an Unsplash key of one's own, Shuffle brings twelve dark ones
+  at a time.
 - **item Settings**: one window across both panels, the sections on the left,
-  one page on the right: Keyboard, Voice, Online, Battery, Date & time, About.
+  one page on the right: Keyboard (the voice key with it), Online, Turn,
+  Battery, Date & time, About; Wi-Fi, Bluetooth, Mobile network, Display,
+  Sound and Lock are there, not made yet.
 
-## Measured (2026-10-01, item 0.2 against item 0.1 on phosh)
+## Measured
 
-The same Duo 1, timed below both compositors with a uprobe on libhybris'
-`hwc2_compat_display_present` - the call both make to hand hwcomposer a
-frame (`compositor/log/2026-10-01-step-21-ab.md` and the two after it, in
-the history at item-v0.2.1). 0.4.0's are in its release notes (its own
-output: 36 missed vsyncs in 90 s against hwcomposer's 145; the lid on a
-sleeping phone to the picture 0.62 s, from 3.5). 0.3.1's are in its release notes (the agent's
-hook 147 -> 4 ms a command; item-sync no longer a busy core on the
-computer; with the port 0.22.1 the sound ~40 s sooner in a boot). 0.3.0's own numbers are in its release notes:
-the compositor 712 -> 365 MB resident after the fonts and pictures were
-tamed, Chromium 0.56 s to its window from the dock, one missed frame a
-second typing on the deck.
+The owner's Duo 1; each number with its day and the item it was taken on
+(the release notes and `compositor/log/` have how).
+
+| | | |
+|---|---|---|
+| frames, the own output | 60 a second, steady; 36 missed vsyncs in 90 s of the same use against hwcomposer's 145; no 2.7 ms a frame waiting on hwcomposer's validate and present | 2026-10-29, 0.4.0 |
+| the lid opened on a sleeping phone, to the picture | 0.62 s (3.5 s before), of it 0.55 s the panels' own power-on, one after the other | 2026-10-31, 0.4.0 |
+| a night asleep, the lid shut, Wi-Fi on | about 1.0 % of the battery an hour with the own output; 1.27 with hwcomposer; 1.14 with Wi-Fi off | 2026-10-30, -09, -23 |
+| a tap, from the touch to the present with the app's new frame | 6.2 ms (p90 7.9) | 2026-10-01, 0.2 |
+| the shade following the finger | 22-26 ms behind it (about 39 through GTK) | 0.2 |
+| a frame of the shell rendered | 1-1.5 ms | 0.2 |
+| Chromium from the dock to its window | 0.56 s; a warmed app 0.5-1 s to be ready, then at once | 0.3.0, 0.4.0 |
+| the compositor's memory | about 320-365 MB resident (712 before the fonts and pictures were tamed) | 0.3.0, 0.4.0 |
+| CV ID | about 135 ms a frame | 0.2 |
+| the unlock into pixels | 1.6 s, drawn at 60 fps | 0.4.0 |
+
+The step from phosh (2026-10-01, item 0.1 on phosh against item 0.2's
+compositor), timed below both with a uprobe on libhybris'
+`hwc2_compat_display_present` (`compositor/log/2026-10-01-step-21-ab.md`
+and the two after it, in the history at item-v0.2.1):
 
 | | item 0.1 on phosh | item-compositor |
 |---|---|---|
@@ -123,18 +153,14 @@ of each frame (the chain spends 9-13 ms and 0.76 W on it at 60 fps), and
 60 fps with both panels animating where the chain holds 30
 ([docs/COMPOSITOR.md](docs/COMPOSITOR.md)).
 
-Other numbers: a frame of the shell renders in 1-1.5 ms; the shade follows
-the finger 22-26 ms behind it where the same shade through GTK took about
-39; CV ID takes about 135 ms a frame on the Duo; a phone shut, Wi-Fi radio
-on and mobile data off, lost about 1.3 % an hour (2026-10-09, the port
-0.21.4, item 0.2.1), and 1.14 % with Wi-Fi off on 0.3.0 (2026-10-23).
-
 ## How it is made
 
 Rust throughout. The compositor is on [smithay](https://github.com/Smithay/smithay)
-(calloop, its GLES renderer) with EGL on the Android platform - hwcomposer's
-window, no GBM - and hands frames to hwcomposer through libhybris' hwc2 API,
-with its vsync and fences; touch comes from libinput. Text is rendered
+(calloop, its GLES renderer) with EGL on the Android platform, no GBM. Its
+frames go to the panels through the kernel's DRM - an atomic commit for
+both from a thread of their own, the GPU's fence handed with the buffer,
+the vsync from the panels' vblanks - or, as the way back, to hwcomposer
+through libhybris' hwc2 API; touch comes from libinput. Text is rendered
 with fontdue into textures; D-Bus with zbus (logind, UPower, NetworkManager,
 the notification server, polkit's agent, gnome-keyring's prompter); the PIN
 through PAM; the session by gnome-session. CV ID runs YuNet, SFace and
@@ -233,9 +259,9 @@ resume; `item-switch phosh` brings it back.
   password is asked by the shell.
 - Nineteen wallpapers come in `/usr/share/item/walls`, photographs from
   Unsplash with their credits beside them (`NAME.txt`, "Photo by ..."); the
-  picker, opened by a finger held on the desk, takes one's own pictures from
-  `~/.local/share/item/walls` too. The desktop before one is chosen is
-  Aurora, drawn by the compositor.
+  picker takes one's own pictures from `~/.local/share/item/walls` too. The
+  desktop before one is chosen is Olia Bondarenko's wide picture across
+  both panels.
 - With an Unsplash key of your own in the keyring (`unsplash`: item/grid's
   Keys, or `item-secret set unsplash`), the wallpaper picker has Shuffle:
   twelve dark photos at a time, searched among dark themes and kept only if
@@ -246,8 +272,8 @@ resume; `item-switch phosh` brings it back.
   into bands.
 - Before the setup has run, and with a picture that cannot be read, the
   screen is black.
-- Tried on one phone. Each step was measured and tried by hand; there is
-  no test suite beyond that.
+- Tried on one phone. Each step was measured and tried by hand; the unit
+  tests are few, run on the phone itself.
 
 ## What is in this repository
 
