@@ -98,7 +98,9 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
 The same Duo 1, timed below both compositors with a uprobe on libhybris'
 `hwc2_compat_display_present` - the call both make to hand hwcomposer a
 frame (`compositor/log/2026-10-01-step-21-ab.md` and the two after it, in
-the history at item-v0.2.1). 0.3.1's are in its release notes (the agent's
+the history at item-v0.2.1). 0.4.0's are in its release notes (its own
+output: 36 missed vsyncs in 90 s against hwcomposer's 145; the lid on a
+sleeping phone to the picture 0.62 s, from 3.5). 0.3.1's are in its release notes (the agent's
 hook 147 -> 4 ms a command; item-sync no longer a busy core on the
 computer; with the port 0.22.1 the sound ~40 s sooner in a boot). 0.3.0's own numbers are in its release notes:
 the compositor 712 -> 365 MB resident after the fonts and pictures were
@@ -204,7 +206,7 @@ and in its time zone.
 **By hand**, over a port 0.22.0 or later on Droidian 102:
 
 ```
-sudo apt install ./item_0.3.1_arm64.deb
+sudo apt install ./item_0.4.0_arm64.deb
 sudo item-switch item
 ```
 
