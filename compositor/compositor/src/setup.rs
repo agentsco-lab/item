@@ -693,6 +693,13 @@ impl Setup {
         tracing::info!("setup: {step:?}");
         let was = self.step;
         self.step = step;
+        // Past the welcome, the warm-ups start (the apps' files, Chromium;
+        // the dock's apps from state.rs's warm_tick): the apps open at once
+        // after the setup, not cold (the owner's, 2026-10-31). The welcome's
+        // own motion keeps the phone to itself.
+        if was == Step::Welcome && step != Step::Welcome {
+            start_warm_ups();
+        }
         self.pin_said = None;
         // No OK: a new PIN is taken at its length, the one there at the
         // length it was last unlocked with (with OK while that is unknown).
@@ -921,6 +928,11 @@ impl Setup {
     }
 
     /// Whether it is going (start pressed): the dock, born, over its table.
+    /// Whether the welcome is up (no warm-ups yet: state.rs).
+    pub fn welcoming(&self) -> bool {
+        self.active && self.step == Step::Welcome
+    }
+
     pub fn leaving(&self) -> bool {
         self.active && self.leaving.is_some()
     }
@@ -1339,8 +1351,9 @@ impl Setup {
             }
             let _ = std::fs::write(&path, "");
         }
-        // The warm-ups item-session held back while the setup was up.
-        let _ = std::process::Command::new("systemctl").args(["--user", "start", "--no-block", "item-warm.service", "item-chromium.service"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
+        // The warm-ups item-session held back, should the welcome have been
+        // left some other way (started once; again is nothing).
+        start_warm_ups();
         // The words erased, the squares become the wallpaper's pixels
         // (table()); the drop falls at once, and the dock is born of it
         // (dock.rs) as the view pulls back (the owner's, 2026-10-30).
@@ -1443,4 +1456,10 @@ impl Setup {
         }
         out
     }
+}
+
+/// The warm-ups item-session holds back on a fresh phone (the apps' files
+/// into the page cache, Chromium resident).
+fn start_warm_ups() {
+    let _ = std::process::Command::new("systemctl").args(["--user", "start", "--no-block", "item-warm.service", "item-chromium.service"]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn();
 }

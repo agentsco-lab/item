@@ -44,8 +44,8 @@ if [ -n "$DBUS_SESSION_BUS_ADDRESS" ]; then
   # item's own services, now that the manager knows this session (their
   # ConditionEnvironment; default.target came before it did). On a fresh
   # phone the warm-ups (the page cache, Chromium) wait for the first setup
-  # to end - it starts them (setup.rs): the setup has the phone to itself
-  # while the rest of the session is still starting.
+  # to leave its welcome - it starts them (setup.rs): the welcome has the
+  # phone to itself while the rest of the session is still starting.
   if [ -e "${XDG_CONFIG_HOME:-$HOME/.config}/item/setup-done" ]; then
     systemctl --user start --no-block item-warm.service item-chromium.service 2>/dev/null
   fi

@@ -1061,7 +1061,7 @@ impl State {
     }
 
     /// The dock's apps warmed after boot (draft 49): from 30 s after the
-    /// start, one every 3 s, each launched without a curtain and put away
+    /// start (in the first setup, once past its welcome), one every 3 s, each launched without a curtain and put away
     /// at its first buffer; not Chromium (resident on its own), not an app
     /// about already, none when the memory left is under 1.5 GB. Called
     /// from the tick.
@@ -1079,13 +1079,14 @@ impl State {
             tracing::info!("chromium: no resident instance answered, launched as a process");
             self.spawn_app_plain(&exec, &id);
         }
-        // Not while the first setup or the tour has the screen: their
-        // minutes are the owner's, and a dialog of an app would land in them.
-        if self.setup.active || self.tour.active() {
+        // Not at the setup's welcome nor in the tour: the screen is theirs.
+        // Past the welcome, at once (an app's windows, dialogs too, are put
+        // away unshown): the apps warm when the setup ends.
+        if self.setup.welcoming() || self.tour.active() {
             return;
         }
         if !self.warm_begun {
-            if self.started.elapsed().as_secs_f64() < START_S {
+            if !self.setup.active && self.started.elapsed().as_secs_f64() < START_S {
                 return;
             }
             self.warm_begun = true;
