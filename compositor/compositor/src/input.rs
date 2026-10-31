@@ -203,15 +203,17 @@ impl State {
                         self.lid_light_pending = false;
                         self.lock.lock_now();
                         self.lock.set_blank(true);
-                    } else if self.sleep.going() {
-                        // Opened as the phone goes to sleep: lit once it is
-                        // back (the lid's own wake), not now - lit now, it
-                        // went dark with the phone and came back: a blink.
+                    } else if self.sleep.going() && !self.sleep.kernel_back() {
+                        // Opened as the phone goes to sleep: lit once the
+                        // kernel is back (the lid's own wake), not now - lit
+                        // now, it went dark with the phone and came back: a
+                        // blink.
                         tracing::info!("lid: open on the way into sleep: lit once awake");
                         self.lid_light_pending = true;
                         // The lid's wake is spent: the kernel's alarm stops
                         // the sleep, or ends it (sleep.rs).
                         self.sleep.wake_soon();
+                        self.sleep.ping_when_back();
                     } else {
                         // The camera from the lid itself, first: lighting
                         // the panels holds this thread ~0.5 s, the camera

@@ -363,6 +363,18 @@ impl Data {
     /// hwcomposer sends no vsync before the first frame it is given, and may
     /// stop between frames: if something changed and no vsync came for 50 ms,
     /// draw anyway.
+    /// The screen lit for the lid, the camera first (as input.rs does).
+    fn light_from_lid(&mut self, now: u64) {
+        if self.state.lock.locked {
+            self.state.camera_peek.start(now);
+            if self.state.posture.angle() < face::FOLD_MAX {
+                self.state.face.look_now();
+            }
+        }
+        self.state.lock.set_blank(false);
+        self.state.needs_redraw = true;
+    }
+
     fn on_watchdog(&mut self) {
         let now = hybris_hwc::now_ns();
         // The mirror: someone just connected, or a change it was owed.
@@ -394,17 +406,18 @@ impl Data {
         // Woken from sleep: by the power key, the screen lights (the press
         // was spent on waking the phone); a call lights its own; a packet
         // leaves it dark.
+        // The lid opened on the way into sleep: lit once the kernel is back,
+        // ahead of logind's word (sleep.rs).
+        if self.state.lid_light_pending && self.state.sleep.kernel_back() {
+            self.state.lid_light_pending = false;
+            if !self.state.lid_shut {
+                tracing::info!("lid: lit, the kernel back");
+                self.light_from_lid(now);
+            }
+        }
         if let Some(woken) = self.state.sleep.take_woken(now) {
             if std::mem::take(&mut self.state.lid_light_pending) && !self.state.lid_shut {
-                // The camera first, as for the lid (input.rs).
-                if self.state.lock.locked {
-                    self.state.camera_peek.start(now);
-                    if self.state.posture.angle() < face::FOLD_MAX {
-                        self.state.face.look_now();
-                    }
-                }
-                self.state.lock.set_blank(false);
-                self.state.needs_redraw = true;
+                self.light_from_lid(now);
             }
             if woken == sleep::Woken::PowerKey && self.state.lock.blank && !self.state.lid_shut {
                 if self.state.lock.locked {
@@ -1417,6 +1430,12 @@ fn main() {
     let (wake, wake_source) = make_ping().expect("ping");
     handle
         .insert_source(wake_source, |_, _, data: &mut Data| {
+            // Woken from sleep, or the kernel back with the lid open: taken
+            // now, not at the watchdog's next turn (a second apart while the
+            // screen is dark).
+            if data.state.sleep.has_woken() || (data.state.lid_light_pending && data.state.sleep.kernel_back()) {
+                data.on_watchdog();
+            }
             data.state.lock.poll();
             data.take_logind_asks();
             // A wallpaper decoded, to the GPU; the picker's small pictures.

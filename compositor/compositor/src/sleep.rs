@@ -39,6 +39,12 @@
 //! opened on the way into sleep also sets the kernel's alarm a second away
 //! (`wake_soon`): the alarm timer refuses a sleep with an alarm under 2 s
 //! (the sleep given up), or, if the sleep is past that, wakes it.
+//!
+//! Lit once awake: as soon as the kernel's own try at the sleep is over
+//! (`kernel_back`: /sys/power/suspend_stats counts it, slept or refused),
+//! not when logind says so - systemd-sleep's hooks after it took 2 s more,
+//! and the lid opened from sleep lit the screen 3.5 s after it woke
+//! (2026-10-31 02:57).
 
 use std::sync::{Arc, Mutex};
 
@@ -82,6 +88,9 @@ const EARLY_S: i64 = 5;
 /// Clocks' snooze.
 pub const SNOOZE_S: i64 = 10 * 60;
 
+/// The kernel's tries at a sleep (slept and refused) when the phone last
+/// went to sleep; u64::MAX before.
+static TRIES_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
 static TIMER: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
 static WAKELOCK: std::sync::OnceLock<(Option<std::fs::File>, Option<std::fs::File>)> = std::sync::OnceLock::new();
 
@@ -117,6 +126,12 @@ fn set_alarm(fd: i32, at: Option<i64>) {
     }
 }
 
+/// The kernel's tries at a sleep so far: slept, and refused.
+fn tries() -> u64 {
+    let read = |n: &str| std::fs::read_to_string(format!("/sys/power/suspend_stats/{n}")).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+    read("success") + read("fail")
+}
+
 fn now_s() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
@@ -132,6 +147,7 @@ pub struct Sleep {
     /// A snoozed alarm's time (s since the epoch).
     snoozed: Arc<Mutex<Option<i64>>>,
     going: Arc<std::sync::atomic::AtomicBool>,
+    wake: Ping,
 }
 
 impl Sleep {
@@ -140,6 +156,7 @@ impl Sleep {
         let w = woken.clone();
         let going: Arc<std::sync::atomic::AtomicBool> = Default::default();
         let g = going.clone();
+        let ping = wake.clone();
         std::thread::Builder::new()
             .name("sleep".into())
             .spawn(move || {
@@ -155,6 +172,7 @@ impl Sleep {
                     let Ok(going) = msg.body().deserialize::<bool>() else { continue };
                     g.store(going, std::sync::atomic::Ordering::Relaxed);
                     if going {
+                        TRIES_AT.store(tries(), std::sync::atomic::Ordering::Relaxed);
                         tracing::info!("sleep: going to sleep");
                         continue;
                     }
@@ -165,7 +183,7 @@ impl Sleep {
                 }
             })
             .expect("sleep thread");
-        Sleep { woken, may_since: None, just_woken: false, next_try: 0, timer: TIMER.load(std::sync::atomic::Ordering::Relaxed), snoozed: Default::default(), going }
+        Sleep { woken, may_since: None, just_woken: false, next_try: 0, timer: TIMER.load(std::sync::atomic::Ordering::Relaxed), snoozed: Default::default(), going, wake: ping }
     }
 
     /// On the way into sleep (logind's PrepareForSleep, until it says the
@@ -228,6 +246,34 @@ impl Sleep {
     pub fn wake_soon(&self) {
         set_alarm(self.timer, Some(now_s() + 1));
         tracing::info!("sleep: woken again in a second");
+    }
+
+    /// On the way into sleep, the kernel's own try at it over (slept and
+    /// back, or refused): the screen lit now stays lit, though logind has
+    /// not said so yet.
+    pub fn kernel_back(&self) -> bool {
+        self.going() && tries() != TRIES_AT.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The loop pinged once the kernel is back (`kernel_back`), or the
+    /// phone awake by logind's word; given up after 15 s.
+    pub fn ping_when_back(&self) {
+        let (going, wake) = (self.going.clone(), self.wake.clone());
+        std::thread::spawn(move || {
+            let at = TRIES_AT.load(std::sync::atomic::Ordering::Relaxed);
+            for _ in 0..500 {
+                if !going.load(std::sync::atomic::Ordering::Relaxed) || tries() != at {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
+            wake.ping();
+        });
+    }
+
+    /// Whether a wake waits to be taken (take_woken).
+    pub fn has_woken(&self) -> bool {
+        self.woken.lock().unwrap().is_some()
     }
 
     /// An alarm snoozed now: woken for it again.
