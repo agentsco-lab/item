@@ -636,6 +636,8 @@ impl Screen {
                 let texture = texture.clone();
                 if style.mode == crate::door::Mode::Wave {
                     elements.extend(self.wave(from, frame_ns, start, &style, texture));
+                } else if style.mode == crate::door::Mode::Fly {
+                    elements.extend(self.fly_away(k, texture));
                 } else {
                     elements.extend(self.door_strips(&style, k, texture));
                 }
@@ -2212,6 +2214,45 @@ impl Screen {
     }
 
     /// The turning halves as strips of `texture`, each under its shade.
+    /// The lock screen flying away (door.rs, `fly`), `k` (0..1, eased) of
+    /// the way: each panel's half of its picture up and out, faster as it
+    /// goes, a little smaller about its middle, fading.
+    fn fly_away(&mut self, k: f64, texture: smithay::backend::renderer::gles::GlesTexture) -> Vec<FrameElement> {
+        use smithay::backend::renderer::element::texture::TextureRenderElement;
+        let panels = crate::layout::panels();
+        while self.door_ids.len() < panels.len() {
+            self.door_ids.push(smithay::backend::renderer::element::Id::new());
+        }
+        let context = self.renderer.context_id();
+        let alpha = (1.0 - k) * (1.0 - k);
+        if alpha <= 0.002 {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(panels.len());
+        for (i, p) in panels.iter().enumerate() {
+            let (pw, ph) = (p.size.w as f64, p.size.h as f64);
+            let s = 1.0 - crate::door::FLY_SHRINK * k;
+            let (w, h) = ((pw * s).round() as i32, (ph * s).round() as i32);
+            let x = p.loc.x as f64 + (pw - w as f64) / 2.0;
+            let y = p.loc.y as f64 + (ph - h as f64) / 2.0 - crate::door::FLY_UP * ph * k * k;
+            let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((p.loc.x as f64, p.loc.y as f64).into(), (pw, ph).into());
+            out.push(FrameElement::Snapshot(TextureRenderElement::from_static_texture(
+                self.door_ids[i].clone(),
+                context.clone(),
+                ((x * SCALE as f64).round(), (y * SCALE as f64).round()),
+                texture.clone(),
+                SCALE,
+                Transform::Normal,
+                Some(alpha as f32),
+                Some(src),
+                Some((w, h).into()),
+                None,
+                smithay::backend::renderer::element::Kind::Unspecified,
+            )));
+        }
+        out
+    }
+
     fn door_strips(&mut self, style: &crate::door::Style, k: f64, texture: smithay::backend::renderer::gles::GlesTexture) -> Vec<FrameElement> {
         use smithay::backend::renderer::element::solid::SolidColorRenderElement;
         use smithay::backend::renderer::element::texture::TextureRenderElement;

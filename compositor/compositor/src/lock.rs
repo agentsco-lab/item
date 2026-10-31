@@ -273,11 +273,10 @@ impl Lock {
         self.set_hint(if n > 0 { "" } else { "swipe up" });
     }
 
-    /// The status line's facts: the battery, the network's name.
+    /// The status line's facts: the battery.
     pub fn set_status(&mut self, f: &crate::status::Facts) {
-        let net = f.net.to_lowercase();
-        let status = if net.is_empty() { format!("{} %", f.battery) } else { format!("{} %  {}", f.battery, net) };
-        let status = cut(&status, CUT);
+        // The network's name is not shown: it says where the phone is.
+        let status = format!("{} %", f.battery);
         if status != self.status {
             self.status = status;
             self.lay(false);

@@ -37,7 +37,8 @@ Since 2026-10-31 in the first setup's style (the owner's): the setup's
 table over both panels, its squares the wallpaper's colour, dimmed; the
 words a letter a square, lowercase; the setup's drop and its lamp.
 
-- Left: the time as a title, the date and the battery under it; what is
+- Left: the time as a title, the date and the battery under it (not the
+  network's name: it says where the phone is); what is
   playing, its buttons as words a tap takes (`‹  play  ›`); the last
   notifications, app and title. Low down what is said: "swipe up" (no
   finger known), a passing "not this finger", "it's you, swipe up" after a
@@ -51,6 +52,9 @@ words a letter a square, lowercase; the setup's drop and its lamp.
   any time, the drop goes to the panel's middle and becomes the PIN pad, as
   in the setup; a swipe down gathers the keys back into it, and it goes
   back to the reader.
+- Unlocked, the lock screen flies away: each panel's half up and out, a
+  little smaller, fading (`$XDG_RUNTIME_DIR/item-doors` tries the others:
+  `wave`, `slide`, `saloon`, `book`).
 
 ## The first setup (once)
 
