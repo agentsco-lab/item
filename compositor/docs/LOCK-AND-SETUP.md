@@ -52,9 +52,11 @@ words a letter a square, lowercase; the setup's drop and its lamp.
   any time, the drop goes to the panel's middle and becomes the PIN pad, as
   in the setup; a swipe down gathers the keys back into it, and it goes
   back to the reader.
-- Unlocked, the lock screen flies away: each panel's half up and out, a
-  little smaller, fading (`$XDG_RUNTIME_DIR/item-doors` tries the others:
-  `wave`, `slide`, `saloon`, `book`).
+- Unlocked, as the setup ends: the words typed away, the drop gone, the
+  squares the wallpaper's whole colour; the view pulls back from where it
+  was touched until each square is a pixel - the wallpaper, the desktop's
+  own (`$XDG_RUNTIME_DIR/item-doors` tries the others: `fly`, `wave`,
+  `slide`, `saloon`, `book`).
 
 ## The first setup (once)
 

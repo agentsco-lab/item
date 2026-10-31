@@ -6,7 +6,11 @@
 //! - `book`: both halves about the Duo's own hinge, folding back like a book
 //!   closed away from you;
 //! - `slide`: no turn, the halves slide out (lock.rs draws it);
-//! - `fly` (the default): no doors; each panel's half flies up and away,
+//! - `pixels` (the default): no doors; the view pulls back from where it
+//!   was touched, the table's squares smaller and smaller until they are
+//!   the wallpaper's pixels - the desktop under it the same picture (as the
+//!   first setup ends; lock.rs and the table draw it);
+//! - `fly`: no doors; each panel's half flies up and away,
 //!   growing a little smaller and fading, as a cover swiped up in the flow;
 //! - `wave`: no doors; the lock screen goes in a wave from
 //!   where it was touched - the reader's mark, or the PIN pad's OK - with a
@@ -24,7 +28,9 @@
 //! each unlock, to try other ways on the phone without a new build.
 
 pub const STRIPS: usize = 48;
-/// How long the halves take to fly away, and the others to go.
+/// How long the squares take to become pixels, the halves to fly away,
+/// and the others to go.
+pub const PIXELS_NS: u64 = 1_100_000_000;
 const FLY_NS: u64 = 480_000_000;
 const WAVE_NS: u64 = 850_000_000;
 /// How far up a flying half goes (its panel's heights), how much smaller
@@ -34,6 +40,8 @@ pub const FLY_SHRINK: f64 = 0.1;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Mode {
+    /// The squares become the wallpaper's pixels.
+    Pixels,
     /// Each half flies up and away.
     Fly,
     /// The lock screen goes in a wave from where it was touched.
@@ -55,7 +63,7 @@ pub struct Style {
 
 impl Default for Style {
     fn default() -> Style {
-        Style { mode: Mode::Fly, ns: FLY_NS, camera: 2.0, dim: 0.6 }
+        Style { mode: Mode::Pixels, ns: PIXELS_NS, camera: 2.0, dim: 0.6 }
     }
 }
 
@@ -69,18 +77,21 @@ impl Style {
         style.mode = match words.next() {
             Some("slide") => Mode::Slide,
             Some("wave") => Mode::Wave,
+            Some("fly") => Mode::Fly,
             Some("book") => Mode::Book,
             Some("saloon") => Mode::Saloon,
             // Each unlock the next of the three, to compare them.
             Some("cycle") => {
                 static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                [Mode::Fly, Mode::Wave, Mode::Saloon, Mode::Book, Mode::Slide][NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 5]
+                [Mode::Pixels, Mode::Fly, Mode::Wave, Mode::Saloon, Mode::Book, Mode::Slide][NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 6]
             }
-            _ => Mode::Fly,
+            _ => Mode::Pixels,
         };
-        if style.mode != Mode::Fly {
-            style.ns = WAVE_NS;
-        }
+        style.ns = match style.mode {
+            Mode::Pixels => PIXELS_NS,
+            Mode::Fly => FLY_NS,
+            _ => WAVE_NS,
+        };
         if let Some(ms) = words.next().and_then(|w| w.parse::<u64>().ok()).filter(|m| (50..=3000).contains(m)) {
             style.ns = ms * 1_000_000;
         }

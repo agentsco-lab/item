@@ -49,6 +49,13 @@ const PULSE_FOR_NS: u64 = 12_000_000_000;
 const PULSE_PERIOD_NS: u64 = 1_800_000_000;
 /// How much of the wallpaper's colour is in the squares.
 const WALL: f64 = 0.45;
+/// Into pixels (door.rs), ms from the unlock: the drop gone; the squares
+/// the wallpaper's whole colour; the view pulled back (from, for); the
+/// table faded (from, for) - the whole within door::PIXELS_NS.
+const DROP_GOES_MS: f64 = 250.0;
+const PULL_COLOUR_MS: f64 = 300.0;
+const PULL_ZOOM: (f64, f64) = (100.0, 850.0);
+const PULL_FADE: (f64, f64) = (950.0, 150.0);
 /// The brightest a square gets (luma): the dim words are
 /// 0.47 grey, a light sky under them took them away (2026-10-31).
 const TOP: f64 = 0.2;
@@ -545,6 +552,11 @@ impl Lock {
         tracing::info!("lock: doors {:?}, {} ms", self.door.mode, self.door.ns / 1_000_000);
         self.fading = Some(hybris_hwc::now_ns());
         self.unlocked = self.fading;
+        // Into pixels: the words typed away as the view pulls back (laid
+        // again at the next lock).
+        if self.door.mode == crate::door::Mode::Pixels {
+            self.words.erase_all();
+        }
         // The rest is reset when the doors are open: the picture they turn
         // is the lock screen as it was.
     }
@@ -861,6 +873,11 @@ impl Lock {
             return None;
         }
         let ((x, y), r) = self.drop_now(frame_ns);
+        // Into pixels: the drop goes first.
+        let r = r * (1.0 - ease(self.pulling(frame_ns).unwrap_or(0.0) / DROP_GOES_MS));
+        if r < 0.5 {
+            return None;
+        }
         let shaking = self.mark_shake.map(|t| frame_ns.saturating_sub(t)).filter(|t| *t < SHAKE_NS);
         let sx = shaking.map(shake).unwrap_or(0.0);
         let coral = shaking.map(|t| 1.0 - t as f64 / SHAKE_NS as f64).unwrap_or(0.0);
@@ -870,7 +887,7 @@ impl Lock {
     /// The PIN pad's keys as drops, born of the drop, moved with the right
     /// half by `dx`; whether the drop is drawn with them.
     pub fn pad_drops(&self, frame_ns: u64, dx: f64) -> Option<(Vec<crate::pinpad::Group>, bool)> {
-        if !self.entering && !self.pad_leaving {
+        if (!self.entering && !self.pad_leaving) || self.pulling(frame_ns).is_some() {
             return None;
         }
         let ((x, y), r) = self.drop_now(frame_ns);
@@ -896,8 +913,41 @@ impl Lock {
         let g = Grid::at(1.0);
         let ((x, y), _) = self.drop_now(frame_ns);
         let lamp = squares::to_table(x, y);
-        let glow = 0.85 + 0.15 * self.breath(frame_ns) + 0.3 * (self.life(frame_ns) - LIFE_REST).max(0.0);
-        Some(Table { s: g.s, o: g.o, lamp, reach: REACH * g.s, glow, centre: (0.0, 0.0), wave: 1e5, soft: 1.0, alpha: 1.0, light: crate::setup::LAMP_GREEN, wall: WALL, top: TOP })
+        let mut glow = 0.85 + 0.15 * self.breath(frame_ns) + 0.3 * (self.life(frame_ns) - LIFE_REST).max(0.0);
+        let mut t = Table { s: g.s, o: g.o, lamp, reach: REACH * g.s, glow, centre: (0.0, 0.0), wave: 1e5, soft: 1.0, alpha: 1.0, light: crate::setup::LAMP_GREEN, wall: WALL, top: TOP };
+        // Into pixels (as the setup ends): the squares take the wallpaper's
+        // whole colour and the light goes out; the view pulls back from
+        // where it was touched, the squares smaller and smaller - evenly to
+        // the eye (by the log) - until one is a physical pixel: the
+        // wallpaper, which the desktop under it is.
+        if let Some(ms) = self.pulling(frame_ns) {
+            let k = ease(ms / PULL_COLOUR_MS);
+            t.wall = WALL + (1.0 - WALL) * k;
+            t.top = TOP + (1.0 - TOP) * k;
+            glow *= 1.0 - k;
+            t.glow = glow;
+            let centre = squares::to_table(self.touched_at.0, self.touched_at.1);
+            let small = 1.0 / (t.s * layout::SCALE as f64);
+            let f = (small.ln() * ease((ms - PULL_ZOOM.0) / PULL_ZOOM.1)).exp();
+            t.s *= f;
+            t.o = (centre.0 + (t.o.0 - centre.0) * f, centre.1 + (t.o.1 - centre.1) * f);
+            t.alpha = 1.0 - ease((ms - PULL_FADE.0) / PULL_FADE.1);
+        }
+        Some(t)
+    }
+
+    /// Going into pixels (door.rs): for how long (ms).
+    fn pulling(&self, frame_ns: u64) -> Option<f64> {
+        let t = self.fading.filter(|_| self.door.mode == crate::door::Mode::Pixels)?;
+        Some(frame_ns.saturating_sub(t) as f64 / 1e6)
+    }
+
+    /// How far the halves have slid out (0..1): only the slide moves them.
+    fn slid(&self, frame_ns: u64) -> f64 {
+        match self.fading {
+            Some(t) if self.door.mode == crate::door::Mode::Slide => ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64),
+            _ => 0.0,
+        }
     }
 
     /// Where the unlock was touched: a wave starts there.
@@ -910,7 +960,7 @@ impl Lock {
     /// lock screen (door.rs).
     pub fn turning(&self, frame_ns: u64) -> Option<(crate::door::Style, f64, u64)> {
         let t = self.fading?;
-        (self.door.mode != crate::door::Mode::Slide).then(|| (self.door, ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64), t))
+        (!matches!(self.door.mode, crate::door::Mode::Slide | crate::door::Mode::Pixels)).then(|| (self.door, ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64), t))
     }
 
     pub fn elements(&self, renderer: &mut GlesRenderer, frame_ns: u64) -> Vec<ShellElement> {
@@ -918,8 +968,7 @@ impl Lock {
             return Vec::new();
         }
         // The doors sliding: each half out to its own side.
-        let open = self.fading.map(|t| ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64)).unwrap_or(0.0);
-        self.draw(renderer, frame_ns, open)
+        self.draw(renderer, frame_ns, self.slid(frame_ns))
     }
 
     /// The lock screen as it stands, for the picture the doors turn.
@@ -948,8 +997,7 @@ impl Lock {
         if !self.locked || self.turning(frame_ns).is_some() {
             return None;
         }
-        let open = self.fading.map(|t| ease(frame_ns.saturating_sub(t) as f64 / self.door.ns as f64)).unwrap_or(0.0);
-        Some(Self::door_dx(open))
+        Some(Self::door_dx(self.slid(frame_ns)))
     }
 
     fn door_dx(open: f64) -> (f64, f64) {

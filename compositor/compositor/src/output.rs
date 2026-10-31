@@ -1805,14 +1805,16 @@ impl Screen {
         // Moving, or the table drawn again: new ids, so each frame takes
         // them again.
         let key = self.table_id.clone();
-        if ldx != 0.0 || rdx != 0.0 || self.lock_wall_ids.len() != 3 || self.lock_wall_ids[2] != key {
+        if ldx != 0.0 || rdx != 0.0 || t.alpha < 1.0 || self.lock_wall_ids.len() != 3 || self.lock_wall_ids[2] != key {
             self.lock_wall_ids = vec![smithay::backend::renderer::element::Id::new(), smithay::backend::renderer::element::Id::new(), key];
         }
         let context = self.renderer.context_id();
+        // Fading (the unlock into pixels), the desktop shows through.
+        let opaque = t.alpha >= 1.0;
         let half = |id: smithay::backend::renderer::element::Id, x0: f64, width: f64, dx: f64| {
             let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((x0, 0.0).into(), (width, h as f64).into());
-            let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size(((width * SCALE as f64) as i32, h * SCALE).into());
-            FrameElement::Snapshot(TextureRenderElement::from_static_texture(id, context.clone(), ((x0 + dx) * SCALE as f64, 0.0), texture.clone(), SCALE, Transform::Normal, None, Some(src), Some((width as i32, h).into()), Some(vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified))
+            let whole = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size(((width * SCALE as f64) as i32, h * SCALE).into());
+            FrameElement::Snapshot(TextureRenderElement::from_static_texture(id, context.clone(), ((x0 + dx) * SCALE as f64, 0.0), texture.clone(), SCALE, Transform::Normal, None, Some(src), Some((width as i32, h).into()), opaque.then(|| vec![whole]), smithay::backend::renderer::element::Kind::Unspecified))
         };
         out.push(half(self.lock_wall_ids[0].clone(), 0.0, middle, ldx));
         out.push(half(self.lock_wall_ids[1].clone(), middle, w as f64 - middle, rdx));
