@@ -108,7 +108,13 @@ printf 'item (%s) unstable; urgency=medium\n\n  * See https://github.com/agentsc
 # each brought to 12 Mpx at most (walls.rs's SOURCE_PX: the picker's zoom
 # and the memory want no more), its metadata dropped. None there: a phone
 # starts with Aurora, drawn by the compositor.
-WALLS="${WALLS:-$HOME/Desktop/walls/ready}"
+WALLS="${WALLS:-$HOME/Desktop/projects/docs/walls/ready}"
+# A release without them started every new phone black (0.4.0's first
+# package, 2026-10-31: the folder had moved): a release stops here.
+if [ "$VERSION" = "$BASE" ] && ! ls "$WALLS"/*.jpg >/dev/null 2>&1; then
+  echo "package-deb: no wallpapers in $WALLS (WALLS=): a release needs them" >&2
+  exit 1
+fi
 if [ -d "$WALLS" ]; then
   mkdir -p "$S/usr/share/item/walls"
   for jpg in "$WALLS"/*.jpg; do
