@@ -4,8 +4,7 @@
 //! hwcomposer: EGL draws into the same native window, and only its
 //! present callback differs.
 //!
-//! - the first frame sets each panel's mode (SETCRTC, its half of the frame;
-//!   on again, both at once: modes_together);
+//! - the first frame sets each panel's mode (SETCRTC, its half of the frame);
 //! - every frame after goes to a committer thread, `present` waiting for
 //!   nothing: one atomic commit for both panels as soon as the last one's
 //!   flips are done (a command-mode panel takes a frame ~11 ms), the newest
@@ -26,7 +25,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
-use crate::drm::{self, Card, ModeInfo, OBJ_CONNECTOR, OBJ_CRTC, OBJ_PLANE};
+use crate::drm::{self, Card, ModeInfo, OBJ_CRTC, OBJ_PLANE};
 use crate::profile::Profile;
 use crate::{colour, now_ns, NativeBase, Output, PresentDetail, Win};
 
@@ -90,10 +89,8 @@ static FLIPS_LEFT: AtomicU64 = AtomicU64::new(0);
 static POWER_ON: AtomicBool = AtomicBool::new(true);
 /// The last flip's time: the synthesised vsync's phase.
 static LAST_FLIP_NS: AtomicU64 = AtomicU64::new(0);
-/// When the panels were asked on, until the mode set that lights them;
-/// then until the first frame's flips (the modes set together: lit then).
+/// When the panels were asked on, until the mode set that lights them.
 static POWERED_ON_AT: AtomicU64 = AtomicU64::new(0);
-static LIGHTING_SINCE: AtomicU64 = AtomicU64::new(0);
 
 const GRALLOC_MAGIC: i32 = 0x676d_736d;
 const PRIV_FLAGS_UBWC_ALIGNED: i32 = 0x0800_0000;
@@ -284,10 +281,6 @@ fn events(card: Arc<Card>, crtc_index: u32, period: u64) {
                     if FLIPS_LEFT.fetch_sub(1, Ordering::AcqRel) <= 1 {
                         FLIPS_LEFT.store(0, Ordering::Release);
                         set_pending(false);
-                        let since = LIGHTING_SINCE.swap(0, Ordering::Relaxed);
-                        if since != 0 {
-                            println!("hybris-hwc: kms: the panels on in {:.1} ms (together)", (now_ns() - since) as f64 / 1e6);
-                        }
                     }
                 }
                 _ => {}
@@ -347,9 +340,6 @@ fn framebuffer(k: &mut Kms, buffer: *mut c_void) -> Result<u32, String> {
 /// light together - black is dark on the OLED panels. Without a black
 /// buffer, with the frame itself (the GPU waited for here, once): one
 /// after the other. Returns whether the frame is still to be committed.
-///
-/// On again (each panel's plane known), the modes are set together
-/// (modes_together): half the time.
 fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<bool, String> {
     if k.black.is_none() {
         let w = k.panels.iter().map(|p| p.x + p.mode.hdisplay as u32).max().unwrap_or(0);
@@ -363,16 +353,6 @@ fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<bool, String> {
     if black == 0 {
         wait_fence(acquire);
     }
-    let together = black != 0 && k.panels.len() > 1 && k.panels.iter().all(|p| p.plane != 0);
-    if together {
-        if let Err(e) = modes_together(k, black) {
-            eprintln!("hybris-hwc: kms: {e}: the modes set one after the other");
-        } else {
-            k.started = true;
-            LIGHTING_SINCE.store(POWERED_ON_AT.swap(0, Ordering::Relaxed), Ordering::Relaxed);
-            return Ok(true);
-        }
-    }
     for p in &mut k.panels {
         k.card.set_crtc(p.crtc, p.connector, p.mode, if black != 0 { black } else { fb }, p.x)?;
         p.plane = k.card.plane_on(p.crtc)?;
@@ -383,37 +363,6 @@ fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<bool, String> {
         println!("hybris-hwc: kms: the panels on in {:.1} ms", (now_ns() - asked) as f64 / 1e6);
     }
     Ok(black != 0)
-}
-
-/// Each panel's mode set black in an atomic commit of its own, not waited
-/// for: SDE runs a commit on its CRTC's thread, so the two panels' power-on
-/// (each ~250 ms of the panel's own waits: reset, sleep out, display on)
-/// goes on side by side - SETCRTC takes every lock, one after the other.
-/// The frame's commit after waits in the kernel for both.
-fn modes_together(k: &Kms, black: u32) -> Result<(), String> {
-    for p in &k.panels {
-        let (w, h) = (p.mode.hdisplay as u64, p.mode.vdisplay as u64);
-        let blob = k.card.mode_blob(&p.mode)?;
-        let changes = [
-            (p.crtc, OBJ_CRTC, "MODE_ID", blob as u64),
-            (p.crtc, OBJ_CRTC, "ACTIVE", 1),
-            (p.connector, OBJ_CONNECTOR, "CRTC_ID", p.crtc as u64),
-            (p.plane, OBJ_PLANE, "FB_ID", black as u64),
-            (p.plane, OBJ_PLANE, "CRTC_ID", p.crtc as u64),
-            (p.plane, OBJ_PLANE, "SRC_X", (p.x as u64) << 16),
-            (p.plane, OBJ_PLANE, "SRC_Y", 0),
-            (p.plane, OBJ_PLANE, "SRC_W", w << 16),
-            (p.plane, OBJ_PLANE, "SRC_H", h << 16),
-            (p.plane, OBJ_PLANE, "CRTC_X", 0),
-            (p.plane, OBJ_PLANE, "CRTC_Y", 0),
-            (p.plane, OBJ_PLANE, "CRTC_W", w),
-            (p.plane, OBJ_PLANE, "CRTC_H", h),
-        ];
-        let r = k.card.commit(&changes, drm::ATOMIC_NONBLOCK | drm::ATOMIC_ALLOW_MODESET);
-        k.card.drop_blob(blob);
-        r.map_err(|e| format!("crtc {}'s mode: {e}", p.crtc))?;
-    }
-    Ok(())
 }
 
 fn wait_fence(fd: i32) {
@@ -465,25 +414,14 @@ fn commit(k: &Kms, fb: u32, acquire: i32) -> Result<i32, String> {
     set_pending(true);
     let flags = drm::ATOMIC_NONBLOCK | drm::ATOMIC_PAGE_FLIP_EVENT;
     let mut r = k.card.commit(&changes, flags);
-    let t = now_ns();
-    while r.as_ref().is_err_and(|e| e.raw_os_error() == Some(libc::EBUSY)) {
+    if r.as_ref().is_err_and(|e| e.raw_os_error() == Some(libc::EBUSY)) {
         // The last commit still on its way after all: once it is done, again
-        // (the fences the refused one was given closed first). The modes
-        // still being set (modes_together) take longer: tried until then.
+        // (the fences the refused one was given closed first).
         close_fences(&mut release);
-        if LIGHTING_SINCE.load(Ordering::Relaxed) == 0 {
-            wait_idle(50);
-        } else if now_ns() - t < 700_000_000 {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        } else {
-            break;
-        }
+        wait_idle(50);
         FLIPS_LEFT.store(k.panels.len() as u64, Ordering::Release);
         set_pending(true);
         r = k.card.commit(&changes, flags);
-        if LIGHTING_SINCE.load(Ordering::Relaxed) == 0 {
-            break;
-        }
     }
     if let Err(e) = r {
         close_fences(&mut release);

@@ -263,7 +263,6 @@ const SYNC_IOC_MERGE: libc::c_ulong = ioc(3, b'>', 3, std::mem::size_of::<SyncMe
 
 pub const OBJ_CRTC: u32 = 0xcccccccc;
 pub const OBJ_PLANE: u32 = 0xeeeeeeee;
-pub const OBJ_CONNECTOR: u32 = 0xc0c0c0c0;
 
 /// DRM_FORMAT_ABGR8888: gralloc's RGBA_8888, bytes R, G, B, A.
 pub const ABGR8888: u32 = u32::from_le_bytes(*b"AB24");
@@ -475,18 +474,6 @@ impl Card {
             }
         }
         found.ok_or_else(|| format!("no {name} on object {obj}"))
-    }
-
-    /// `mode` as a blob, for a CRTC's MODE_ID (let go with drop_blob once
-    /// committed: the CRTC keeps its own reference).
-    pub fn mode_blob(&self, mode: &ModeInfo) -> Result<u32, String> {
-        let mut blob = CreateBlob { data: mode as *const ModeInfo as u64, length: std::mem::size_of::<ModeInfo>() as u32, blob_id: 0 };
-        ioctl(self.fd(), CREATEPROPBLOB, &mut blob).map_err(|e| format!("a mode's blob: {e}"))?;
-        Ok(blob.blob_id)
-    }
-
-    pub fn drop_blob(&self, mut id: u32) {
-        let _ = ioctl(self.fd(), DESTROYPROPBLOB, &mut id);
     }
 
     /// A blob property of `crtc` set to `data`, or cleared with none.
