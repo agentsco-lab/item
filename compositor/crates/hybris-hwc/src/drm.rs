@@ -156,6 +156,18 @@ struct FbCmd2 {
 
 #[repr(C)]
 #[derive(Default)]
+struct CreateDumb {
+    height: u32,
+    width: u32,
+    bpp: u32,
+    flags: u32,
+    handle: u32,
+    pitch: u32,
+    size: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
 struct CreateBlob {
     data: u64,
     length: u32,
@@ -240,6 +252,7 @@ const GETCONNECTOR: libc::c_ulong = iowr(0xA7, std::mem::size_of::<GetConnector>
 const GETPROPERTY: libc::c_ulong = iowr(0xAA, std::mem::size_of::<GetProperty>());
 const GETPLANERESOURCES: libc::c_ulong = iowr(0xB5, std::mem::size_of::<PlaneRes>());
 const GETPLANE: libc::c_ulong = iowr(0xB6, std::mem::size_of::<GetPlane>());
+const CREATE_DUMB: libc::c_ulong = iowr(0xB2, std::mem::size_of::<CreateDumb>());
 const ADDFB2: libc::c_ulong = iowr(0xB8, std::mem::size_of::<FbCmd2>());
 const OBJ_GETPROPERTIES: libc::c_ulong = iowr(0xB9, std::mem::size_of::<ObjProps>());
 const OBJ_SETPROPERTY: libc::c_ulong = iowr(0xBA, std::mem::size_of::<ObjSetProperty>());
@@ -404,6 +417,18 @@ impl Card {
             fb.modifier[0] = m;
         }
         ioctl(self.fd(), ADDFB2, &mut fb).map_err(|e| format!("a framebuffer ({width}x{height}, pitch {pitch}, modifier {modifier:?}): {e}"))?;
+        Ok(fb.fb_id)
+    }
+
+    /// A black framebuffer of `width` x `height`: the kernel's own buffer,
+    /// zeroed as it is made.
+    pub fn black_framebuffer(&self, width: u32, height: u32) -> Result<u32, String> {
+        let mut d = CreateDumb { width, height, bpp: 32, ..Default::default() };
+        ioctl(self.fd(), CREATE_DUMB, &mut d).map_err(|e| format!("a black buffer ({width}x{height}): {e}"))?;
+        let mut fb = FbCmd2 { width, height, pixel_format: ABGR8888, ..Default::default() };
+        fb.handles[0] = d.handle;
+        fb.pitches[0] = d.pitch;
+        ioctl(self.fd(), ADDFB2, &mut fb).map_err(|e| format!("a black framebuffer ({width}x{height}): {e}"))?;
         Ok(fb.fb_id)
     }
 

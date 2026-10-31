@@ -70,6 +70,9 @@ struct Kms {
     refused: u32,
     /// The last framebuffer shown: the panels on again show it.
     shown_fb: u32,
+    /// Black, for the modes set (`start`): None before it is made, 0 if it
+    /// could not be.
+    black: Option<u32>,
     last: *mut c_void,
     last_ns: u64,
     stats: Stats,
@@ -172,7 +175,7 @@ pub(crate) fn open(buffers: i32, win: Win) -> Result<Output, String> {
     }
 
     let vblank_crtc = panels[0].crtc_index;
-    *KMS.lock().unwrap() = Some(Kms { card: card.clone(), profile, win, panels, fbs: HashMap::new(), started: false, refused: 0, shown_fb: 0, last: null_mut(), last_ns: 0, stats: Stats::default() });
+    *KMS.lock().unwrap() = Some(Kms { card: card.clone(), profile, win, panels, fbs: HashMap::new(), started: false, refused: 0, shown_fb: 0, black: None, last: null_mut(), last_ns: 0, stats: Stats::default() });
     crate::KMS_ON.store(true, Ordering::Relaxed);
     std::thread::Builder::new().name("kms-events".into()).spawn(move || events(card, vblank_crtc, period)).map_err(|e| e.to_string())?;
     std::thread::Builder::new().name("kms-commit".into()).spawn(committer).map_err(|e| e.to_string())?;
@@ -330,12 +333,28 @@ fn framebuffer(k: &mut Kms, buffer: *mut c_void) -> Result<u32, String> {
     Ok(fb)
 }
 
-/// The first frame: each panel's mode set with its half (the GPU waited for
-/// here, once), and the plane that shows it found.
-fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<(), String> {
-    wait_fence(acquire);
+/// The first frame: each panel's mode set, and the plane that shows it
+/// found. The modes are set black, one panel after the other (lighting a
+/// panel takes ~250 ms, the second lit a quarter of a second after the
+/// first, 2026-10-31); the frame then goes to both in one commit, and they
+/// light together - black is dark on the OLED panels. Without a black
+/// buffer, with the frame itself (the GPU waited for here, once): one
+/// after the other. Returns whether the frame is still to be committed.
+fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<bool, String> {
+    if k.black.is_none() {
+        let w = k.panels.iter().map(|p| p.x + p.mode.hdisplay as u32).max().unwrap_or(0);
+        let h = k.panels.iter().map(|p| p.mode.vdisplay as u32).max().unwrap_or(0);
+        k.black = Some(k.card.black_framebuffer(w, h).unwrap_or_else(|e| {
+            eprintln!("hybris-hwc: kms: {e}: the panels lit one after the other");
+            0
+        }));
+    }
+    let black = k.black.unwrap_or(0);
+    if black == 0 {
+        wait_fence(acquire);
+    }
     for p in &mut k.panels {
-        k.card.set_crtc(p.crtc, p.connector, p.mode, fb, p.x)?;
+        k.card.set_crtc(p.crtc, p.connector, p.mode, if black != 0 { black } else { fb }, p.x)?;
         p.plane = k.card.plane_on(p.crtc)?;
     }
     k.started = true;
@@ -343,7 +362,7 @@ fn start(k: &mut Kms, fb: u32, acquire: i32) -> Result<(), String> {
     if asked != 0 {
         println!("hybris-hwc: kms: the panels on in {:.1} ms", (now_ns() - asked) as f64 / 1e6);
     }
-    Ok(())
+    Ok(black != 0)
 }
 
 fn wait_fence(fd: i32) {
@@ -553,15 +572,30 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
     let t = now_ns();
     let fb = if POWER_ON.load(Ordering::Relaxed) { framebuffer(k, buffer) } else { Err(String::new()) };
     match fb {
-        Ok(fb) if !k.started => {
-            if let Err(e) = start(k, fb, acquire) {
+        Ok(fb) if !k.started => match start(k, fb, acquire) {
+            Err(e) => {
                 eprintln!("hybris-hwc: kms: {e}");
                 k.stats.errors += 1;
                 k.refused += 1;
                 if k.refused >= 3 {
                     crate::kms_gave_up(&e);
                 }
-            } else {
+                if acquire >= 0 {
+                    // SAFETY: the window's fence, handed to us.
+                    unsafe { libc::close(acquire) };
+                }
+            }
+            // Set black: the frame to both panels at once, as any frame.
+            Ok(true) => {
+                k.refused = 0;
+                hold(buffer);
+                let (lock, cv) = &MAILBOX;
+                if let Some(old) = lock.lock().unwrap().replace(Job { buffer, fb, acquire }) {
+                    drop_job(old);
+                }
+                cv.notify_one();
+            }
+            Ok(false) => {
                 k.refused = 0;
                 hold(buffer);
                 if !k.last.is_null() {
@@ -569,12 +603,12 @@ pub(crate) extern "C" fn present(_: *mut c_void, _window: *mut c_void, buffer: *
                 }
                 k.last = buffer;
                 k.shown_fb = fb;
+                if acquire >= 0 {
+                    // SAFETY: the window's fence, waited for.
+                    unsafe { libc::close(acquire) };
+                }
             }
-            if acquire >= 0 {
-                // SAFETY: the window's fence, waited for.
-                unsafe { libc::close(acquire) };
-            }
-        }
+        },
         Ok(fb) => {
             hold(buffer);
             let (lock, cv) = &MAILBOX;
