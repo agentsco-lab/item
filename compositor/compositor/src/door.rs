@@ -30,7 +30,7 @@
 pub const STRIPS: usize = 48;
 /// How long the squares take to become pixels, the halves to fly away,
 /// and the others to go.
-pub const PIXELS_NS: u64 = 1_100_000_000;
+pub const PIXELS_NS: u64 = 1_600_000_000;
 const FLY_NS: u64 = 480_000_000;
 const WAVE_NS: u64 = 850_000_000;
 /// How far up a flying half goes (its panel's heights), how much smaller

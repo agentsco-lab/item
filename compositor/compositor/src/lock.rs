@@ -52,10 +52,10 @@ const WALL: f64 = 0.45;
 /// Into pixels (door.rs), ms from the unlock: the drop gone; the squares
 /// the wallpaper's whole colour; the view pulled back (from, for); the
 /// table faded (from, for) - the whole within door::PIXELS_NS.
-const DROP_GOES_MS: f64 = 250.0;
-const PULL_COLOUR_MS: f64 = 300.0;
-const PULL_ZOOM: (f64, f64) = (100.0, 850.0);
-const PULL_FADE: (f64, f64) = (950.0, 150.0);
+const DROP_GOES_MS: f64 = 300.0;
+const PULL_COLOUR_MS: f64 = 400.0;
+const PULL_ZOOM: (f64, f64) = (100.0, 1250.0);
+const PULL_FADE: (f64, f64) = (1150.0, 450.0);
 /// The brightest a square gets (luma): the dim words are
 /// 0.47 grey, a light sky under them took them away (2026-10-31).
 const TOP: f64 = 0.2;
@@ -693,6 +693,13 @@ impl Lock {
         self.unlocked.take()
     }
 
+    /// How long after the unlock the dock comes in: into pixels, as the
+    /// table fades (sooner it came in under the table, and was there at
+    /// once as it went).
+    pub fn dock_after_ns(&self) -> u64 {
+        if self.door.mode == crate::door::Mode::Pixels { (PULL_FADE.0 * 1e6) as u64 } else { 250_000_000 }
+    }
+
     /// Whether the display was lit again since last asked: it wants whole
     /// frames.
     pub fn relit(&mut self) -> bool {
@@ -928,7 +935,9 @@ impl Lock {
             t.glow = glow;
             let centre = squares::to_table(self.touched_at.0, self.touched_at.1);
             let small = 1.0 / (t.s * layout::SCALE as f64);
-            let f = (small.ln() * ease((ms - PULL_ZOOM.0) / PULL_ZOOM.1)).exp();
+            // Gently in and out (a sine; the cubic started and stopped hard).
+            let z = ((ms - PULL_ZOOM.0) / PULL_ZOOM.1).clamp(0.0, 1.0);
+            let f = (small.ln() * (0.5 - 0.5 * (z * std::f64::consts::PI).cos())).exp();
             t.s *= f;
             t.o = (centre.0 + (t.o.0 - centre.0) * f, centre.1 + (t.o.1 - centre.1) * f);
             t.alpha = 1.0 - ease((ms - PULL_FADE.0) / PULL_FADE.1);

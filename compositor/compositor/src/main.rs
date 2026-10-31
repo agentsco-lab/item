@@ -1033,7 +1033,7 @@ impl Data {
         }
         // The dock's halves come in from the sides after an unlock.
         if let Some(t) = self.state.lock.take_unlocked() {
-            self.state.dock.rise(t + 250_000_000);
+            self.state.dock.rise(t + self.state.lock.dock_after_ns());
         }
         // A notification's banner slides in and out.
         if let Some(n) = self.state.notes.banner(now) {
