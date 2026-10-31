@@ -989,7 +989,9 @@ impl Lock {
     /// and the keys' water under them).
     fn draw(&self, renderer: &mut GlesRenderer, frame_ns: u64, open: f64) -> Vec<ShellElement> {
         let (left_dx, right_dx) = Self::door_dx(open);
-        let mut out = if self.entering { self.pad.elements(renderer, frame_ns, right_dx) } else { Vec::new() };
+        // Into pixels, the keys' digits gone at once with their drops.
+        let pad = self.entering && self.pulling(frame_ns).is_none();
+        let mut out = if pad { self.pad.elements(renderer, frame_ns, right_dx) } else { Vec::new() };
         out.extend(self.words.elements(renderer, frame_ns, left_dx));
         out
     }
