@@ -122,7 +122,7 @@ const LAMP_NS: u64 = 1_200_000_000;
 const LAMP_IN: f64 = 0.15;
 const LAMP_Y: f64 = 0.62;
 /// The lamp's light: green, whatever the accent (the owner's, 2026-10-30).
-const LAMP_GREEN: [f32; 3] = [0.180, 0.761, 0.494];
+pub(crate) const LAMP_GREEN: [f32; 3] = [0.180, 0.761, 0.494];
 /// The drop leans with the phone: at most this far (logical px) toward
 /// where gravity pulls in the screen's plane, on a soft spring.
 const TILT_PX: f64 = 6.0;
@@ -266,6 +266,11 @@ pub struct Orb {
 }
 
 impl Orb {
+    /// A drop of clear water (the lock's), `coral` of it filled.
+    pub fn water(x: f64, y: f64, r: f64, coral: f64) -> Orb {
+        Orb { x, y, r, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: [1.0; 4], print: 0.0, lit: 0.0, flash: 0.0, fill: coral }
+    }
+
     /// `k` of the way from this to `to`.
     fn lerp(&self, to: &Orb, k: f64) -> Orb {
         let mix = |a: f64, b: f64| a + (b - a) * k;
@@ -823,7 +828,7 @@ impl Setup {
             o = (centre.0 + (o.0 - centre.0) * f, centre.1 + (o.1 - centre.1) * f);
             alpha = 1.0 - ease((ms - PULL_FADE.0) / PULL_FADE.1);
         }
-        Some(Table { s, o, lamp, reach, glow, centre, wave, soft, alpha, light: LAMP_GREEN })
+        Some(Table { s, o, lamp, reach, glow, centre, wave, soft, alpha, light: LAMP_GREEN, wall: 1.0 })
     }
 
     /// Where the circle goes for the step, and how it looks.

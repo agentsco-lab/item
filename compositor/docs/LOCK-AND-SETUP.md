@@ -22,22 +22,35 @@ asked for after the person was already in, in a window of its own.
 
 ## After a boot
 
-- Left: the time, large; the date; a greeting by the time of day and the
-  name ("Good morning, Alex"); "Enter your PIN after a restart".
-- Right: the PIN pad, already open.
-- The right PIN unlocks, and the two halves open as doors: the left panel's
-  half slides out to the left, the right one's to the right, the desktop
-  under them, the dock rising. A wrong one: the pad shakes, a buzz.
+- The table, as for the lock (below). Left: the time as a title, the date,
+  the battery; a greeting by the time of day and the name ("good morning,
+  alex"); low down "pin after a restart".
+- Right: the PIN pad, already open, its keys the drop's water on the
+  squares.
+- The right PIN unlocks, and the lock screen goes as the doors say
+  (door.rs), the desktop under it, the dock rising. A wrong one: the pad
+  shakes, its dots red, a buzz, "not this one".
 
 ## The lock
 
-- Left: the time and the date.
-- Right: a fingerprint mark at the right edge, across from the power key
-  (the reader is in it), pulsing softly while the reader listens, and
-  "Touch the power key".
-- A known finger: the mark flashes, the doors open. An unknown one: the
-  mark shakes red, a buzz, "Not recognized". After five failures the PIN pad
-  slides in on the right; a swipe up brings it at any time.
+Since 2026-10-31 in the first setup's style (the owner's): the setup's
+table over both panels, its squares the wallpaper's colour, dimmed; the
+words a letter a square, lowercase; the setup's drop and its lamp.
+
+- Left: the time as a title, the date and the battery under it; what is
+  playing, its buttons as words a tap takes (`‹  play  ›`); the last
+  notifications, app and title. Low down what is said: "swipe up" (no
+  finger known), a passing "not this finger", "it's you, swipe up" after a
+  known face. The words are there at once as the screen lights, typed only
+  as they change.
+- Right: the drop at the right edge, across from the power key (the reader
+  is in it), a green lamp under it, breathing a while after the screen
+  lights.
+- A known finger: the drop flashes, the lock goes. An unknown one: the drop
+  shakes, coral a moment, a buzz. After five failures, or a swipe up at
+  any time, the drop goes to the panel's middle and becomes the PIN pad, as
+  in the setup; a swipe down gathers the keys back into it, and it goes
+  back to the reader.
 
 ## The first setup (once)
 

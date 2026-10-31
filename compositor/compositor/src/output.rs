@@ -619,12 +619,7 @@ impl Screen {
         let lock = state.lock.elements(&mut self.renderer, frame_ns);
         elements.extend(lock.into_iter().map(FrameElement::from));
         if let Some((ldx, rdx)) = doors {
-            elements.extend(self.lock_drops(state, frame_ns, rdx));
-            // The vignette with a picture on each panel, moving with its door.
-            if state.walls.each {
-                elements.extend(self.vignette(state.walls.vignette, state.posture.book(), (ldx, rdx), None));
-            }
-            elements.extend(self.lock_wall(ldx, rdx));
+            elements.extend(self.lock_scene(state, frame_ns, ldx, rdx));
         }
         // The system's dialog, under the lock screen, over everything else.
         if !dialog_over_setup {
@@ -1785,37 +1780,41 @@ impl Screen {
         self.edges.as_ref().map(|e| e[set].clone()).unwrap_or_default().into_iter().map(FrameElement::Pixel).collect()
     }
 
-    /// The lock screen's PIN keys as drops, moved with the right half.
-    fn lock_drops(&mut self, state: &State, frame_ns: u64, dx: f64) -> Vec<FrameElement> {
-        let mut out = Vec::new();
-        let (Some(groups), Some(texture)) = (state.lock.pad_drops(frame_ns, dx), self.wall.clone()) else { return out };
-        let wall = (&texture, (wall_width() as f64, crate::layout::LANDSCAPE.1 as f64), crate::state::WALL_LEFT as f64);
-        for (slot, g) in groups.iter().enumerate() {
-            if let Some(e) = state.dock.group(&mut self.renderer, 4 + slot, &g.drops, g.melt, frame_ns, g.life, 1.0, 1.0, wall) {
-                out.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
-            }
-        }
-        out
-    }
-
-    /// The wallpaper under the lock screen, still, in two halves split at
-    /// the hinge's middle, each moved by its door.
-    fn lock_wall(&mut self, ldx: f64, rdx: f64) -> Vec<FrameElement> {
+    /// Under the lock screen's words: its drop, or the PIN pad's keys born
+    /// of it, bending the table; the lamp's light; the table (the setup's,
+    /// its squares the wallpaper's colour) in two halves split at the
+    /// hinge's middle, each moved by its door.
+    fn lock_scene(&mut self, state: &State, frame_ns: u64, ldx: f64, rdx: f64) -> Vec<FrameElement> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
-        let Some(texture) = self.wall.clone() else { return Vec::new() };
+        let Some(t) = state.lock.table(frame_ns) else { return Vec::new() };
+        let Some(texture) = self.setup_table(&t) else { return Vec::new() };
+        let mut out = Vec::new();
+        if let Some(orb) = state.lock.orb(frame_ns, rdx) {
+            let (drop, _) = self.setup_orb(state, &orb, frame_ns, Some(&texture), state.lock.pad_drops(frame_ns, rdx), state.lock.life(frame_ns), 4);
+            out.extend(drop);
+        }
+        // The light where it stands; not while the doors slide.
+        if ldx == 0.0 && rdx == 0.0 {
+            out.extend(self.setup_light(&t, 1.0));
+        }
         let (w, h) = crate::layout::size();
         let panels = crate::layout::panels();
         let middle = ((panels[0].loc.x + panels[0].size.w + panels[1].loc.x) / 2) as f64;
-        // Moving: new ids, so each frame takes them again.
-        if ldx != 0.0 || rdx != 0.0 || self.lock_wall_ids.is_empty() {
-            self.lock_wall_ids = vec![smithay::backend::renderer::element::Id::new(), smithay::backend::renderer::element::Id::new()];
+        // Moving, or the table drawn again: new ids, so each frame takes
+        // them again.
+        let key = self.table_id.clone();
+        if ldx != 0.0 || rdx != 0.0 || self.lock_wall_ids.len() != 3 || self.lock_wall_ids[2] != key {
+            self.lock_wall_ids = vec![smithay::backend::renderer::element::Id::new(), smithay::backend::renderer::element::Id::new(), key];
         }
         let context = self.renderer.context_id();
         let half = |id: smithay::backend::renderer::element::Id, x0: f64, width: f64, dx: f64| {
-            let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((crate::state::WALL_LEFT as f64 + x0, 0.0).into(), (width, h as f64).into());
-            FrameElement::Snapshot(TextureRenderElement::from_static_texture(id, context.clone(), ((x0 + dx) * SCALE as f64, 0.0), texture.clone(), SCALE, Transform::Normal, None, Some(src), Some((width as i32, h).into()), None, smithay::backend::renderer::element::Kind::Unspecified))
+            let src = smithay::utils::Rectangle::<f64, smithay::utils::Logical>::new((x0, 0.0).into(), (width, h as f64).into());
+            let opaque = smithay::utils::Rectangle::<i32, smithay::utils::Buffer>::from_size(((width * SCALE as f64) as i32, h * SCALE).into());
+            FrameElement::Snapshot(TextureRenderElement::from_static_texture(id, context.clone(), ((x0 + dx) * SCALE as f64, 0.0), texture.clone(), SCALE, Transform::Normal, None, Some(src), Some((width as i32, h).into()), Some(vec![opaque]), smithay::backend::renderer::element::Kind::Unspecified))
         };
-        vec![half(self.lock_wall_ids[0].clone(), 0.0, middle, ldx), half(self.lock_wall_ids[1].clone(), middle, w as f64 - middle, rdx)]
+        out.push(half(self.lock_wall_ids[0].clone(), 0.0, middle, ldx));
+        out.push(half(self.lock_wall_ids[1].clone(), middle, w as f64 - middle, rdx));
+        out
     }
 
     /// The wallpaper whole and still, under the first setup; fading as the
@@ -1842,7 +1841,7 @@ impl Screen {
         if self.table_program.is_none() {
             let mut names: Vec<UniformName> = ["texl", "src0", "gap", "o", "centre"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
             names.extend(["pa", "pb"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)));
-            names.extend(["s", "wave", "soft", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["s", "wave", "soft", "wall", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             match self.renderer.compile_custom_texture_shader(&crate::glass::dithered(include_str!("table.frag")), &names) {
                 Ok(p) => self.table_program = Some(p),
                 Err(e) => {
@@ -1857,7 +1856,7 @@ impl Screen {
         // Drawn again only as it changes (a zoom, the end): still, the frame
         // takes only what moves over it (the light, the words, the drop) -
         // drawn whole each frame it missed frames.
-        let key = (t.s.to_bits(), t.o.0.to_bits() ^ t.o.1.to_bits().rotate_left(17), t.wave.to_bits(), size.w, self.wall.is_some());
+        let key = (t.s.to_bits(), t.o.0.to_bits() ^ t.o.1.to_bits().rotate_left(17), t.wave.to_bits() ^ t.wall.to_bits().rotate_left(29), size.w, self.wall.is_some());
         if self.table_key == Some(key) && self.table_tex.as_ref().is_some_and(|t| smithay::backend::renderer::Texture::size(t) == size) {
             return self.table_tex.clone();
         }
@@ -1883,6 +1882,7 @@ impl Screen {
             Uniform::new("s", t.s as f32),
             Uniform::new("wave", t.wave as f32),
             Uniform::new("soft", t.soft as f32),
+            Uniform::new("wall", t.wall as f32),
             Uniform::new("ink", 0.16f32),
             Uniform::new("thick", 2.0f32),
         ];
@@ -2135,8 +2135,7 @@ impl Screen {
         let size = self.output.current_mode()?.size;
         let mut elements: Vec<FrameElement> = Vec::new();
         elements.extend(state.lock.picture(&mut self.renderer, frame_ns).into_iter().map(FrameElement::from));
-        elements.extend(self.lock_drops(state, frame_ns, 0.0));
-        elements.extend(self.lock_wall(0.0, 0.0));
+        elements.extend(self.lock_scene(state, frame_ns, 0.0, 0.0));
         let mut texture: smithay::backend::renderer::gles::GlesTexture = self.renderer.create_buffer(Fourcc::Abgr8888, (size.w, size.h).into()).ok()?;
         let mut tracker = OutputDamageTracker::new((size.w, size.h), SCALE as f64, Transform::Normal);
         {

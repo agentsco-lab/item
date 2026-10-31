@@ -76,8 +76,9 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
   (the battery with its 24 h graph, the calendar's next event, the device)
   and **the pen's sheet** right of the right one, brought in from the outer
   edge; the pen draws with its pressure, the other end erases.
-- **The lock screen**: the PIN pad's keys as drops, the fingerprint mark at
-  the reader under the power key. **CV ID**: a known face unlocks the phone
+- **The lock screen**, in the first setup's style: the wallpaper as
+  squares, the words a letter a square, a drop at the reader under the
+  power key that becomes the PIN pad. **CV ID**: a known face unlocks the phone
   as it is opened - the camera is started at the lid itself, ahead of the
   panels lighting. The faces enrolled stay on the phone, in
   `/var/lib/item-face`, root's alone; the camera is open only while the lock

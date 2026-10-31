@@ -6,77 +6,72 @@
 //!   locks. With the screen off it lights it again, locked.
 //! - The session's idle delay (org.gnome.desktop.session idle-delay, read at
 //!   start; 0: never) does the same after that long without a touch.
-//! - The lock screen, over everything, on two panels with two roles: the
-//!   left one says who and what (the time, the date; after a boot a
-//!   greeting), the right one is where you act. After a boot the PIN pad is
-//!   open there at once: the first PIN also opens the login keyring (PAM's
-//!   phosh service, pam.rs). Otherwise a fingerprint mark stands at the right
-//!   edge, across from the power key that holds the reader; a known finger
-//!   unlocks (fingerprint.rs), an unknown one shakes it red; after five, or
-//!   a swipe up at any time, the PIN pad slides in.
-//! - Unlocked, the two halves open as doors: the left one slides out left,
-//!   the right one right, over 450 ms.
+//! - The lock screen is the first setup's table (setup.rs, squares.rs), its
+//!   squares the wallpaper's colour, dimmed: the wallpaper seen as squares
+//!   (the owner's, 2026-10-31). The left panel says who and what, in the
+//!   setup's words - a letter a square, lowercase: the time as a title, the
+//!   date and the battery under it; after a boot a greeting; what is
+//!   playing, with its buttons as words a tap takes (they work locked); the
+//!   last notifications, their app and title only - what they say is for
+//!   after the unlock; low down, what is said to you. The words are there
+//!   at once as the screen lights (it is seen too often to type them), and
+//!   typed as they change.
+//! - The right panel is where you act. The setup's drop stands at its edge
+//!   across from the power key, which holds the reader, a lamp under it: a
+//!   known finger flashes it and unlocks (fingerprint.rs), an unknown one
+//!   shakes it, coral; after five, or a swipe up at any time, the drop goes
+//!   to the panel's middle and becomes the PIN pad, as in the setup
+//!   (pinpad.rs). After a boot the pad is open at once: the first PIN also
+//!   opens the login keyring (PAM's phosh service, pam.rs).
+//! - Unlocked, the lock screen goes as the doors say (door.rs).
 //! - The volume keys (gpio-keys) set the volume, locked or not.
-//! - On the left half under the status line, what is playing (MPRIS) with
-//!   its buttons, which work locked; under it the last three
-//!   notifications, their app and title only - what they say is for after
-//!   the unlock.
 
 use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
-use smithay::backend::renderer::element::solid::SolidColorRenderElement;
-use smithay::backend::renderer::element::{Id, Kind};
+use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
-use smithay::backend::renderer::utils::CommitCounter;
 use smithay::backend::input::TouchSlot;
-use smithay::utils::{Physical, Rectangle};
 
 use crate::layout::{self, SCALE};
-use resvg::tiny_skia;
 use crate::shade::{local_time, ShellElement};
 use crate::pinpad::{ease, shake, PinPad, Press, SHAKE_NS};
-use crate::text::{Font, Label};
+use crate::squares::{self, Grid, Line, Table, DIM, LIT};
+use crate::text::Font;
 
-/// Said in the hint's place once a face is known.
-const FACE_OK: &str = "Unlocked · swipe up";
+/// Said low on the left once a face is known.
+const FACE_OK: &str = "it's you, swipe up";
 /// A face opens the lock only this long after the PIN was last given.
 const FACE_PIN_FOR: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
-/// The mark's flash at a known finger.
+/// The drop's flash at a known finger, its coral at an unknown one.
 const FLASH_NS: u64 = 300_000_000;
-/// The mark pulses this long after the lock screen shows, then rests.
+/// The drop and its lamp breathe this long after the lock screen shows,
+/// then rest.
 const PULSE_FOR_NS: u64 = 12_000_000_000;
 const PULSE_PERIOD_NS: u64 = 1_800_000_000;
-/// How dark the wallpaper is under the lock screen.
-const SHADE: f32 = 0.55;
+/// How much of the wallpaper's colour is in the squares.
+const WALL: f64 = 0.45;
 /// Unknown fingers in a row before the PIN pad comes.
 const FAILS_FOR_PIN: u32 = 5;
 /// A swipe up this far brings the pad, or a fling up.
 const UNLOCK: f64 = 120.0;
 const FLING: f64 = 0.5;
-
-/// The fingerprint mark: its size, and the height of the power key's middle
-/// on the right panel's right edge (logical px).
-const MARK: f64 = 48.0;
+/// The power key's middle on the right panel's right edge (logical px):
+/// the drop stands across from it, this far in, this big.
 const POWER_Y: f64 = 455.0;
-/// The glow across from the reader: its size, and how far in from the
-/// panel's edge its middle is (half of it past the edge, hugging it).
-const SENSOR_GLOW: f64 = 110.0;
-const SENSOR_IN: f64 = 8.0;
-/// The mark comes up over this.
-const MARK_IN_NS: u64 = 400_000_000;
-const GLOW: f64 = 124.0;
-/// Where the left panel talks to you: the middle of its lower part.
-const TALK_FROM_FOOT: i32 = 170;
-
-/// The clock line, as the desktop's (clock.rs): its size, its distance from
-/// the top, the room between the time and the date, its end in from the
-/// panel's right edge.
-const CLOCK_SIZE: f32 = 36.0;
-const CLOCK_TOP: f64 = 72.0;
-const CLOCK_BETWEEN: i32 = 14;
-const CLOCK_RIGHT: f64 = 40.0;
-/// The clock's glow: how far it spreads (logical px), and how strong.
-const GLOW_R: i32 = 10;
-const GLOW_A: f32 = 0.55;
+const DROP_IN: f64 = 56.0;
+const DROP_R: f64 = 26.0;
+/// The drop in the pad's middle, the keys to be (the setup's), and its
+/// way there and back.
+const PAD_DROP_R: f64 = 40.0;
+const MOVE_NS: f64 = 450_000_000.0;
+/// How alive the water is: breathing, at rest.
+const LIFE_PULSE: f64 = 0.3;
+const LIFE_REST: f64 = 0.15;
+/// The lamp's reach, in squares.
+const REACH: f64 = 4.5;
+/// The words on the left: from the title's row, wrapped this wide.
+const WIDE: usize = 16;
+/// A line's letters at most (cut after, with an ellipsis).
+const CUT: usize = 16;
 
 pub struct Lock {
     /// The PIN pad is up (pinpad.rs).
@@ -87,20 +82,6 @@ pub struct Lock {
     /// The PIN that unlocked, for the keyring's prompts (keyring.rs).
     verified: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     wake: smithay::reexports::calloop::ping::Ping,
-    /// The fingerprint mark, white and red.
-    mark: Option<MemoryRenderBuffer>,
-    mark_red: Option<MemoryRenderBuffer>,
-    /// The mark a little larger, for a soft shine under it.
-    /// The mark in the accent, for a known finger (drawn again when the
-    /// accent changes).
-    mark_lit: std::cell::RefCell<Option<(u64, MemoryRenderBuffer)>>,
-    glow: Option<MemoryRenderBuffer>,
-    /// The status line under the date: the battery and the network.
-    battery_icon: Option<MemoryRenderBuffer>,
-    battery_label: Label,
-    net_icon: Option<MemoryRenderBuffer>,
-    net_label: Label,
-    status_icons: (String, &'static str),
     pub locked: bool,
     pub blank: bool,
     /// The first lock after a boot: the PIN, and a greeting.
@@ -108,7 +89,8 @@ pub struct Lock {
     /// When the PIN was last given (wall time: sleep counts); a face opens
     /// the lock only within FACE_PIN_FOR of it.
     pin_at: std::time::SystemTime,
-    /// Fingers enrolled with the reader; none, and there is no mark.
+    /// Fingers enrolled with the reader; none, and the drop waits for a
+    /// swipe up.
     fingers: usize,
     /// Unknown fingers in a row.
     fails: u32,
@@ -117,31 +99,35 @@ pub struct Lock {
     fading: Option<u64>,
     touched_at: (f64, f64),
     door: crate::door::Style,
-    /// When the mark last shook or flashed.
+    /// When the drop last shook or flashed.
     mark_shake: Option<u64>,
     mark_flash: Option<u64>,
-    /// When the lock screen last came up or was lit: the mark pulses after.
+    /// When the lock screen last came up or was lit: the drop breathes
+    /// after.
     shown_at: u64,
+    /// The drop's way: to the pad (true) or back to the reader, since when.
+    drop_way: (bool, u64),
     grab: Option<(TouchSlot, f64, (u64, f64), f64)>,
     /// How far the finger has lifted the lock screen, logical px.
     lift: f64,
-    fonts: Option<(Font, Font)>,
+    /// The words' thin face (the setup's).
+    font: Option<Font>,
     /// The PIN pad put away, its drops gathering back (pinpad.rs).
     pad_leaving: bool,
-    /// The clock line's glow (drawn under it), made with it each minute.
-    clock_glow: Option<MemoryRenderBuffer>,
-    /// The clock's: bold for the time, medium for the date (as the
-    /// desktop's, clock.rs), and the accent it is drawn in.
-    clock_fonts: Option<(Font, Font)>,
-    clock_accent: u64,
-    time: Label,
-    date: Label,
-    greeting: Label,
-    status: Label,
-    hint: Label,
-    /// The hint, and a passing notice in its place until when.
+    /// The words on the table (squares.rs).
+    words: squares::Words,
+    /// What the left panel says: the time and the date, the status line,
+    /// the greeting.
+    time: String,
+    date: String,
+    status: String,
+    greeting: String,
+    /// What is said low down: the hint, a passing notice in its place
+    /// until when, what the pad says while it is up.
     hint_base: String,
+    notice: String,
     notice_until: u64,
+    said: String,
     /// A face known (face.rs): unlocked, not opened - the doors wait for a
     /// swipe up or a finger, so the phone is not opened before it is in
     /// hand. Said in the hint's place until then.
@@ -157,8 +143,6 @@ pub struct Lock {
     /// have changed length) until one is accepted.
     auto_sent: bool,
     minute: i32,
-    id: Id,
-    id_right: Id,
     /// When the last touch came, for the idle delay.
     pub last_touch_ns: u64,
     pub idle_ns: u64,
@@ -166,100 +150,13 @@ pub struct Lock {
     relit: bool,
     /// When the last unlock began, not yet asked for.
     unlocked: Option<u64>,
-    /// The last notifications (app, title) and their labels.
+    /// The last notifications (app, title).
     notes: Vec<(String, String)>,
-    note_labels: Vec<(Label, Label)>,
-    /// What is playing (title, artist, playing) and its labels; its card,
-    /// a notification's, and the buttons' icons (previous, play, pause,
-    /// next).
+    /// What is playing (title, artist, playing).
     media: Option<(String, String, bool)>,
-    media_labels: (Label, Label),
-    card: MemoryRenderBuffer,
-    note_card: MemoryRenderBuffer,
-    media_icons: [Option<MemoryRenderBuffer>; 4],
 }
-
-/// The lock screen's cards: their width and heights, logical px.
-const CARD_W: f64 = 520.0;
-const MEDIA_H: f64 = 76.0;
-const NOTE_H: f64 = 56.0;
-const CARDS_GAP: f64 = 10.0;
-const CARDS_TOP: f64 = 30.0;
-const MEDIA_BUTTON: f64 = 48.0;
 
 /// A symbolic icon in one colour, `size` logical px.
-/// A glow of RGBA rows (premultiplied, `w`x`h` px): spread `r` px each way
-/// by three box blurs, its strength `a`.
-fn glow_buffer(rgba: &[u8], w: i32, h: i32, r: i32, a: f32) -> MemoryRenderBuffer {
-    use smithay::backend::allocator::Fourcc;
-    let (gw, gh) = (w + 2 * r, h + 2 * r);
-    let mut buf = vec![0f32; (gw * gh * 4) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let (i, j) = (((y * w + x) * 4) as usize, (((y + r) * gw + x + r) * 4) as usize);
-            for c in 0..4 {
-                buf[j + c] = rgba[i + c] as f32;
-            }
-        }
-    }
-    let k = (r / 3).max(1);
-    let mut tmp = buf.clone();
-    for _ in 0..3 {
-        // Across, then down: a running sum over 2k+1.
-        for y in 0..gh {
-            for c in 0..4 {
-                let mut sum = 0f32;
-                for x in -k..=k {
-                    sum += buf[((y * gw + x.clamp(0, gw - 1)) * 4) as usize + c];
-                }
-                for x in 0..gw {
-                    tmp[((y * gw + x) * 4) as usize + c] = sum / (2 * k + 1) as f32;
-                    let (out, inn) = ((x - k).clamp(0, gw - 1), (x + k + 1).clamp(0, gw - 1));
-                    sum += buf[((y * gw + inn) * 4) as usize + c] - buf[((y * gw + out) * 4) as usize + c];
-                }
-            }
-        }
-        for x in 0..gw {
-            for c in 0..4 {
-                let mut sum = 0f32;
-                for y in -k..=k {
-                    sum += tmp[((y.clamp(0, gh - 1) * gw + x) * 4) as usize + c];
-                }
-                for y in 0..gh {
-                    buf[((y * gw + x) * 4) as usize + c] = sum / (2 * k + 1) as f32;
-                    let (out, inn) = ((y - k).clamp(0, gh - 1), (y + k + 1).clamp(0, gh - 1));
-                    sum += tmp[((inn * gw + x) * 4) as usize + c] - tmp[((out * gw + x) * 4) as usize + c];
-                }
-            }
-        }
-    }
-    let px: Vec<u8> = buf.iter().map(|v| (v * a).round().clamp(0.0, 255.0) as u8).collect();
-    MemoryRenderBuffer::from_slice(&px, Fourcc::Abgr8888, (gw, gh), SCALE, smithay::utils::Transform::Normal, None)
-}
-
-/// A soft round glow, `size` logical px across: the colour strongest in the
-/// middle, gone at the rim.
-pub(crate) fn soft_glow(size: f64, rgba: [u8; 4]) -> MemoryRenderBuffer {
-    use smithay::backend::allocator::Fourcc;
-    let px = (size as f32 * SCALE as f32).round() as u32;
-    let mut pixmap = tiny_skia::Pixmap::new(px, px).expect("pixmap");
-    let c = px as f32 / 2.0;
-    let stop = |at: f32, a: f32| tiny_skia::GradientStop::new(at, tiny_skia::Color::from_rgba8(rgba[0], rgba[1], rgba[2], (a * 255.0) as u8));
-    let shader = tiny_skia::RadialGradient::new(
-        tiny_skia::Point::from_xy(c, c),
-        tiny_skia::Point::from_xy(c, c),
-        c,
-        vec![stop(0.0, 0.8), stop(0.35, 0.5), stop(0.7, 0.16), stop(1.0, 0.0)],
-        tiny_skia::SpreadMode::Pad,
-        tiny_skia::Transform::identity(),
-    );
-    if let (Some(shader), Some(rect)) = (shader, tiny_skia::Rect::from_xywh(0.0, 0.0, px as f32, px as f32)) {
-        let paint = tiny_skia::Paint { shader, anti_alias: true, ..Default::default() };
-        pixmap.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
-    }
-    MemoryRenderBuffer::from_slice(pixmap.data(), Fourcc::Abgr8888, (px as i32, px as i32), SCALE, smithay::utils::Transform::Normal, None)
-}
-
 pub(crate) fn tinted(path: &str, size: i32, rgb: [u8; 3]) -> Option<MemoryRenderBuffer> {
     let mut pixmap = crate::apps::icon_pixmap(path, size)?;
     for px in pixmap.pixels_mut() {
@@ -269,31 +166,6 @@ pub(crate) fn tinted(path: &str, size: i32, rgb: [u8; 3]) -> Option<MemoryRender
     }
     let n = pixmap.width() as i32;
     Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (n, n), SCALE, smithay::utils::Transform::Normal, None))
-}
-
-/// A soft white glow, `size` logical px across.
-fn glow(size: f64) -> Option<MemoryRenderBuffer> {
-    use resvg::tiny_skia;
-    let px = (size * SCALE as f64) as u32;
-    let mut pixmap = tiny_skia::Pixmap::new(px, px)?;
-    let c = px as f32 / 2.0;
-    let shader = tiny_skia::RadialGradient::new(
-        tiny_skia::Point::from_xy(c, c),
-        tiny_skia::Point::from_xy(c, c),
-        c,
-        vec![
-            tiny_skia::GradientStop::new(0.0, tiny_skia::Color::from_rgba8(255, 255, 255, 120)),
-            tiny_skia::GradientStop::new(0.55, tiny_skia::Color::from_rgba8(255, 255, 255, 70)),
-            tiny_skia::GradientStop::new(0.75, tiny_skia::Color::from_rgba8(255, 255, 255, 22)),
-            tiny_skia::GradientStop::new(1.0, tiny_skia::Color::from_rgba8(255, 255, 255, 0)),
-        ],
-        tiny_skia::SpreadMode::Pad,
-        tiny_skia::Transform::identity(),
-    )?;
-    let mut paint = tiny_skia::Paint::default();
-    paint.shader = shader;
-    pixmap.fill_rect(tiny_skia::Rect::from_xywh(0.0, 0.0, px as f32, px as f32)?, &paint, tiny_skia::Transform::identity(), None);
-    Some(MemoryRenderBuffer::from_slice(pixmap.data(), smithay::backend::allocator::Fourcc::Abgr8888, (px as i32, px as i32), SCALE, smithay::utils::Transform::Normal, None))
 }
 
 /// Where the PIN's length is kept - the length alone, never the PIN - so a
@@ -321,8 +193,6 @@ pub fn remember_pin_len(n: usize) {
 
 impl Lock {
     pub fn new(wake: smithay::reexports::calloop::ping::Ping) -> Lock {
-        let thin = Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]);
-        let regular = Font::load(&["/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"]);
         let idle_s = std::process::Command::new("gsettings")
             .args(["get", "org.gnome.desktop.session", "idle-delay"])
             .output()
@@ -334,21 +204,12 @@ impl Lock {
             entering: false,
             pad: {
                 let mut pad = PinPad::new();
-                pad.water_bloom();
+                pad.water();
                 pad
             },
             checking: Default::default(),
             verified: Default::default(),
             wake,
-            mark: None,
-            mark_red: Some(soft_glow(SENSOR_GLOW, [235, 80, 70, 255])),
-            mark_lit: std::cell::RefCell::new(None),
-            glow: glow(GLOW),
-            battery_icon: None,
-            battery_label: Label::new(15.0, [1.0, 1.0, 1.0, 0.65]),
-            net_icon: None,
-            net_label: Label::new(15.0, [1.0, 1.0, 1.0, 0.65]),
-            status_icons: (String::new(), ""),
             locked: false,
             blank: false,
             after_boot: false,
@@ -361,44 +222,34 @@ impl Lock {
             mark_shake: None,
             mark_flash: None,
             shown_at: 0,
+            drop_way: (false, 0),
             grab: None,
             lift: 0.0,
-            fonts: thin.zip(regular),
-            clock_fonts: Font::load(&["/usr/share/fonts/truetype/lato/Lato-Bold.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"])
-                .zip(Font::load(&["/usr/share/fonts/truetype/lato/Lato-Medium.ttf", "/usr/share/fonts/truetype/lato/Lato-Regular.ttf"])),
-            clock_accent: 0,
+            font: Font::load(&["/usr/share/fonts/truetype/lato/Lato-Light.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"]),
             pad_leaving: false,
-            clock_glow: None,
-            time: Label::new(CLOCK_SIZE, [1.0; 4]),
-            date: Label::new(CLOCK_SIZE, [1.0; 4]),
-            greeting: Label::new(26.0, [1.0, 1.0, 1.0, 0.9]),
-            status: Label::new(16.0, [1.0, 1.0, 1.0, 0.55]),
-            hint: Label::new(15.0, [1.0, 1.0, 1.0, 0.5]),
-            hint_base: "Swipe up to unlock".into(),
+            words: Default::default(),
+            time: String::new(),
+            date: String::new(),
+            status: String::new(),
+            greeting: String::new(),
+            hint_base: "swipe up".into(),
+            notice: String::new(),
             notice_until: 0,
+            said: String::new(),
             face_ok: false,
             face_enrol: false,
             pin_len: pin_len(),
             sent_len: 0,
             auto_sent: false,
             minute: -1,
-            id: Id::new(),
-            id_right: Id::new(),
             last_touch_ns: hybris_hwc::now_ns(),
             idle_ns: idle_s * 1_000_000_000,
             relit: false,
             unlocked: None,
             notes: Vec::new(),
-            note_labels: Vec::new(),
             media: None,
-            media_labels: (Label::new(17.0, [1.0, 1.0, 1.0, 0.92]), Label::new(14.0, [1.0, 1.0, 1.0, 0.6])),
-            card: crate::grid::rounded(CARD_W, MEDIA_H, 18.0, [22, 22, 22, 22]),
-            note_card: crate::grid::rounded(CARD_W, NOTE_H, 16.0, [18, 18, 18, 18]),
-            media_icons: ["media-skip-backward", "media-playback-start", "media-playback-pause", "media-skip-forward"].map(|n| crate::quick::symbolic(&format!("/usr/share/icons/Adwaita/symbolic/actions/{n}-symbolic.svg"), 24)),
         };
-        if let Some((_, regular)) = &lock.fonts {
-            lock.status.set(regular, "Enter your PIN after a restart");
-        }
+        lock.pad.say("");
         lock.refresh();
         lock
     }
@@ -408,30 +259,25 @@ impl Lock {
     pub fn after_boot(&mut self) {
         self.after_boot = true;
         self.lock_now();
-        self.pad.auto_len = self.pin_len;
-        self.pad.show();
         self.minute = -1;
         self.refresh();
     }
 
-    /// How many fingers the reader knows: with none there is no mark.
+    /// How many fingers the reader knows: with none the drop waits for a
+    /// swipe up.
     pub fn set_fingers(&mut self, n: usize) {
         self.fingers = n;
-        self.set_hint(if n > 0 { "" } else { "Swipe up to unlock" });
+        self.set_hint(if n > 0 { "" } else { "swipe up" });
     }
 
-    /// The status line's facts.
+    /// The status line's facts: the battery, the network's name.
     pub fn set_status(&mut self, f: &crate::status::Facts) {
-        let Some((_, regular)) = &self.fonts else { return };
-        self.battery_label.set(regular, &format!("{}%", f.battery));
-        // The network as its icon alone, as in the shade.
-        self.net_label.set(regular, "");
-        let icons = (f.battery_icon(), f.net_icon);
-        if icons != self.status_icons {
-            let path = |n: &str| format!("/usr/share/icons/Adwaita/symbolic/status/{n}.svg");
-            self.battery_icon = crate::quick::symbolic(&path(&icons.0), 16);
-            self.net_icon = crate::quick::symbolic(&path(icons.1), 16);
-            self.status_icons = icons;
+        let net = f.net.to_lowercase();
+        let status = if net.is_empty() { format!("{} %", f.battery) } else { format!("{} %  {}", f.battery, net) };
+        let status = cut(&status, CUT);
+        if status != self.status {
+            self.status = status;
+            self.lay(false);
         }
     }
 
@@ -442,18 +288,8 @@ impl Lock {
         if notes == self.notes {
             return false;
         }
-        let Some((_, regular)) = &self.fonts else { return false };
-        self.note_labels = notes
-            .iter()
-            .map(|(app, title)| {
-                let mut a = Label::new(13.0, [1.0, 1.0, 1.0, 0.55]);
-                a.set(regular, &cut(app, 40));
-                let mut t = Label::new(16.0, [1.0, 1.0, 1.0, 0.9]);
-                t.set(regular, &cut(title, 46));
-                (a, t)
-            })
-            .collect();
         self.notes = notes;
+        self.lay(false);
         true
     }
 
@@ -462,43 +298,102 @@ impl Lock {
         if media == self.media {
             return false;
         }
-        let Some((_, regular)) = &self.fonts else { return false };
-        if let Some((title, artist, _)) = &media {
-            self.media_labels.0.set(regular, &cut(title, 34));
-            self.media_labels.1.set(regular, &cut(artist, 40));
-        }
         self.media = media;
+        self.lay(false);
         true
     }
 
-    /// The clock line's height.
-    fn clock_h(&self) -> f64 {
-        self.time.extent.h.max(self.date.extent.h) as f64
-    }
-
-    /// The media card's place on the left panel (logical px), under the
-    /// status line.
-    fn media_rect(&self) -> Rectangle<f64, smithay::utils::Logical> {
-        let left = layout::panels()[0];
-        let y = CLOCK_TOP + CARDS_TOP;
-        Rectangle::new((left.loc.x as f64 + (left.size.w as f64 - CARD_W) / 2.0, y).into(), (CARD_W, MEDIA_H).into())
-    }
-
-    /// A media button's place: previous, play or pause, next, at the card's
-    /// right.
-    fn media_button_rect(&self, i: usize) -> Rectangle<f64, smithay::utils::Logical> {
-        let r = self.media_rect();
-        let x = r.loc.x + r.size.w - 12.0 - (3 - i) as f64 * MEDIA_BUTTON;
-        Rectangle::new((x, r.loc.y + (MEDIA_H - MEDIA_BUTTON) / 2.0).into(), (MEDIA_BUTTON, MEDIA_BUTTON).into())
-    }
-
-    /// The player's button under a touch on the lock screen, if any.
+    /// The player's button under a touch on the lock screen, if any: its
+    /// words.
     pub fn media_at(&self, x: f64, y: f64) -> Option<crate::quick::MediaButton> {
         if self.media.is_none() || !self.holds_screen() || self.blank {
             return None;
         }
-        let buttons = [crate::quick::MediaButton::Previous, crate::quick::MediaButton::PlayPause, crate::quick::MediaButton::Next];
-        (0..3).find(|&i| self.media_button_rect(i).contains((x, y))).map(|i| buttons[i])
+        match self.words.tapped(x, y)?.as_str() {
+            "media:0" => Some(crate::quick::MediaButton::Previous),
+            "media:1" => Some(crate::quick::MediaButton::PlayPause),
+            "media:2" => Some(crate::quick::MediaButton::Next),
+            _ => None,
+        }
+    }
+
+    /// The words laid on the left panel's squares: there at once
+    /// (`instant`, as the screen lights), else the changed ones erased and
+    /// typed.
+    fn lay(&mut self, instant: bool) {
+        let Some(font) = &self.font else { return };
+        let g = Grid::at(1.0);
+        let h = layout::panels()[0].size.h as f64;
+        let mut out = Vec::new();
+        let mut row = squares::TITLE_ROW;
+        out.push(Line::new(font, &self.time, 1.0, row, 2.0, 1.0, LIT, None));
+        row += 3.0;
+        for l in [&self.date, &self.status] {
+            if !l.is_empty() {
+                out.push(Line::new(font, l, 1.0, row, 1.0, 1.0, DIM, None));
+                row += 1.0;
+            }
+        }
+        row += 1.0;
+        // What is said, low down; the rest stops a row above it.
+        let foot = squares::wrap(&self.talk(), WIDE);
+        let foot_row = ((h - g.o.1) / g.s).floor() - 2.0 - foot.len() as f64;
+        if self.after_boot {
+            for l in squares::wrap(&self.greeting, WIDE) {
+                out.push(Line::new(font, &l, 1.0, row, 1.0, 1.0, LIT, None));
+                row += 1.0;
+            }
+        } else {
+            if let Some((title, artist, playing)) = &self.media {
+                out.push(Line::new(font, &cut(&title.to_lowercase(), CUT), 1.0, row, 1.0, 1.0, LIT, None));
+                row += 1.0;
+                if !artist.is_empty() {
+                    out.push(Line::new(font, &cut(&artist.to_lowercase(), CUT), 1.0, row, 1.0, 1.0, DIM, None));
+                    row += 1.0;
+                }
+                row += 1.0;
+                let play = if *playing { "pause" } else { "play" };
+                for (i, (word, col)) in [("‹", 1.0), (play, 4.0), ("›", 11.0)].into_iter().enumerate() {
+                    out.push(Line::new(font, word, col, row, 1.0, 1.0, LIT, Some(format!("media:{i}"))));
+                }
+                row += 2.0;
+            }
+            for (app, title) in &self.notes {
+                if row + 1.0 >= foot_row - 1.0 {
+                    break;
+                }
+                out.push(Line::new(font, &cut(&app.to_lowercase(), CUT), 1.0, row, 1.0, 1.0, DIM, None));
+                out.push(Line::new(font, &cut(&title.to_lowercase(), CUT), 1.0, row + 1.0, 1.0, 1.0, LIT, None));
+                row += 3.0;
+            }
+        }
+        for (i, l) in foot.iter().enumerate() {
+            out.push(Line::new(font, l, 1.0, foot_row + i as f64, 1.0, 1.0, DIM, None));
+        }
+        if instant {
+            self.words.set(out, 1.0);
+        } else {
+            self.words.reconcile(out, 1.0);
+        }
+    }
+
+    /// What is said low on the left: a passing notice, else what the pad
+    /// says while it is up, else a face's word, else the hint, else after a
+    /// boot why the PIN.
+    fn talk(&self) -> String {
+        if self.notice_until != 0 {
+            self.notice.clone()
+        } else if self.entering && !self.said.is_empty() {
+            self.said.clone()
+        } else if self.face_ok {
+            FACE_OK.to_owned()
+        } else if !self.hint_base.is_empty() && !self.entering {
+            self.hint_base.clone()
+        } else if self.after_boot {
+            "pin after a restart".to_owned()
+        } else {
+            String::new()
+        }
     }
 
     /// Whether the reader should listen: locked, lit, not right after a
@@ -519,55 +414,48 @@ impl Lock {
         self.fails += 1;
         self.mark_shake = Some(hybris_hwc::now_ns());
         if self.fails >= FAILS_FOR_PIN && !self.entering {
-            self.say("Use your PIN");
+            self.say("your pin");
             self.pad_in();
         } else {
-            self.notice("Not recognized");
+            self.notice("not this finger");
         }
     }
 
+    /// The pad comes: the drop goes to its middle and becomes its keys.
     fn pad_in(&mut self) {
         if !self.entering {
+            let now = hybris_hwc::now_ns();
             self.entering = true;
             self.pad_leaving = false;
             self.pad.auto_len = self.pin_len;
             self.pad.show();
+            self.pad.say("");
+            self.drop_way = (true, now);
+            self.pad.split(now + MOVE_NS as u64);
+            self.lay(false);
         }
     }
 
     /// The hint, when nothing passing is said in its place.
     fn set_hint(&mut self, text: &str) {
-        if self.hint_base == text {
-            return;
+        if self.hint_base != text {
+            self.hint_base = text.to_owned();
+            self.lay(false);
         }
-        self.hint_base = text.to_owned();
-        let shown = self.hint_now();
-        if let (Some((_, regular)), 0) = (&self.fonts, self.notice_until) {
-            self.hint.set(regular, &shown);
-        }
-    }
-
-    /// The hint as it stands: the face's word over the usual one.
-    fn hint_now(&self) -> String {
-        if self.face_ok { FACE_OK.to_owned() } else { self.hint_base.clone() }
     }
 
     /// The face's word given up (locked again, dark): the usual hint back.
     fn face_forgotten(&mut self) {
         if std::mem::take(&mut self.face_ok) {
-            let shown = self.hint_now();
-            if let (Some((_, regular)), 0) = (&self.fonts, self.notice_until) {
-                self.hint.set(regular, &shown);
-            }
+            self.lay(false);
         }
     }
 
-    /// Something said in the hint's place for 2 s.
+    /// Something said low on the left for 2 s.
     pub fn notice(&mut self, text: &str) {
-        if let Some((_, regular)) = &self.fonts {
-            self.hint.set(regular, text);
-            self.notice_until = hybris_hwc::now_ns() + 2_000_000_000;
-        }
+        self.notice = text.to_lowercase();
+        self.notice_until = hybris_hwc::now_ns() + 2_000_000_000;
+        self.lay(false);
     }
 
     /// The notice's time is up: the hint is back; whether it changed.
@@ -576,15 +464,16 @@ impl Lock {
             return false;
         }
         self.notice_until = 0;
-        if let Some((_, regular)) = &self.fonts {
-            let shown = self.hint_now();
-            self.hint.set(regular, &shown);
-        }
+        self.lay(false);
         true
     }
 
+    /// What the pad says, low on the left while it is up.
     fn say(&mut self, text: &str) {
-        self.pad.say(text);
+        if self.said != text {
+            self.said = text.to_owned();
+            self.lay(false);
+        }
     }
 
     /// The PIN to PAM, on a thread.
@@ -598,7 +487,7 @@ impl Lock {
         }
         self.sent_len = pin.len();
         *self.checking.lock().unwrap() = Some(None);
-        self.say("Checking…");
+        self.say("checking");
         let (slot, wake, verified) = (self.checking.clone(), self.wake.clone(), self.verified.clone());
         std::thread::spawn(move || {
             let ok = crate::pam::check(&pin);
@@ -632,10 +521,10 @@ impl Lock {
                         self.pin_len = Some(self.sent_len);
                         remember_pin_len(self.sent_len);
                     }
-                    self.touched_at = PinPad::ok_centre();
+                    self.touched_at = self.pad.middle();
                     self.open_doors();
                 } else {
-                    self.say("Wrong PIN");
+                    self.say("not this one");
                     if self.auto_sent {
                         self.pin_len = None;
                         self.pad.auto_len = None;
@@ -660,58 +549,22 @@ impl Lock {
 
     /// The time brought up to the minute; whether it changed.
     pub fn refresh(&mut self) -> bool {
-        let Some((_, regular)) = &self.fonts else { return false };
         let now = local_time();
         let minute = now.tm_hour * 60 + now.tm_min;
-        let accent = crate::accent::version();
-        if minute == self.minute && accent == self.clock_accent {
+        if minute == self.minute {
             return false;
         }
-        if accent != self.clock_accent {
-            self.clock_accent = accent;
-            // The accent a little lighter, whole: it reads over the dark.
-            let a = crate::accent::get_f();
-            let c = [a[0] + (1.0 - a[0]) * 0.18, a[1] + (1.0 - a[1]) * 0.18, a[2] + (1.0 - a[2]) * 0.18, 1.0];
-            self.time.set_color(c);
-            self.date.set_color(c);
-            self.clock_glow = None;
-        }
         self.minute = minute;
-        if let Some((bold, medium)) = &self.clock_fonts {
-            let (time, date) = (format!("{}:{:02}", now.tm_hour, now.tm_min), crate::clock::short_date(&now));
-            self.time.set(bold, &time);
-            self.date.set(medium, &date);
-            // Its glow: the line blurred, in the accent, under it.
-            let a = crate::accent::get_f();
-            let glow_c = [a[0], a[1], a[2], 1.0];
-            let (mut rgba, w, h) = bold.rasterize(&time, CLOCK_SIZE, glow_c);
-            let (rgba2, w2, h2) = medium.rasterize(&date, CLOCK_SIZE, glow_c);
-            // The two side by side, as they are drawn.
-            let gap = CLOCK_BETWEEN * SCALE;
-            let (lw, lh) = (w + gap + w2, h.max(h2));
-            let mut line = vec![0u8; (lw * lh * 4) as usize];
-            for (src, sw, sh, x0) in [(&mut rgba, w, h, 0), (&mut rgba2.clone(), w2, h2, w + gap)] {
-                for y in 0..sh {
-                    for x in 0..sw {
-                        let (i, j) = (((y * sw + x) * 4) as usize, ((y * lw + x0 + x) * 4) as usize);
-                        line[j..j + 4].copy_from_slice(&src[i..i + 4]);
-                    }
-                }
-            }
-            self.clock_glow = Some(glow_buffer(&line, lw, lh, GLOW_R * SCALE, GLOW_A));
-        }
+        self.time = format!("{}:{:02}", now.tm_hour, now.tm_min);
+        self.date = crate::clock::short_date(&now).to_lowercase();
         if self.after_boot {
-            let part = crate::sysscreen::part_of_day(now.tm_hour);
-            let greeting = match crate::sysscreen::first_name() {
-                Some(n) => format!("{part}, {n}"),
-                None => part.to_owned(),
+            let part = crate::sysscreen::part_of_day(now.tm_hour).to_lowercase();
+            self.greeting = match crate::sysscreen::first_name() {
+                Some(n) => format!("{part}, {}", n.to_lowercase()),
+                None => part,
             };
-            self.greeting.set(regular, &greeting);
         }
-        if self.notice_until == 0 {
-            let shown = self.hint_now();
-            self.hint.set(regular, &shown);
-        }
+        self.lay(false);
         true
     }
 
@@ -740,19 +593,31 @@ impl Lock {
         self.lift = 0.0;
         self.face_forgotten();
         self.entering = self.after_boot;
+        self.pad_leaving = false;
         self.pad.clear();
         self.fails = 0;
-        self.say("Enter PIN");
+        self.said.clear();
+        self.notice_until = 0;
+        // After a boot the pad stands at once, born of the drop already
+        // in its middle; else the drop is at the reader.
+        self.drop_way = (self.entering, 0);
+        if self.entering {
+            self.pad.auto_len = self.pin_len;
+            self.pad.show();
+            self.pad.say("");
+            self.pad.split(hybris_hwc::now_ns());
+        } else {
+            self.pad.gather(0);
+        }
         self.refresh();
+        self.lay(true);
     }
 
-    /// Unlocked from outside (logind's Unlock: the fingerprint reader,
-    /// `loginctl unlock-session`): the doors open as after a PIN.
     /// Face Unlock turned on: the PIN asked for, the face taken meanwhile.
     pub fn enrol_face(&mut self) {
         self.face_enrol = true;
         self.pad_in();
-        self.say("Enter your PIN to add your face");
+        self.say("your pin, to add your face");
     }
 
     /// Whether the face is being taken with the PIN.
@@ -774,19 +639,19 @@ impl Lock {
         tracing::info!("lock: a known face: unlocked, waiting for a swipe");
         self.face_ok = true;
         self.mark_flash = Some(hybris_hwc::now_ns());
-        if let Some((_, regular)) = &self.fonts {
-            self.hint.set(regular, FACE_OK);
-        }
         self.notice_until = 0;
+        self.lay(false);
     }
 
+    /// Unlocked from outside (logind's Unlock: the fingerprint reader,
+    /// `loginctl unlock-session`): the doors open as after a PIN.
     pub fn unlock(&mut self) {
         if !self.locked || self.fading.is_some() {
             return;
         }
         tracing::info!("lock: unlocked from outside");
         self.mark_flash = Some(hybris_hwc::now_ns());
-        self.touched_at = Self::mark_centre();
+        self.touched_at = Self::reader_drop();
         self.open_doors();
     }
 
@@ -804,6 +669,7 @@ impl Lock {
             self.last_touch_ns = hybris_hwc::now_ns();
             self.shown_at = self.last_touch_ns;
             self.refresh();
+            self.lay(true);
             self.relit = true;
         }
     }
@@ -819,12 +685,12 @@ impl Lock {
         std::mem::take(&mut self.relit)
     }
 
-    /// The idle delay passed without a touch: lock and blank.
     /// Dimmed, the screen about to go dark for idleness.
     pub fn dimming(&self, now_ns: u64) -> bool {
         self.idle_ns != 0 && !self.blank && now_ns.saturating_sub(self.last_touch_ns) + crate::idle::DIM_NS >= self.idle_ns
     }
 
+    /// The idle delay passed without a touch: lock and blank.
     pub fn idle(&mut self, now_ns: u64) -> bool {
         if self.idle_ns == 0 || self.blank || now_ns.saturating_sub(self.last_touch_ns) < self.idle_ns {
             return false;
@@ -875,10 +741,14 @@ impl Lock {
                 }
             } else if !tapped && !self.after_boot && (g.2 .1 - g.1 > UNLOCK || g.3 > FLING) {
                 // Put away as it came: the keys gather back into rows, the
-                // rows into one drop, which shrinks away.
+                // rows into the drop, which goes back to the reader.
+                let now = hybris_hwc::now_ns();
                 self.entering = false;
-                self.pad.gather(hybris_hwc::now_ns());
+                self.pad.gather(now);
                 self.pad_leaving = true;
+                self.drop_way = (false, now + crate::pinpad::SPLIT_NS);
+                self.said.clear();
+                self.lay(false);
             }
             return;
         }
@@ -886,7 +756,7 @@ impl Lock {
             if self.face_ok {
                 // Unlocked by a face: the swipe opens it.
                 tracing::info!("lock: opened by a swipe, the face known");
-                self.touched_at = Self::mark_centre();
+                self.touched_at = Self::reader_drop();
                 self.open_doors();
             } else {
                 self.pad_in();
@@ -897,6 +767,7 @@ impl Lock {
 
     /// After a frame: whether the lock screen still wants frames.
     pub fn settle(&mut self, frame_ns: u64) -> bool {
+        let words = self.words.settle(frame_ns);
         // The pad put away: drawn till its drops have gathered and gone.
         if self.pad_leaving {
             if self.pad.drops(frame_ns, (0.0, 0.0), 0.0, 0.0).is_some() {
@@ -926,30 +797,105 @@ impl Lock {
             return false;
         }
         let moving = |t: Option<u64>, d: u64| t.is_some_and(|t| frame_ns < t + d);
-        self.grab.is_some()
+        words
+            || self.grab.is_some()
             || self.checking.lock().unwrap().is_some()
             || (self.entering && self.pad.moving(frame_ns))
+            || moving(Some(self.drop_way.1), MOVE_NS as u64)
             || moving(self.mark_shake, SHAKE_NS)
             || moving(self.mark_flash, FLASH_NS)
-            || moving(Some(self.shown_at), MARK_IN_NS)
-            || (self.fingers > 0 && !self.entering && !self.after_boot && frame_ns < self.shown_at + PULSE_FOR_NS)
+            || (!self.entering && frame_ns < self.shown_at + PULSE_FOR_NS)
     }
 
     pub fn warm_up(&self, renderer: &mut GlesRenderer) -> usize {
-        [&self.time, &self.date, &self.hint, &self.greeting, &self.status]
-            .into_iter()
+        self.words
+            .lines
+            .iter()
             .map(|l| &l.buffer)
             .chain(self.pad.buffers())
-            .chain(self.mark.iter())
-            .chain(self.mark_red.iter())
-            .chain(self.glow.iter())
             .filter(|b| MemoryRenderBufferRenderElement::from_buffer(renderer, (0.0, 0.0), b, None, None, None, Kind::Unspecified).is_ok())
             .count()
     }
 
-    fn mark_centre() -> (f64, f64) {
+    /// The drop at the reader: across from the power key, in from the edge.
+    fn reader_drop() -> (f64, f64) {
         let right = layout::panels()[1];
-        ((right.loc.x + right.size.w) as f64 - 18.0 - MARK / 2.0, POWER_Y)
+        ((right.loc.x + right.size.w) as f64 - DROP_IN, POWER_Y)
+    }
+
+    /// The drop now (its middle and radius): at the reader, at the pad's
+    /// middle, or on its way between.
+    fn drop_now(&self, frame_ns: u64) -> ((f64, f64), f64) {
+        let (to_pad, at) = self.drop_way;
+        let k = if frame_ns <= at { 0.0 } else { ease(((frame_ns - at) as f64 / MOVE_NS).min(1.0)) };
+        let k = if to_pad { k } else { 1.0 - k };
+        let (a, b) = (Self::reader_drop(), self.pad.middle());
+        let lerp = |a: f64, b: f64| a + (b - a) * k;
+        ((lerp(a.0, b.0), lerp(a.1, b.1)), lerp(DROP_R, PAD_DROP_R))
+    }
+
+    /// How alive the drop is: breathing a while after the screen lights,
+    /// then at rest; a known finger's flash.
+    pub fn life(&self, frame_ns: u64) -> f64 {
+        let since = |t: Option<u64>| t.map(|t| frame_ns.saturating_sub(t));
+        let flash = since(self.mark_flash).filter(|t| *t < FLASH_NS).map(|t| 1.0 - t as f64 / FLASH_NS as f64).unwrap_or(0.0);
+        let base = if frame_ns < self.shown_at + PULSE_FOR_NS { LIFE_PULSE } else { LIFE_REST };
+        base.max(flash)
+    }
+
+    /// The breath, 0..1, while the drop breathes; 0 after.
+    fn breath(&self, frame_ns: u64) -> f64 {
+        if frame_ns >= self.shown_at + PULSE_FOR_NS {
+            return 0.0;
+        }
+        let u = (frame_ns.saturating_sub(self.shown_at) % PULSE_PERIOD_NS) as f64 / PULSE_PERIOD_NS as f64;
+        0.5 - 0.5 * (u * std::f64::consts::TAU).cos()
+    }
+
+    /// The drop for the output to draw (the setup's water), moved with the
+    /// right half by `dx`: shaking and coral a moment at an unknown finger.
+    pub fn orb(&self, frame_ns: u64, dx: f64) -> Option<crate::setup::Orb> {
+        if !self.locked || self.blank {
+            return None;
+        }
+        let ((x, y), r) = self.drop_now(frame_ns);
+        let shaking = self.mark_shake.map(|t| frame_ns.saturating_sub(t)).filter(|t| *t < SHAKE_NS);
+        let sx = shaking.map(shake).unwrap_or(0.0);
+        let coral = shaking.map(|t| 1.0 - t as f64 / SHAKE_NS as f64).unwrap_or(0.0);
+        Some(crate::setup::Orb::water(x + dx + sx, y, r, coral))
+    }
+
+    /// The PIN pad's keys as drops, born of the drop, moved with the right
+    /// half by `dx`; whether the drop is drawn with them.
+    pub fn pad_drops(&self, frame_ns: u64, dx: f64) -> Option<(Vec<crate::pinpad::Group>, bool)> {
+        if !self.entering && !self.pad_leaving {
+            return None;
+        }
+        let ((x, y), r) = self.drop_now(frame_ns);
+        let (groups, with) = self.pad.drops(frame_ns, (x, y), r, self.life(frame_ns))?;
+        let groups = groups
+            .into_iter()
+            .map(|mut g| {
+                for d in &mut g.drops {
+                    d.0 .0 += dx;
+                }
+                g
+            })
+            .collect();
+        Some((groups, with))
+    }
+
+    /// The table under it all: the squares the wallpaper's colour, dimmed;
+    /// the lamp under the drop, breathing with it a while.
+    pub fn table(&self, frame_ns: u64) -> Option<Table> {
+        if !self.locked {
+            return None;
+        }
+        let g = Grid::at(1.0);
+        let ((x, y), _) = self.drop_now(frame_ns);
+        let lamp = squares::to_table(x, y);
+        let glow = 0.85 + 0.15 * self.breath(frame_ns) + 0.3 * (self.life(frame_ns) - LIFE_REST).max(0.0);
+        Some(Table { s: g.s, o: g.o, lamp, reach: REACH * g.s, glow, centre: (0.0, 0.0), wave: 1e5, soft: 1.0, alpha: 1.0, light: crate::setup::LAMP_GREEN, wall: WALL })
     }
 
     /// Where the unlock was touched: a wave starts there.
@@ -979,161 +925,23 @@ impl Lock {
         self.draw(renderer, frame_ns, 0.0)
     }
 
+    /// Its words and the pad's dots (the output draws the table, the drop
+    /// and the keys' water under them).
     fn draw(&self, renderer: &mut GlesRenderer, frame_ns: u64, open: f64) -> Vec<ShellElement> {
-        let panels = layout::panels();
-        let (left, right) = (panels[0], panels[1]);
-        let middle = (left.loc.x + left.size.w + right.loc.x) as f64 / 2.0;
-        let (w, h) = layout::size();
-        let left_dx = -middle * open;
-        let right_dx = (w as f64 - middle) * open;
-        // The pad, with the right half.
+        let (left_dx, right_dx) = Self::door_dx(open);
         let mut out = if self.entering { self.pad.elements(renderer, frame_ns, right_dx) } else { Vec::new() };
-        // One way to put a texture: logical px, moved with its half.
-        let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, dx: f64, alpha: f32| {
-            if let Ok(e) = MemoryRenderBufferRenderElement::from_buffer(renderer, (((x + dx) * SCALE as f64).round(), (y * SCALE as f64).round()), b, Some(alpha), None, None, Kind::Unspecified) {
-                out.push(ShellElement::Text(e));
-            }
-        };
-        let cx = |l: &Label, p: Rectangle<i32, smithay::utils::Logical>| (p.loc.x + (p.size.w - l.extent.w) / 2) as f64;
-        let since = |t: Option<u64>| t.map(|t| frame_ns.saturating_sub(t));
-
-        // The right half: where you act.
-        if self.entering {
-            // Drawn above (pinpad.rs).
-        } else if self.fingers > 0 {
-            // The mark across from the power key: pulsing a while after it
-            // shows, flashing at a known finger, shaking red at an unknown one.
-            let shaking = since(self.mark_shake).is_some_and(|t| t < SHAKE_NS);
-            let sx = since(self.mark_shake).map(shake).unwrap_or(0.0);
-            let flash = since(self.mark_flash).filter(|t| *t < FLASH_NS).map(|t| 1.0 - t as f64 / FLASH_NS as f64);
-            let pulse = if frame_ns < self.shown_at + PULSE_FOR_NS {
-                let u = (frame_ns.saturating_sub(self.shown_at) % PULSE_PERIOD_NS) as f64 / PULSE_PERIOD_NS as f64;
-                0.55 + 0.35 * (0.5 - 0.5 * (u * std::f64::consts::TAU).cos())
-            } else {
-                0.7
-            };
-            // It comes up softly where the lock screen shows.
-            let appear = ease(frame_ns.saturating_sub(self.shown_at) as f64 / MARK_IN_NS as f64);
-            let alpha = (flash.map(|f| 0.9 + 0.1 * f).unwrap_or(pulse) * appear) as f32;
-            let mx = (right.loc.x + right.size.w) as f64 - 18.0 - MARK;
-            let my = POWER_Y - MARK / 2.0;
-            // No picture of a finger: a soft glow in the accent hugging the
-            // edge across from the reader, breathing with the pulse, brighter
-            // a moment at a known finger, red and shaking at an unknown one.
-            let _ = (mx, my);
-            let glow = if shaking {
-                self.mark_red.clone()
-            } else {
-                let mut l = self.mark_lit.borrow_mut();
-                if l.as_ref().is_none_or(|(v, _)| *v != crate::accent::version()) {
-                    *l = Some((crate::accent::version(), soft_glow(SENSOR_GLOW, crate::accent::get())));
-                }
-                l.as_ref().map(|(_, b)| b.clone())
-            };
-            if let Some(glow) = glow {
-                let (gx, gy) = ((right.loc.x + right.size.w) as f64 - SENSOR_IN - SENSOR_GLOW / 2.0, POWER_Y - SENSOR_GLOW / 2.0);
-                let a = if shaking { 1.0 } else { flash.map(|f| 0.75 + 0.25 * f as f32).unwrap_or(alpha) };
-                put(&mut out, &glow, gx, gy, right_dx + sx, a);
-            }
-        }
-
-        // The left half: who and what. The time, the date, the status line
-        // under them; after a boot a greeting; low down, what is said to you.
-        let rise = -(self.lift * 0.5);
-        // The clock as the desktop's: one line in the accent near the top of
-        // the right panel, set to its right edge (where the desktop's
-        // stands); the status line under it, as set.
-        let top = CLOCK_TOP;
-        let clock_panel = layout::panels()[1];
-        let end = (clock_panel.loc.x + clock_panel.size.w) as f64 - CLOCK_RIGHT;
-        let mut x = end - (self.time.extent.w + CLOCK_BETWEEN + self.date.extent.w) as f64;
-        // Its glow first, under it.
-        if let Some(g) = &self.clock_glow {
-            put(&mut out, g, x - GLOW_R as f64, top + rise - GLOW_R as f64, right_dx, 1.0);
-        }
-        put(&mut out, &self.time.buffer, x, top + rise, right_dx, 1.0);
-        x += (self.time.extent.w + CLOCK_BETWEEN) as f64;
-        put(&mut out, &self.date.buffer, x, top + rise, right_dx, 1.0);
-        let y = top + self.clock_h() + 12.0;
-        // The status line: [battery] 84%   [network], centred.
-        let gap = 6.0;
-        let item = |icon: &Option<MemoryRenderBuffer>, l: &Label| if icon.is_some() { 16.0 + gap } else { 0.0 } + l.extent.w as f64;
-        let (bw, nw) = (item(&self.battery_icon, &self.battery_label), item(&self.net_icon, &self.net_label));
-        if self.battery_label.extent.w > 0 {
-            let mut x = end - (bw + 22.0 + nw);
-            let ly = y + rise;
-            let icon_y = ly + (self.battery_label.extent.h as f64 - 16.0) / 2.0;
-            for (icon, l) in [(&self.battery_icon, &self.battery_label), (&self.net_icon, &self.net_label)] {
-                if let Some(i) = icon {
-                    put(&mut out, i, x, icon_y, right_dx, 0.75);
-                    x += 16.0 + gap;
-                }
-                put(&mut out, &l.buffer, x, ly, right_dx, 1.0);
-                x += l.extent.w as f64 + 22.0;
-            }
-        }
-        // The left panel: after a boot the greeting at the top, else the
-        // cards.
-        if self.after_boot {
-            put(&mut out, &self.greeting.buffer, cx(&self.greeting, left), CLOCK_TOP + 60.0 + rise, left_dx, 1.0);
-        }
-        // What is playing, and the last notifications, in cards.
-        if !self.after_boot {
-            let mut cy = self.media_rect().loc.y + rise;
-            let cx0 = self.media_rect().loc.x;
-            if let Some((_, _, playing)) = &self.media {
-                put(&mut out, &self.media_labels.0.buffer, cx0 + 18.0, cy + 14.0, left_dx, 1.0);
-                put(&mut out, &self.media_labels.1.buffer, cx0 + 18.0, cy + 16.0 + self.media_labels.0.extent.h as f64, left_dx, 1.0);
-                let icons = [&self.media_icons[0], if *playing { &self.media_icons[2] } else { &self.media_icons[1] }, &self.media_icons[3]];
-                for (i, icon) in icons.into_iter().enumerate() {
-                    if let Some(icon) = icon {
-                        let b = self.media_button_rect(i);
-                        put(&mut out, icon, b.loc.x + (MEDIA_BUTTON - 24.0) / 2.0, b.loc.y + rise + (MEDIA_BUTTON - 24.0) / 2.0, left_dx, 0.9);
-                    }
-                }
-                put(&mut out, &self.card, cx0, cy, left_dx, 1.0);
-                cy += MEDIA_H + CARDS_GAP;
-            }
-            for (app, title) in &self.note_labels {
-                if cy + NOTE_H > (left.size.h - TALK_FROM_FOOT) as f64 - 20.0 {
-                    break;
-                }
-                put(&mut out, &app.buffer, cx0 + 18.0, cy + 8.0, left_dx, 1.0);
-                put(&mut out, &title.buffer, cx0 + 18.0, cy + 10.0 + app.extent.h as f64, left_dx, 1.0);
-                put(&mut out, &self.note_card, cx0, cy, left_dx, 1.0);
-                cy += NOTE_H + CARDS_GAP;
-            }
-        }
-        // Talking: a passing notice, else the hint, else after a boot why
-        // the PIN.
-        let talk_y = (left.size.h - TALK_FROM_FOOT) as f64;
-        if self.notice_until != 0 || !self.hint_base.is_empty() || self.face_ok {
-            put(&mut out, &self.hint.buffer, cx(&self.hint, left), talk_y, left_dx, 1.0);
-        } else if self.after_boot {
-            put(&mut out, &self.status.buffer, cx(&self.status, left), talk_y, left_dx, 1.0);
-        }
-
-        // The two halves' dark over the wallpaper (the output's, each half's
-        // moving with it), meeting over the hinge.
-        let m = (middle * SCALE as f64).round() as i32;
-        let lx = (left_dx * SCALE as f64).round() as i32;
-        let rx = (right_dx * SCALE as f64).round() as i32;
-        let commit = CommitCounter::from((open * 1000.0) as usize);
-        let lrect = Rectangle::<i32, Physical>::new((lx, 0).into(), (m, h * SCALE).into());
-        let rrect = Rectangle::<i32, Physical>::new((m + rx, 0).into(), (w * SCALE - m, h * SCALE).into());
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id.clone(), lrect, commit, [0.0, 0.0, 0.0, SHADE], Kind::Unspecified)));
-        out.push(ShellElement::Solid(SolidColorRenderElement::new(self.id_right.clone(), rrect, commit, [0.0, 0.0, 0.0, SHADE], Kind::Unspecified)));
+        out.extend(self.words.elements(renderer, frame_ns, left_dx));
         out
     }
 
-    /// Where the two halves stand while it is drawn (as doors, how far
-    /// out each has gone, logical px); None while it is not, or goes as a
-    /// picture (door.rs).
     /// Whether the doors are opening (an unlock under way).
     pub fn opening(&self) -> bool {
         self.fading.is_some()
     }
 
+    /// Where the two halves stand while it is drawn (as doors, how far
+    /// out each has gone, logical px); None while it is not, or goes as a
+    /// picture (door.rs).
     pub fn doors(&self, frame_ns: u64) -> Option<(f64, f64)> {
         if !self.locked || self.turning(frame_ns).is_some() {
             return None;
@@ -1147,25 +955,6 @@ impl Lock {
         let middle = (panels[0].loc.x + panels[0].size.w + panels[1].loc.x) as f64 / 2.0;
         let w = layout::size().0 as f64;
         (-middle * open, (w - middle) * open)
-    }
-
-    /// The PIN pad's keys as drops, moved with the right half by `dx`.
-    pub fn pad_drops(&self, frame_ns: u64, dx: f64) -> Option<Vec<crate::pinpad::Group>> {
-        if !self.entering && !self.pad_leaving {
-            return None;
-        }
-        let (groups, _) = self.pad.drops(frame_ns, (0.0, 0.0), 0.0, 0.0)?;
-        Some(
-            groups
-                .into_iter()
-                .map(|mut g| {
-                    for d in &mut g.drops {
-                        d.0 .0 += dx;
-                    }
-                    g
-                })
-                .collect(),
-        )
     }
 }
 

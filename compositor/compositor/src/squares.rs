@@ -132,6 +132,9 @@ pub struct Table {
     pub alpha: f64,
     /// The lamp's colour.
     pub light: [f32; 3],
+    /// How much of the wallpaper's colour a square takes where the wave
+    /// has reached (the setup's whole, the lock's dimmed).
+    pub wall: f64,
 }
 
 /// A line of letters on the table.
