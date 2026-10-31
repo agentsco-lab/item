@@ -1841,7 +1841,7 @@ impl Screen {
         if self.table_program.is_none() {
             let mut names: Vec<UniformName> = ["texl", "src0", "gap", "o", "centre"].into_iter().map(|n| UniformName::new(n, UniformType::_2f)).collect();
             names.extend(["pa", "pb"].into_iter().map(|n| UniformName::new(n, UniformType::_4f)));
-            names.extend(["s", "wave", "soft", "wall", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
+            names.extend(["s", "wave", "soft", "wall", "top", "ink", "thick"].into_iter().map(|n| UniformName::new(n, UniformType::_1f)));
             match self.renderer.compile_custom_texture_shader(&crate::glass::dithered(include_str!("table.frag")), &names) {
                 Ok(p) => self.table_program = Some(p),
                 Err(e) => {
@@ -1856,7 +1856,7 @@ impl Screen {
         // Drawn again only as it changes (a zoom, the end): still, the frame
         // takes only what moves over it (the light, the words, the drop) -
         // drawn whole each frame it missed frames.
-        let key = (t.s.to_bits(), t.o.0.to_bits() ^ t.o.1.to_bits().rotate_left(17), t.wave.to_bits() ^ t.wall.to_bits().rotate_left(29), size.w, self.wall.is_some());
+        let key = (t.s.to_bits(), t.o.0.to_bits() ^ t.o.1.to_bits().rotate_left(17), t.wave.to_bits() ^ t.wall.to_bits().rotate_left(29) ^ t.top.to_bits().rotate_left(41), size.w, self.wall.is_some());
         if self.table_key == Some(key) && self.table_tex.as_ref().is_some_and(|t| smithay::backend::renderer::Texture::size(t) == size) {
             return self.table_tex.clone();
         }
@@ -1883,6 +1883,7 @@ impl Screen {
             Uniform::new("wave", t.wave as f32),
             Uniform::new("soft", t.soft as f32),
             Uniform::new("wall", t.wall as f32),
+            Uniform::new("top", t.top as f32),
             Uniform::new("ink", 0.16f32),
             Uniform::new("thick", 2.0f32),
         ];

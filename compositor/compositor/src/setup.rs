@@ -828,7 +828,7 @@ impl Setup {
             o = (centre.0 + (o.0 - centre.0) * f, centre.1 + (o.1 - centre.1) * f);
             alpha = 1.0 - ease((ms - PULL_FADE.0) / PULL_FADE.1);
         }
-        Some(Table { s, o, lamp, reach, glow, centre, wave, soft, alpha, light: LAMP_GREEN, wall: 1.0 })
+        Some(Table { s, o, lamp, reach, glow, centre, wave, soft, alpha, light: LAMP_GREEN, wall: 1.0, top: 1.0 })
     }
 
     /// Where the circle goes for the step, and how it looks.

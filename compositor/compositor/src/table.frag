@@ -52,6 +52,8 @@ uniform float soft;
 // How much of the wallpaper's colour a square takes where the wave has
 // reached: the setup's whole, the lock screen's dimmed (lock.rs).
 uniform float wall;
+// The brightest a square gets (luma): the lock's words stay readable.
+uniform float top;
 // The lines: how strong over the paper, how wide (physical px).
 uniform float ink;
 uniform float thick;
@@ -85,6 +87,8 @@ void main() {
     vec3 under = texture2D(tex, (mid_screen + src0) / texl).rgb;
     float k = clamp((wave - length(mid - centre)) / max(soft, 1.0), 0.0, 1.0);
     vec3 c = mix(PAPER, under, k * k * (3.0 - 2.0 * k) * wall);
+    float luma = dot(c, vec3(0.299, 0.587, 0.114));
+    c *= min(1.0, top / max(luma, 0.001));
 
     // The lines, fading as the squares grow small (gone at 3 px a square).
     float d = min(to_line(t.x, o.x, s), to_line(t.y, o.y, s)) * SCALE;

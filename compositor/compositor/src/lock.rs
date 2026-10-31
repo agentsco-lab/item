@@ -49,6 +49,9 @@ const PULSE_FOR_NS: u64 = 12_000_000_000;
 const PULSE_PERIOD_NS: u64 = 1_800_000_000;
 /// How much of the wallpaper's colour is in the squares.
 const WALL: f64 = 0.45;
+/// The brightest a square gets (luma): the dim words are
+/// 0.47 grey, a light sky under them took them away (2026-10-31).
+const TOP: f64 = 0.2;
 /// Unknown fingers in a row before the PIN pad comes.
 const FAILS_FOR_PIN: u32 = 5;
 /// A swipe up this far brings the pad, or a fling up.
@@ -895,7 +898,7 @@ impl Lock {
         let ((x, y), _) = self.drop_now(frame_ns);
         let lamp = squares::to_table(x, y);
         let glow = 0.85 + 0.15 * self.breath(frame_ns) + 0.3 * (self.life(frame_ns) - LIFE_REST).max(0.0);
-        Some(Table { s: g.s, o: g.o, lamp, reach: REACH * g.s, glow, centre: (0.0, 0.0), wave: 1e5, soft: 1.0, alpha: 1.0, light: crate::setup::LAMP_GREEN, wall: WALL })
+        Some(Table { s: g.s, o: g.o, lamp, reach: REACH * g.s, glow, centre: (0.0, 0.0), wave: 1e5, soft: 1.0, alpha: 1.0, light: crate::setup::LAMP_GREEN, wall: WALL, top: TOP })
     }
 
     /// Where the unlock was touched: a wave starts there.

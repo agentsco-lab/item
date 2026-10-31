@@ -135,6 +135,9 @@ pub struct Table {
     /// How much of the wallpaper's colour a square takes where the wave
     /// has reached (the setup's whole, the lock's dimmed).
     pub wall: f64,
+    /// The brightest a square gets (its luma): the lock's words, light
+    /// grey, stay readable on a light wallpaper; the setup's 1, no cap.
+    pub top: f64,
 }
 
 /// A line of letters on the table.
