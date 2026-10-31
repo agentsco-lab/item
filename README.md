@@ -35,8 +35,8 @@ black). The wallpaper is Aurora, drawn by the compositor itself.
 |---|---|
 | ![the desktop](docs/img/item-desktop.png) | ![a window on each panel](docs/img/item-two-windows.png) |
 | The desktop: the dock in two halves at the panels' outer edges, under the thumbs, and the clock on the free panel. | A window on each panel, each at its panel's full height: Clocks on the left, item Settings on the right. |
-| ![the lock screen](docs/img/item-lock.png) | ![the first setup: a finger](docs/img/item-setup-finger.png) |
-| The lock screen: the time, the date and the battery as words in squares over the wallpaper's colour, the drop at the reader with its lamp. A known face or finger unlocks it; the squares become the wallpaper's pixels. | The first setup, its finger step: the reader's mark under the power key fills as the finger is read. |
+| ![the lock screen](docs/img/item-lock.png) | ![the first setup: the PIN](docs/img/item-setup-pin.png) |
+| The lock screen: the time, the date and the battery as words in squares over the wallpaper's colour, the drop at the reader with its lamp. A known face or finger unlocks it; the squares become the wallpaper's pixels. | The first setup, its PIN step: on item/grid's table of squares the drop of water has become the PIN pad, its lamp under it. |
 | ![the system screen](docs/img/item-system-screen.png) | ![the pen's sheet](docs/img/item-pen-sheet.png) |
 | The system screen, brought in from the left panel's outer edge: the battery, the next alarm and event, the connections, the storage. | The pen's sheet from the right panel's outer edge: strokes with the pen's pressure, four inks, undo and redo. |
 
