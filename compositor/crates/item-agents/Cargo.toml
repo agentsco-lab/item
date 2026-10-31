@@ -1,6 +1,6 @@
 [package]
 name = "item-agents"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "item-agents and item-sync: Claude Code's sessions across the owner's machines, and the black box to the phone"
 license = "MIT"

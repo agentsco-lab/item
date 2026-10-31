@@ -233,7 +233,7 @@ and in its time zone.
 **By hand**, over a port 0.22.0 or later on Droidian 102:
 
 ```
-sudo apt install ./item_0.4.0_arm64.deb
+sudo apt install ./item_0.4.1_arm64.deb
 sudo item-switch item
 ```
 
