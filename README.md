@@ -20,20 +20,21 @@ usable while that groundwork settles.
 
 ## What it looks like
 
-A minute of it (filmed with 0.2.1, the book only), both panels at 60 fps
-with the gap between them, filmed from the compositor's own frames: the first
-setup (the PIN, a finger), the tour, the shade, the system screen, the pen's
-sheet.
+Forty seconds of 0.4.0, both panels at 60 fps with the gap between them,
+filmed from the compositor's own frames: the first setup on the grid (the
+drop becoming the PIN pad, the squares becoming the wallpaper's pixels, the
+dock born of the drop), the system screen, an app warmed during the setup
+opening at once.
 
-https://github.com/user-attachments/assets/3799c1b3-e2b0-46e7-925e-fc196ece50a8
+https://github.com/user-attachments/assets/1345c74b-6a2f-4349-a034-f19ba32d2ab6
 
 Both panels as one picture, taken with `itemgrid screenshot` (2700x1800,
 the hinge's strip left out) or as frames of the film (1392x900, the gap
-black). The wallpaper is Aurora, drawn by the compositor itself.
+black). The wallpaper is the default, Olia Bondarenko's (Unsplash).
 
 | | |
 |---|---|
-| ![the desktop](docs/img/item-desktop.png) | ![a window on each panel](docs/img/item-two-windows.png) |
+| ![the desktop](docs/img/item-desktop.jpg) | ![a window on each panel](docs/img/item-two-windows.png) |
 | The desktop: the dock in two halves at the panels' outer edges, under the thumbs, and the clock on the free panel. | A window on each panel, each at its panel's full height: Clocks on the left, item Settings on the right. |
 | ![the lock screen](docs/img/item-lock.png) | ![the first setup: the PIN](docs/img/item-setup-pin.png) |
 | The lock screen: the time, the date and the battery as words in squares over the wallpaper's colour, the drop at the reader with its lamp. A known face or finger unlocks it; the squares become the wallpaper's pixels. | The first setup, its PIN step: on item/grid's table of squares the drop of water has become the PIN pad, its lamp under it. |
