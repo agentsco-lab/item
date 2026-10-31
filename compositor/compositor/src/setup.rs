@@ -77,7 +77,7 @@ use smithay::utils::Rectangle;
 use crate::layout::{self, SCALE};
 use crate::pinpad::{ease, PinPad, Press};
 use crate::shade::ShellElement;
-use crate::squares::{self, Grid, Line, DIM, LIT};
+use crate::squares::{self, Grid, Line, Table, DIM, LIT};
 use crate::text::Font;
 
 const DEFAULT_PIN: &str = "1234";
@@ -361,27 +361,6 @@ fn way(step: Step) -> f64 {
     }
 }
 
-/// The table as a frame has it (output.rs, table.frag, light.frag): its
-/// squares' side and where its square (0, 0) is; the lamp under it, how far
-/// its light reaches, how bright; the wallpaper's colour coming into the
-/// squares in a wave out from `centre` (the drop), as far as `wave`, `soft`
-/// wide at its front; how much of it is shown. Logical px, the table's (the
-/// hinge taken out).
-#[derive(Clone, Copy, Debug)]
-pub struct Table {
-    pub s: f64,
-    pub o: (f64, f64),
-    pub lamp: (f64, f64),
-    pub reach: f64,
-    pub glow: f64,
-    pub centre: (f64, f64),
-    pub wave: f64,
-    pub soft: f64,
-    pub alpha: f64,
-    /// The lamp's colour.
-    pub light: [f32; 3],
-}
-
 pub struct Setup {
     pub active: bool,
     dry: bool,
@@ -430,18 +409,11 @@ pub struct Setup {
     /// The fingers enrolled, for the lock's mark.
     pub fingers: usize,
     fonts: Option<(Font, Font)>,
-    /// The words on the table (squares.rs), each typed from its time; those
-    /// going, erased since when.
-    lines: Vec<Line>,
-    going: Vec<(Line, u64)>,
-    /// The squares' zoom: from, to, since when (it moves once the words
-    /// before it are erased).
-    zoom: (f64, f64, u64),
+    /// The words on the table (squares.rs).
+    words: squares::Words,
     /// The lamp under the table: from where (NaN: nowhere yet), to which
     /// share of the way, since when.
     lamp: ((f64, f64), f64, u64),
-    /// Words were laid once (the first come at their zoom, not zoomed to).
-    shown_once: bool,
     /// What next, on the left while a finger is taken, and its colour.
     note: (String, [f32; 4]),
     orb: Orb,
@@ -518,11 +490,8 @@ impl Setup {
             enrolling: false,
             fingers: 0,
             fonts: thin.zip(regular),
-            lines: Vec::new(),
-            going: Vec::new(),
-            zoom: (1.0, 1.0, 0),
+            words: Default::default(),
             lamp: ((f64::NAN, 0.0), 0.0, 0),
-            shown_once: false,
             note: (String::new(), LIT),
             orb: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: [1.0; 4], print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
             from: Orb { x: 0.0, y: WELCOME_Y, r: 0.0, thickness: 1.0, progress: 0.0, segments: 0.0, base: WHITE, accent: [1.0; 4], print: 0.0, lit: 0.0, flash: 0.0, fill: 0.0 },
@@ -694,71 +663,7 @@ impl Setup {
                 out.push(Line::new(thin, &word, col, button_row + 2.0 * i as f64, 1.0, zoom, LIT, Some(tag.to_owned())));
             }
         }
-        self.reconcile(out, zoom);
-    }
-
-    /// The new words in: the same words in the same place stay as they
-    /// are; the others are erased, letter by letter from their end, and the
-    /// new typed after them, one line after another. A new zoom erases
-    /// all, zooms, then types.
-    fn reconcile(&mut self, mut new: Vec<Line>, zoom: f64) {
-        let now = hybris_hwc::now_ns();
-        let erase = |l: &Line| l.letters() as u64 * squares::ERASE_NS;
-        let old = std::mem::take(&mut self.lines);
-        let mut start = now;
-        if (zoom - self.zoom.1).abs() > 1e-6 {
-            let erased = old.iter().map(erase).max().unwrap_or(0);
-            self.going.extend(old.into_iter().map(|l| (l, now)));
-            let from = self.zoom_now(now);
-            self.zoom = (from, zoom, now + erased);
-            start = now + erased + if self.lines_shown_once() { squares::ZOOM_NS } else { 0 };
-            if !self.lines_shown_once() {
-                // The first words: no zoom to see, at the zoom at once.
-                self.zoom = (zoom, zoom, now);
-            }
-        } else {
-            let mut kept = vec![false; new.len()];
-            for l in old {
-                match new.iter().position(|n| n.same(&l)) {
-                    Some(i) if !kept[i] => {
-                        kept[i] = true;
-                        new[i].at = l.at;
-                    }
-                    _ => {
-                        start = start.max(now + erase(&l));
-                        self.going.push((l, now));
-                    }
-                }
-            }
-            for (i, l) in new.iter_mut().enumerate() {
-                if !kept[i] {
-                    l.at = u64::MAX;
-                }
-            }
-        }
-        for l in new.iter_mut().filter(|l| l.at == 0 || l.at == u64::MAX) {
-            l.at = start;
-            start = l.done_at() + squares::TYPE_NS;
-        }
-        self.lines = new;
-        self.shown_once = true;
-    }
-
-    fn lines_shown_once(&self) -> bool {
-        self.shown_once
-    }
-
-    /// The squares' zoom at a frame.
-    fn zoom_now(&self, frame_ns: u64) -> f64 {
-        let (from, to, at) = self.zoom;
-        if frame_ns <= at {
-            return from;
-        }
-        if frame_ns >= at + squares::ZOOM_NS {
-            return to;
-        }
-        let k = ease((frame_ns - at) as f64 / squares::ZOOM_NS as f64);
-        from + (to - from) * k
+        self.words.reconcile(out, zoom);
     }
 
     /// What next, said on the left while a finger is taken.
@@ -770,7 +675,7 @@ impl Setup {
     /// When the right panel's things come in: after the left's words.
     fn right_at(&self) -> u64 {
         let now = hybris_hwc::now_ns();
-        self.lines.iter().filter(|l| l.tag.is_none()).map(Line::done_at).max().unwrap_or(now).min(now + 1_500_000_000)
+        self.words.lines.iter().filter(|l| l.tag.is_none()).map(Line::done_at).max().unwrap_or(now).min(now + 1_500_000_000)
     }
 
     /// The PIN's line says what went wrong, in its squares.
@@ -895,7 +800,7 @@ impl Setup {
         let done = if self.step == Step::Done { ease(frame_ns.saturating_sub(self.lamp.2) as f64 / LAMP_NS as f64) } else { 0.0 };
         let mut glow = 1.0 + (0.85 + 0.15 * (t * 2.4).sin() - 1.0) * (1.0 - done);
         let reach = square * (4.5 + (13.0 - 4.5) * done);
-        let g = Grid::at(self.zoom_now(frame_ns));
+        let g = Grid::at(self.words.zoom_now(frame_ns));
         let (mut s, mut o) = (g.s, g.o);
         // The drop, in the table: the end's wave and pull start from it.
         let centre = squares::to_table(self.orb.x, self.orb.y);
@@ -1283,16 +1188,9 @@ impl Setup {
         self.holds_screen() && self.step == Step::Wifi
     }
 
-    /// The words a tap at (`x`, `y`) takes, typed: their tag (a button, a
-    /// network) - a square round them taking it too.
+    /// The words a tap at (`x`, `y`) takes: their tag (a button, a network).
     fn tapped(&self, x: f64, y: f64) -> Option<String> {
-        let now = hybris_hwc::now_ns();
-        self.lines.iter().filter(|l| l.tag.is_some() && l.typed(now) > 0).find_map(|l| {
-            let r = l.rect();
-            let pad = Grid::at(l.zoom).s / 2.0;
-            let hit = x >= r.loc.x - pad && x < r.loc.x + r.size.w + pad && y >= r.loc.y - pad && y < r.loc.y + r.size.h + pad;
-            hit.then(|| l.tag.clone().unwrap_or_default())
-        })
+        self.words.tapped(x, y)
     }
 
     fn has_pad(&self) -> bool {
@@ -1442,7 +1340,7 @@ impl Setup {
         // (table()); the drop falls at once, and the dock is born of it
         // (dock.rs) as the view pulls back (the owner's, 2026-10-30).
         let now = hybris_hwc::now_ns();
-        self.going.extend(std::mem::take(&mut self.lines).into_iter().map(|l| (l, now)));
+        self.words.erase_all();
         self.leaving = Some(now);
         self.handed = Some((now, (self.orb.x + self.tilt.0, self.orb.y + self.tilt.1), self.orb.r));
     }
@@ -1500,7 +1398,7 @@ impl Setup {
             }
         }
         // The words erased go; the table's lamp breathes all along.
-        self.going.retain(|(l, t)| frame_ns < t + l.letters() as u64 * squares::ERASE_NS);
+        self.words.settle(frame_ns);
         true
     }
 
@@ -1521,6 +1419,7 @@ impl Setup {
         let fade = self.shown(frame_ns);
         let right = layout::panels()[1];
         let mut out = if self.has_pad() { self.pad.elements(renderer, frame_ns, 0.0) } else { Vec::new() };
+        out.extend(self.words.elements(renderer, frame_ns, 0.0));
         // (The words are erased at the end, not faded: only the arrow fades.)
         let mut put = |out: &mut Vec<ShellElement>, b: &MemoryRenderBuffer, x: f64, y: f64, alpha: f64, src: Option<Rectangle<f64, smithay::utils::Logical>>| {
             if alpha <= 0.001 {
@@ -1531,25 +1430,6 @@ impl Setup {
                 out.push(ShellElement::Text(e));
             }
         };
-        // A line as far as `n` of its letters, at the zoom it is laid for
-        // (none while the squares move).
-        let zoom = self.zoom_now(frame_ns);
-        let mut line = |out: &mut Vec<ShellElement>, l: &Line, n: usize| {
-            if n == 0 || (l.zoom - zoom).abs() > 1e-6 {
-                return;
-            }
-            let r = l.rect();
-            let side = r.size.h;
-            let src = Rectangle::<f64, smithay::utils::Logical>::from_size((side * n as f64, side).into());
-            put(out, &l.buffer, r.loc.x, r.loc.y, 1.0, Some(src));
-        };
-        for (l, t) in &self.going {
-            let gone = (frame_ns.saturating_sub(*t) / squares::ERASE_NS) as usize;
-            line(&mut out, l, l.letters().saturating_sub(gone));
-        }
-        for l in &self.lines {
-            line(&mut out, l, l.typed(frame_ns));
-        }
         // A finger: an arrow bobbing at the reader.
         if let (Some(arrow), true, Step::Finger) = (&self.arrow, self.enrolling, self.step) {
             let a = ease(frame_ns.saturating_sub(self.right_at()) as f64 / WORDS_IN_NS as f64);

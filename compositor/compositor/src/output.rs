@@ -551,7 +551,7 @@ impl Screen {
         }
         let table = state.setup.table(frame_ns).and_then(|t| self.setup_table(&t).map(|tex| (tex, t)));
         state.dock.clear.set(state.setup.active && !state.setup.leaving());
-        let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns, table.as_ref().map(|t| &t.0))).unwrap_or_default();
+        let (setup_drop, rings) = state.setup.orb().map(|orb| self.setup_orb(state, &orb, frame_ns, table.as_ref().map(|t| &t.0), state.setup.pad_drops(frame_ns), state.setup.life(frame_ns), 0)).unwrap_or_default();
         // Under the dialog the setup's words and rows are not drawn (they
         // showed through it): its dark and wallpaper only.
         if !dialog_over_setup {
@@ -1822,7 +1822,7 @@ impl Screen {
     /// setup goes (a new id each frame of it).
     /// The setup's table drawn into its texture (table.frag over the
     /// wallpaper's, which its end turns the squares into).
-    fn setup_table(&mut self, t: &crate::setup::Table) -> Option<smithay::backend::renderer::gles::GlesTexture> {
+    fn setup_table(&mut self, t: &crate::squares::Table) -> Option<smithay::backend::renderer::gles::GlesTexture> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         use smithay::backend::renderer::gles::element::TextureShaderElement;
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
@@ -1900,7 +1900,7 @@ impl Screen {
 
     /// The setup's table over the whole screen (a new id only as it is
     /// drawn again, or fades), the lamp's light over it.
-    fn setup_table_element(&mut self, texture: smithay::backend::renderer::gles::GlesTexture, t: &crate::setup::Table) -> Vec<FrameElement> {
+    fn setup_table_element(&mut self, texture: smithay::backend::renderer::gles::GlesTexture, t: &crate::squares::Table) -> Vec<FrameElement> {
         use smithay::backend::renderer::element::texture::TextureRenderElement;
         let alpha = t.alpha as f32;
         if alpha <= 0.001 {
@@ -1916,7 +1916,7 @@ impl Screen {
     }
 
     /// The lamp's light (light.frag), over the area it reaches alone.
-    fn setup_light(&mut self, t: &crate::setup::Table, alpha: f32) -> Option<FrameElement> {
+    fn setup_light(&mut self, t: &crate::squares::Table, alpha: f32) -> Option<FrameElement> {
         use smithay::backend::renderer::gles::{Uniform, UniformName, UniformType};
         if t.glow <= 0.001 {
             return None;
@@ -2001,7 +2001,11 @@ impl Screen {
     /// The first setup's circle (its drop, its rings): a drop of water while it is whole (the
     /// dock's water, bending the wallpaper), the rings of orb.frag as it
     /// opens into one, the two crossing over between.
-    fn setup_orb(&mut self, state: &State, orb: &crate::setup::Orb, frame_ns: u64, table: Option<&smithay::backend::renderer::gles::GlesTexture>) -> (Vec<FrameElement>, Vec<FrameElement>) {
+    /// `pad`: the PIN pad's keys, drops born of this one, and whether this
+    /// one is drawn with them (pinpad.rs); `life`, how alive it is; `slot`,
+    /// the dock's first slot for the keys (the setup's 0, the lock's 4).
+    #[allow(clippy::too_many_arguments)]
+    fn setup_orb(&mut self, state: &State, orb: &crate::setup::Orb, frame_ns: u64, table: Option<&smithay::backend::renderer::gles::GlesTexture>, pad: Option<(Vec<crate::pinpad::Group>, bool)>, life: f64, slot: usize) -> (Vec<FrameElement>, Vec<FrameElement>) {
         // What the water bends: the setup's table (the screen's size, from
         // its left edge), else the wallpaper.
         let (sw, sh) = crate::layout::size();
@@ -2013,11 +2017,10 @@ impl Screen {
         let k = ((orb.thickness - 0.34) / 0.66).clamp(0.0, 1.0);
         let water = (k * k * (3.0 - 2.0 * k)) as f32;
         // The PIN pad's keys, drops born of this one.
-        let pad = state.setup.pad_drops(frame_ns);
         if let (Some((groups, _)), Some((texture, texl, woff))) = (&pad, bent.clone()) {
             let wall = (&texture, texl, woff);
-            for (slot, g) in groups.iter().enumerate() {
-                if let Some(e) = state.dock.group(&mut self.renderer, slot, &g.drops, g.melt, frame_ns, g.life, 1.0, 1.0, wall) {
+            for (i, g) in groups.iter().enumerate() {
+                if let Some(e) = state.dock.group(&mut self.renderer, slot + i, &g.drops, g.melt, frame_ns, g.life, 1.0, 1.0, wall) {
                     drop.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
                 }
             }
@@ -2027,7 +2030,7 @@ impl Screen {
             if let Some((texture, texl, woff)) = bent.clone() {
                 let wall = (&texture, texl, woff);
                 let coral = [1.0f32, 0.6, 0.53];
-                if let Some(e) = state.dock.lone(&mut self.renderer, (orb.x, orb.y), orb.r, frame_ns, state.setup.life(frame_ns), water, (orb.fill, coral), wall) {
+                if let Some(e) = state.dock.lone(&mut self.renderer, (orb.x, orb.y), orb.r, frame_ns, life, water, (orb.fill, coral), wall) {
                     drop.push(FrameElement::from(crate::shade::ShellElement::Shaded(e)));
                 }
             }
